@@ -12,27 +12,27 @@ import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
 private val DarkColorScheme = darkColorScheme(
-    primary = ClaudeDarkPrimary,
-    background = ClaudeDarkBg,
-    onBackground = ClaudeDarkText,
-    surface = ClaudeDarkSurface,
-    onSurface = ClaudeDarkText,
-    secondaryContainer = ClaudeDarkBubbleUser,
-    outline = ClaudeDarkOutline
+    primary = LoyeaDarkPrimary,
+    background = LoyeaDarkBg,
+    onBackground = LoyeaDarkText,
+    surface = LoyeaDarkSurface,
+    onSurface = LoyeaDarkText,
+    secondaryContainer = LoyeaDarkBubbleUser,
+    outline = LoyeaDarkOutline
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = ClaudeLightPrimary,
-    background = ClaudeLightBg,
-    onBackground = ClaudeLightText,
-    surface = ClaudeLightSurface,
-    onSurface = ClaudeLightText,
-    secondaryContainer = ClaudeLightBubbleUser,
-    outline = ClaudeLightOutline
+    primary = LoyeaLightPrimary,
+    background = LoyeaLightBg,
+    onBackground = LoyeaLightText,
+    surface = LoyeaLightSurface,
+    onSurface = LoyeaLightText,
+    secondaryContainer = LoyeaLightBubbleUser,
+    outline = LoyeaLightOutline
 )
 
 @Composable
-fun ClaudeTheme(
+fun LoyeaTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit
 ) {
@@ -51,7 +51,7 @@ fun ClaudeTheme(
 
     MaterialTheme(
         colorScheme = colorScheme,
-        typography = ClaudeTypography,
+        typography = LoyeaTypography,
         content = content
     )
 }

@@ -12,7 +12,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -26,7 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.loyea.ui.chat.ChatScreen
 import com.loyea.ui.settings.ApiConfig
-import com.loyea.ui.theme.ClaudeTheme
+import com.loyea.ui.theme.LoyeaTheme
 import kotlinx.coroutines.launch
 
 @Composable
@@ -62,10 +61,6 @@ fun MainScreen(
                             drawerState.close()
                             onNavigateToSettings()
                         }
-                    },
-                    onUpgradeClick = {
-                        scope.launch { drawerState.close() }
-                        Toast.makeText(context, if (appLanguage == "en") "Upgrade Clicked" else "点击了升级", Toast.LENGTH_SHORT).show()
                     }
                 )
             }
@@ -90,8 +85,7 @@ fun SidebarContent(
     userName: String,
     appLanguage: String,
     onHistoryItemClick: (String) -> Unit,
-    onSettingsClick: () -> Unit,
-    onUpgradeClick: () -> Unit
+    onSettingsClick: () -> Unit
 ) {
     val isEn = appLanguage == "en"
     val historyGroups = remember(appLanguage) {
@@ -105,7 +99,7 @@ fun SidebarContent(
             ),
             HistoryGroup(
                 if (isEn) "Yesterday" else "昨天", listOf(
-                    "Claude App UI Clone Spec",
+                    "Loyea App UI Spec",
                     "Consolas Font Configuration"
                 )
             ),
@@ -209,43 +203,11 @@ fun SidebarContent(
             }
         }
 
-        // 3. 底部区域 (Upgrade 卡片 + 设置)
+        // 3. 底部区域 (设置)
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Claude 风格的黄金/橙色升级 Pro 会员卡片
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0xFFFBEEDB)) // 特殊卡片色，类似 Claude Pro 的浅橙黄底色
-                    .clickable { onUpgradeClick() }
-                    .padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Star,
-                    contentDescription = null,
-                    tint = Color(0xFFC27D38),
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.width(12.dp))
-                Column {
-                    Text(
-                        text = if (isEn) "Upgrade to Claude Pro" else "升级至 Claude Pro",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF5C3E21)
-                    )
-                    Text(
-                        text = if (isEn) "5x more messages on Sonnet" else "Sonnet 额度提升 5 倍",
-                        fontSize = 11.sp,
-                        color = Color(0xFF5C3E21).copy(alpha = 0.7f)
-                    )
-                }
-            }
-
             // 设置按钮
             Row(
                 modifier = Modifier
@@ -280,7 +242,7 @@ data class HistoryGroup(
 @Preview(showBackground = true)
 @Composable
 fun MainScreenPreview() {
-    ClaudeTheme {
+    LoyeaTheme {
         MainScreen(
             userName = "Loyea Developer",
             apiConfig = ApiConfig(),

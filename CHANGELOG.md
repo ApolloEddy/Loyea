@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-06-10
 
+### Removed
+- **升级 Pro 广告移出**：从侧边栏（`SidebarContent`）中彻底移除了黄金质感的 "Upgrade to Claude Pro" 广告卡片，移除了对应的 `onUpgradeClick` 事件参数及 Toast 提示逻辑，净化了侧边栏的界面视觉，提升用户体验。
+
+### Changed
+- **全面重命名替换为 Loyea 项目名**：
+  - 将所有用户 UI 界面中对 "Claude" 助理和应用的提及全面替换为 "Loyea"，包括 Chat 界面的默认欢迎语、新建会话初始语、输入框占位符（"Talk to Loyea"/"与 Loyea 对话"）、配置页的主题风格描述（"Loyea Warm Amber"）。
+  - 将内部代码逻辑（类名、变量名、字体定义名）中的 `Claude` 前缀全面重命名为 `Loyea`（如 `ClaudeTheme` 更改为 `LoyeaTheme`，`ClaudeTypography` 更改为 `LoyeaTypography`，以及 `ClaudeLightBg`、`ClaudeDarkBg` 等系列颜色配置重命名为 `LoyeaLightBg`、`LoyeaDarkBg` 等）。
+
 ### Fixed
 - **模型选择菜单居中修复**：移除了 `ModelSelector` 中 `Box` 容器的 `fillMaxWidth()` 宽度占满设置，配合 `CenterAlignedTopAppBar` 的自适应机制，彻底修复了下拉菜单弹出位置偏左的问题，实现完美的水平垂直正中心弹出。
 - **用户气泡配色绑定修复**：修复了 `ChatScreen.kt` 中渲染用户消息气泡背景色时，因硬编码修饰符背景参数导致自定义底色及文字自适应不生效的 Bug。

@@ -38,7 +38,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.loyea.ui.theme.ClaudeTheme
+import com.loyea.ui.theme.LoyeaTheme
 
 enum class ThemeMode {
     LIGHT, DARK, SYSTEM
@@ -812,7 +812,7 @@ fun ThemeSettingsLayout(
                 ) {
                     val colorOptions = listOf(
                         Triple("", if (isEn) "Default Container" else "系统默认气泡", Color.Transparent),
-                        Triple("#EADFD3", if (isEn) "Claude Warm Amber" else "琥珀沙黄 (Claude 风格)", Color(0xFFEADFD3)),
+                        Triple("#EADFD3", if (isEn) "Loyea Warm Amber" else "琥珀沙黄 (Loyea 风格)", Color(0xFFEADFD3)),
                         Triple("#F0F0F2", if (isEn) "ChatGPT Gray" else "莫兰迪灰 (ChatGPT 风格)", Color(0xFFF0F0F2)),
                         Triple("#E2F1E8", if (isEn) "Emerald Green" else "微光浅绿", Color(0xFFE2F1E8)),
                         Triple("#DCEAF5", if (isEn) "Loyea Blue" else "极简天蓝 (Loyea 风格)", Color(0xFFDCEAF5))
@@ -932,7 +932,7 @@ fun SettingsScreenPreview() {
     var appLanguage by remember { mutableStateOf("zh") }
     var userBubbleColor by remember { mutableStateOf("") }
     
-    ClaudeTheme {
+    LoyeaTheme {
         SettingsScreen(
             currentTheme = theme,
             onThemeChange = { theme = it },

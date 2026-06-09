@@ -21,7 +21,7 @@ val AnthropicSerif = FontFamily(
 )
 
 // 定义基础排版样式，应用 Anthropic 官方字体
-val ClaudeTypography = Typography(
+val LoyeaTypography = Typography(
     // 标题，如 TopAppBar 上的标题
     titleMedium = TextStyle(
         fontFamily = AnthropicSans,

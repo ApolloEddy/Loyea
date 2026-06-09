@@ -16,7 +16,7 @@ import com.loyea.ui.main.MainScreen
 import com.loyea.ui.settings.ApiConfig
 import com.loyea.ui.settings.SettingsScreen
 import com.loyea.ui.settings.ThemeMode
-import com.loyea.ui.theme.ClaudeTheme
+import com.loyea.ui.theme.LoyeaTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -65,7 +65,7 @@ class MainActivity : ComponentActivity() {
             val savedBubbleColor = remember { prefs.getString("user_bubble_color", "") ?: "" }
             var userBubbleColor by remember { mutableStateOf(savedBubbleColor) }
 
-            ClaudeTheme(darkTheme = darkTheme) {
+            LoyeaTheme(darkTheme = darkTheme) {
                 Surface(
                     modifier = Modifier.fillMaxSize()
                 ) {

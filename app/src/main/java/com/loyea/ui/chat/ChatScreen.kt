@@ -35,7 +35,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.loyea.ui.theme.ClaudeTheme
+import com.loyea.ui.theme.LoyeaTheme
 import com.loyea.ui.settings.ApiConfig
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -63,7 +63,7 @@ fun ChatScreen(
             listOf(
                 Message(
                     "1", 
-                    "你好！我是 Claude。今天我能帮您做点什么？", 
+                    "你好！我是 Loyea。今天我能帮您做点什么？", 
                     Sender.AI
                 ),
                 Message(
@@ -115,7 +115,7 @@ fun ChatScreen(
                         messages = listOf(
                             Message(
                                 System.currentTimeMillis().toString(), 
-                                if (isEn) "Hello! I'm Claude. How can I help you today?" else "你好！我是 Claude。今天我能帮您做点什么？", 
+                                if (isEn) "Hello! I'm Loyea. How can I help you today?" else "你好！我是 Loyea。今天我能帮您做点什么？", 
                                 Sender.AI
                             )
                         )
@@ -584,7 +584,7 @@ fun ChatInputBar(
             ) {
                 if (isTextEmpty) {
                     Text(
-                        text = if (isEn) "Talk to Claude" else "与 Claude 对话",
+                        text = if (isEn) "Talk to Loyea" else "与 Loyea 对话",
                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
                         style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Default)
                     )
@@ -697,7 +697,7 @@ fun ThinkingIndicator() {
 @Preview(showBackground = true)
 @Composable
 fun ChatScreenPreview() {
-    ClaudeTheme {
+    LoyeaTheme {
         ChatScreen(
             apiConfig = ApiConfig(),
             appLanguage = "zh",
