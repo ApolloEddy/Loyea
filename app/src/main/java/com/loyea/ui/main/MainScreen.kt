@@ -58,8 +58,10 @@ fun MainScreen(
                         Toast.makeText(context, if (appLanguage == "en") "Opened: $title" else "已打开：$title", Toast.LENGTH_SHORT).show()
                     },
                     onSettingsClick = {
-                        scope.launch { drawerState.close() }
-                        onNavigateToSettings()
+                        scope.launch {
+                            drawerState.close()
+                            onNavigateToSettings()
+                        }
                     },
                     onUpgradeClick = {
                         scope.launch { drawerState.close() }

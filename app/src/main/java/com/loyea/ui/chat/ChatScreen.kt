@@ -57,27 +57,23 @@ fun ChatScreen(
 
     val isEn = appLanguage == "en"
 
-    // 默认对话历史 (根据语言环境自适应)
-    var messages by remember(appLanguage) {
+    // 默认对话历史 (稳定状态，不因重组而丢失)
+    var messages by remember {
         mutableStateOf(
             listOf(
                 Message(
                     "1", 
-                    if (isEn) "Hello! I'm Claude. How can I help you today?" else "你好！我是 Claude。今天我能帮您做点什么？", 
+                    "你好！我是 Claude。今天我能帮您做点什么？", 
                     Sender.AI
                 ),
                 Message(
                     "2", 
-                    if (isEn) "Can you show me how to write a simple Jetpack Compose layout with `Button`?" else "你能向我展示如何用 `Button` 编写一个简单的 Jetpack Compose 布局吗？", 
+                    "你能向我展示如何用 `Button` 编写一个简单的 Jetpack Compose 布局吗？", 
                     Sender.USER
                 ),
                 Message(
                     "3", 
-                    if (isEn) {
-                        "Sure! Here is a simple layout using a `Button` and `Text`:\n\n```kotlin\n@Composable\nfun MyButtonLayout() {\n    Column(\n        modifier = Modifier.padding(16.dp),\n        horizontalAlignment = Alignment.CenterVertically\n    ) {\n        Text(text = \"Click the button below!\")\n        Spacer(modifier = Modifier.height(8.dp))\n        Button(onClick = { /* Handle Click */ }) {\n            Text(text = \"Click Me\")\n        }\n    }\n}\n```\nLet me know if you need any other modifications!"
-                    } else {
-                        "当然！下面是一个使用 `Button` 和 `Text` 的简单布局：\n\n```kotlin\n@Composable\nfun MyButtonLayout() {\n    Column(\n        modifier = Modifier.padding(16.dp),\n        horizontalAlignment = Alignment.CenterVertically\n    ) {\n        Text(text = \"点击下方的按钮！\")\n        Spacer(modifier = Modifier.height(8.dp))\n        Button(onClick = { /* 处理点击事件 */ }) {\n            Text(text = \"点击我\")\n        }\n    }\n}\n```\n如果您需要任何其他修改，请告诉我！"
-                    }, 
+                    "当然！下面是一个使用 `Button` 和 `Text` 的简单布局：\n\n```kotlin\n@Composable\nfun MyButtonLayout() {\n    Column(\n        modifier = Modifier.padding(16.dp),\n        horizontalAlignment = Alignment.CenterVertically\n    ) {\n        Text(text = \"点击下方的按钮！\")\n        Spacer(modifier = Modifier.height(8.dp))\n        Button(onClick = { /* 处理点击事件 */ }) {\n            Text(text = \"点击我\")\n        }\n    }\n}\n```\n如果您需要任何其他修改，请告诉我！", 
                     Sender.AI
                 )
             )
