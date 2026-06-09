@@ -21,7 +21,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.loyea.ui.theme.ClaudeTheme
+import com.loyea.ui.theme.LoyeaTheme
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -45,7 +45,7 @@ fun WelcomeScreen(
 
     // 触发级联动效
     LaunchedEffect(Unit) {
-        // 1. Claude 大标题淡入并向上漂浮
+        // 1. Loyea 大标题淡入并向上漂浮
         launch {
             titleAlpha.animateTo(
                 targetValue = 1f,
@@ -93,9 +93,9 @@ fun WelcomeScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            // 优雅的 Serif 字体呈现 Claude
+            // 优雅的 Serif 字体呈现 Loyea
             Text(
-                text = "Claude",
+                text = "Loyea",
                 style = MaterialTheme.typography.bodyLarge.copy(
                     fontFamily = FontFamily.Serif,
                     fontWeight = FontWeight.Bold,
@@ -108,7 +108,7 @@ fun WelcomeScreen(
             Spacer(modifier = Modifier.height(16.dp))
             
             Text(
-                text = "Talk to Claude. An AI assistant from Anthropic.",
+                text = "Talk to Loyea. An AI assistant.",
                 fontSize = 16.sp,
                 textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
@@ -189,7 +189,7 @@ fun WelcomeScreen(
 
             // 底部协议文字说明
             Text(
-                text = "By continuing, you agree to Anthropic's Terms of Service and Privacy Policy.",
+                text = "By continuing, you agree to Loyea's Terms of Service and Privacy Policy.",
                 fontSize = 11.sp,
                 textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
@@ -202,7 +202,7 @@ fun WelcomeScreen(
 @Preview(showBackground = true)
 @Composable
 fun WelcomeScreenPreview() {
-    ClaudeTheme {
+    LoyeaTheme {
         WelcomeScreen(onContinueClick = {})
     }
 }

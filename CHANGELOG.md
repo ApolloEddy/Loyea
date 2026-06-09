@@ -13,6 +13,7 @@ All notable changes to this project will be documented in this file.
   - 将内部代码逻辑（类名、变量名、字体定义名）中的 `Claude` 前缀全面重命名为 `Loyea`（如 `ClaudeTheme` 更改为 `LoyeaTheme`，`ClaudeTypography` 更改为 `LoyeaTypography`，以及 `ClaudeLightBg`、`ClaudeDarkBg` 等系列颜色配置重命名为 `LoyeaLightBg`、`LoyeaDarkBg` 等）。
 
 ### Fixed
+- **欢迎界面导入与引用修复**：修复了 [WelcomeScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/welcome/WelcomeScreen.kt) 仍在使用已废弃的 `ClaudeTheme` 导入及包装问题，已将其升级替换为最新的 `LoyeaTheme`；同时同步修改了欢迎界面（WelcomeScreen）内部大标题文本、欢迎小标语及底部服务条款中的 "Claude" / "Anthropic" 品牌提及，确保启动欢迎页的品牌一致性。
 - **模型选择菜单居中修复**：移除了 `ModelSelector` 中 `Box` 容器的 `fillMaxWidth()` 宽度占满设置，配合 `CenterAlignedTopAppBar` 的自适应机制，彻底修复了下拉菜单弹出位置偏左的问题，实现完美的水平垂直正中心弹出。
 - **用户气泡配色绑定修复**：修复了 `ChatScreen.kt` 中渲染用户消息气泡背景色时，因硬编码修饰符背景参数导致自定义底色及文字自适应不生效的 Bug。
 - **主界面导入异常修复**：修复了 `MainScreen.kt` 中因缺少 Compose 运行时 `remember` 依赖导入导致的 `Unresolved reference: remember` 编译报错。
