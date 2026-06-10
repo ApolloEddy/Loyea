@@ -39,14 +39,23 @@ class ChatStorageManager(private val context: Context) {
     }
 
     /**
-     * 读取所有会话元数据列表
+     * 读取所有会话元数据列表 (进行自愈式数据清洗，防御 Gson 反序列化带来的内存 null 隐患)
      */
     fun loadSessionList(): List<ChatSession> {
         if (!sessionsFile.exists()) return emptyList()
         return try {
             val json = sessionsFile.readText()
             val type = object : TypeToken<List<ChatSession>>() {}.type
-            gson.fromJson(json, type) ?: emptyList()
+            val rawList = gson.fromJson<List<ChatSession>>(json, type) ?: emptyList()
+            rawList.map { raw ->
+                ChatSession(
+                    id = raw.id ?: System.currentTimeMillis().toString(),
+                    title = raw.title ?: "Unnamed Chat",
+                    lastActiveTime = raw.lastActiveTime,
+                    characterId = raw.characterId ?: "char_loyea_default",
+                    useSystemTime = raw.useSystemTime ?: false
+                )
+            }
         } catch (e: Exception) {
             e.printStackTrace()
             emptyList()

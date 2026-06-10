@@ -53,6 +53,7 @@ All notable changes to this project will be documented in this file.
 - **自定义警告错误气泡渲染**：重构了 `MessageItem` 针对 AI 消息的处理逻辑。当消息状态为 `isError = true` 时，AI 回答将不采用通用 Markdown + 动作条排版，而是直接渲染为具有圆角淡红背景（`Color(0xFFFDE8E8)`）、淡红细线边框（`Color(0xFFF8B4B4)`）、警告深红文本（`Color(0xFFE02424)`）和 `Icons.Default.Error` 图标指示的警告卡片，同时剥离了无意义的动作条（复制、发音等），提升交互质量与体验。
  
 ### Fixed
+- **修复 JVM 数据类 copy 方法 null 指针崩溃**：在 [ChatStorageManager.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatStorageManager.kt) 的 `loadSessionList()` 中设计了**防御自愈式数据清洗构造函数**。当读取 JSON 缓存时，凡是检测到旧版本文件缺失的属性（如 `characterId`, `useSystemTime`），均在内存中安全赋予保底默认值并重新通过 Kotlin 的构造器实例化对象，根绝了因 Gson 直接分配未初始化内存而在执行 JVM 数据类 `copy()` 参数非空校验时触发 `NullPointerException` 引发的闪退崩溃。
 - **修复 Gson JsonNull 推理正文截断 Bug**：修复了在 `LlmClient.kt` 中从 Gson 元素中获取字符串时因 `JsonNull` 造成的解析异常，解决了开启“深度思考”后大模型只输出思考链而丢失正文回复的 Bug。
 - **优化 API 配置卡片 UI 挤压变形**：在 `SettingsScreen.kt` 中，将已保存的连接卡片属性 `Row` 设置为可横向滑动的容器（`horizontalScroll`），并限制每个 `BadgeLabel` 单行显示（`maxLines = 1`），完美解决了因标签超长挤压导致整个卡片纵向拉伸变形的 UI 缺陷。
 - **AI 回复行内 Markdown 粗体渲染修复**：重构了 `MarkdownText.kt` 中的 `renderInlineMarkdown` 函数，在行内代码分割以外，支持用双星号 `**` 语法块做奇偶过滤并绑定 `FontWeight.Bold`，彻底解决了 AI 回答时类似 `**Loyea**` 不加粗的展示 Bug。
