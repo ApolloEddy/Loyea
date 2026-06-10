@@ -688,7 +688,7 @@ fun AddOrEditSheet(
     var selectedProvider by remember { mutableStateOf(editingConfig?.provider ?: "DeepSeek") }
     var apiUrlInput by remember { mutableStateOf(editingConfig?.apiUrl ?: "https://api.deepseek.com/v1") }
     var apiKeyInput by remember { mutableStateOf(editingConfig?.apiKey ?: "") }
-    var modelInput by remember { mutableStateOf(editingConfig?.modelName ?: "deepseek-chat") }
+    var modelInput by remember { mutableStateOf(editingConfig?.modelName ?: "deepseek-v4-pro") }
     
     var enableSearch by remember { mutableStateOf(editingConfig?.enableSearch ?: false) }
     var enableReasoning by remember { mutableStateOf(editingConfig?.enableReasoning ?: true) }
@@ -703,9 +703,8 @@ fun AddOrEditSheet(
 
     val recommendedModels = remember(selectedProvider) {
         when (selectedProvider) {
-            "Anthropic" -> listOf("claude-3-5-sonnet", "claude-3-haiku")
             "OpenAI" -> listOf("gpt-4o", "gpt-4o-mini")
-            "DeepSeek" -> listOf("deepseek-chat", "deepseek-coder")
+            "DeepSeek" -> listOf("deepseek-v4-pro", "deepseek-v4-flash")
             "Kimi (Moonshot)" -> listOf("moonshot-v1-8k")
             "Qwen (千问)" -> listOf("qwen-turbo", "qwen-max")
             "MiniMax" -> listOf("abab6.5-chat")
@@ -819,7 +818,7 @@ fun AddOrEditSheet(
                                     }
                                     "DeepSeek" -> {
                                         apiUrlInput = "https://api.deepseek.com/v1"
-                                        modelInput = "deepseek-chat"
+                                        modelInput = "deepseek-v4-pro"
                                     }
                                     "Kimi (Moonshot)" -> {
                                         apiUrlInput = "https://api.moonshot.cn/v1"
@@ -916,7 +915,7 @@ fun AddOrEditSheet(
                 value = modelInput,
                 onValueChange = { modelInput = it },
                 singleLine = true,
-                placeholder = { Text("e.g. deepseek-chat", color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f)) },
+                placeholder = { Text("e.g. deepseek-v4-pro", color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f)) },
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = MaterialTheme.colorScheme.primary,
                     unfocusedBorderColor = MaterialTheme.colorScheme.outline
@@ -1287,7 +1286,7 @@ fun SettingsScreenPreview() {
             onThemeChange = { theme = it },
             userName = userName,
             onUserNameSave = { userName = it },
-            apiConfigList = listOf(ApiConfig(name = "Deepseek Pro", provider = "DeepSeek", modelName = "deepseek-chat")),
+            apiConfigList = listOf(ApiConfig(name = "Deepseek Pro", provider = "DeepSeek", modelName = "deepseek-v4-pro")),
             activeConfigId = "ds_pro",
             onApiConfigListSave = {},
             onActiveConfigSelect = {},

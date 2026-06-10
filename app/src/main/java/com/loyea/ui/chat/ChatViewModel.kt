@@ -41,7 +41,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             provider = "DeepSeek",
             apiUrl = "https://api.deepseek.com/v1",
             apiKey = "",
-            modelName = "deepseek-chat"
+            modelName = "deepseek-v4-pro"
         )
     }
 
@@ -96,7 +96,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         var list = if (savedConfigsJson.isNotBlank()) {
             try {
                 val type = object : TypeToken<List<ApiConfig>>() {}.type
-                Gson().fromJson<List<ApiConfig>>(savedConfigsJson, type) ?: emptyList()
+                val parsed = Gson().fromJson<List<ApiConfig>>(savedConfigsJson, type) ?: emptyList()
+                var updated = false
+                val upgraded = parsed.map { config ->
+                    if (config.provider.equals("DeepSeek", ignoreCase = true) && config.modelName == "deepseek-chat") {
+                        updated = true
+                        config.copy(modelName = "deepseek-v4-pro")
+                    } else {
+                        config
+                    }
+                }
+                if (updated) {
+                    prefs.edit().putString("api_config_list", Gson().toJson(upgraded)).apply()
+                }
+                upgraded
             } catch (e: Exception) {
                 emptyList()
             }
@@ -106,18 +119,29 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         if (list.isEmpty()) {
             // 默认连接列表 (不硬编码真实 API Key，避免安全审计泄漏)
-            val deepseek = ApiConfig(
+            val deepseekPro = ApiConfig(
                 id = "ds_v4_pro",
                 name = "Deepseek V4 Pro",
                 provider = "DeepSeek",
                 apiUrl = "https://api.deepseek.com/v1",
                 apiKey = "",
-                modelName = "deepseek-chat",
+                modelName = "deepseek-v4-pro",
                 isEnabled = true,
                 enableSearch = false,
                 enableReasoning = true
             )
-            list = listOf(deepseek)
+            val deepseekFlash = ApiConfig(
+                id = "ds_v4_flash",
+                name = "Deepseek V4 Flash",
+                provider = "DeepSeek",
+                apiUrl = "https://api.deepseek.com/v1",
+                apiKey = "",
+                modelName = "deepseek-v4-flash",
+                isEnabled = true,
+                enableSearch = false,
+                enableReasoning = true
+            )
+            list = listOf(deepseekPro, deepseekFlash)
             prefs.edit().putString("api_config_list", Gson().toJson(list)).apply()
         }
         apiConfigList.value = list.filter { !it.provider.equals("Anthropic", ignoreCase = true) }

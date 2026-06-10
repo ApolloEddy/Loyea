@@ -5,6 +5,9 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased] - 2026-06-10
 
 #### Added
+- **DeepSeek 候选模型升级与平滑迁移**：将 DeepSeek 的候选模型全面升级更新为 `deepseek-v4-pro` 与 `deepseek-v4-flash`。
+- **历史模型配置自动清洗**：在 `ChatViewModel` 中添加了 API 配置自动迁移逻辑，在加载已有配置时，自动将历史废弃的 `deepseek-chat` 升级为 `deepseek-v4-pro` 并回写至本地 SharedPreferences，无需用户手动维护，保证平滑过渡。
+- **设置与模板参数更新**：在 `SettingsScreen.kt` 中同步更新了 API 配置模板、推荐模型预设列表、模型名称输入框占位符（由 `deepseek-chat` 改为 `deepseek-v4-pro`）及预览数据集中的模型预设，保持全局配置的一致性。
 - **真实大模型 SSE 流式输出接入**：重构 `LlmClient.kt` 启用 Server-Sent Events 流式通道，实时按行流解析 `data:` 报文，完全废弃了原本的同步阻塞响应与人工延迟打字机动画；完美提取并展示 DeepSeek 推理链（`reasoning_content`）及内嵌的 `<think>` 标签内容，达到毫秒级交互体验。
 - **联网搜索与深度思考开关支持**：在新建或编辑 API 连接表单中引入“联网搜索”与“深度思考”（默认开启）两个物理 Switch 开关，数据挂载进 `ApiConfig` 实体且自动持久化；在通信层依据开关自动注入参数，且针对 DeepSeek 会话智能路由并热切换 `deepseek-chat` 与 `deepseek-reasoner` 推理模型。
 - **基于 ChatViewModel 的 MVVM 状态解耦重构**：新建 `ChatViewModel.kt`，集中式接管用户名、主题、语言、API Config 队列、会话列表及当前消息等核心状态，大模型异步接收闭环交由 `viewModelScope` 处理，彻底修复了 Activity 在屏幕旋转、配置重载后内存泄漏与状态全丢的 Bug。
