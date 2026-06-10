@@ -160,13 +160,13 @@ class LlmClient {
                             val delta = choices.get(0).asJsonObject.getAsJsonObject("delta")
                             if (delta != null) {
                                 // 1. 官方 reasoning_content 推理流 (Deepseek R1 官方标准字段)
-                                val reasoningContent = delta.get("reasoning_content")?.asString
+                                val reasoningContent = delta.get("reasoning_content")?.takeIf { !it.isJsonNull }?.asString
                                 if (!reasoningContent.isNullOrEmpty()) {
                                     emit(StreamEvent.Thoughts(reasoningContent))
                                 }
 
                                 // 2. 正文流 (兼容内嵌式 <think> 标签并增量对比提取)
-                                val content = delta.get("content")?.asString
+                                val content = delta.get("content")?.takeIf { !it.isJsonNull }?.asString
                                 if (!content.isNullOrEmpty()) {
                                     fullContentBuilder.append(content)
                                     val fullStr = fullContentBuilder.toString()
@@ -335,8 +335,8 @@ class LlmClient {
                 }
 
                 val messageObj = choices.get(0).asJsonObject.getAsJsonObject("message")
-                val rawContent = messageObj?.get("content")?.asString ?: ""
-                val reasoningContent = messageObj?.get("reasoning_content")?.asString
+                val rawContent = messageObj?.get("content")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                val reasoningContent = messageObj?.get("reasoning_content")?.takeIf { !it.isJsonNull }?.asString
 
                 var finalThoughts: String? = null
                 var finalContent = rawContent

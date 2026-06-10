@@ -65,6 +65,8 @@ fun ChatScreen(
     onMenuClick: () -> Unit,
     activeCharacterCard: CharacterCard,
     characterCardList: List<CharacterCard>,
+    useSystemTime: Boolean = false,
+    onToggleSystemTime: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -105,6 +107,26 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    // 真实系统时间切换按钮
+                    val context = LocalContext.current
+                    IconButton(onClick = {
+                        onToggleSystemTime()
+                        val msgText = if (useSystemTime) {
+                            if (isEn) "System time disabled" else "已为此会话关闭系统时间"
+                        } else {
+                            if (isEn) "System time enabled" else "已为此会话开启系统时间"
+                        }
+                        Toast.makeText(context, msgText, Toast.LENGTH_SHORT).show()
+                    }) {
+                        Icon(
+                            imageVector = Icons.Default.AccessTime,
+                            contentDescription = "System Time",
+                            tint = if (useSystemTime) MaterialTheme.colorScheme.primary 
+                                   else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+
                     val hasUserSpoken = remember(messages) {
                         messages.any { it.sender == Sender.USER }
                     }

@@ -59,6 +59,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     var currentSessionId = mutableStateOf("")
         private set
 
+    val activeSession = derivedStateOf {
+        sessions.value.find { it.id == currentSessionId.value }
+    }
+
     // 7. 消息列表状态管理
     var messages = mutableStateOf<List<Message>>(emptyList())
         private set
@@ -428,7 +432,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 llmClient.sendChatCompletionStream(
                     config = activeApiConfig.value,
-                    systemPrompt = PromptAssembler.assembleSystemPrompt(characterCard, userName.value),
+                    systemPrompt = PromptAssembler.assembleSystemPrompt(
+                        card = characterCard, 
+                        userName = userName.value, 
+                        useSystemTime = activeSession.value?.useSystemTime ?: false
+                    ),
                     history = history
                 ).collect { event ->
                     when (event) {
@@ -516,5 +524,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 isThinking.value = false
             }
         }
+    }
+
+    /**
+     * 切换当前会话的“使用真实时间”状态并保存
+     */
+    fun toggleCurrentSessionSystemTime() {
+        val sessionId = currentSessionId.value
+        if (sessionId.isBlank()) return
+        val currentList = sessions.value
+        val updated = currentList.map { session ->
+            if (session.id == sessionId) {
+                session.copy(useSystemTime = !session.useSystemTime)
+            } else {
+                session
+            }
+        }
+        sessions.value = updated
+        storageManager.saveSessionList(updated)
     }
 }

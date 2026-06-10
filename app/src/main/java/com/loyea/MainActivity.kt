@@ -86,6 +86,8 @@ class MainActivity : ComponentActivity() {
                                 onNewChatClick = { chatViewModel.createNewChat(it) },
                                 activeCharacterCard = activeCharacterCard,
                                 characterCardList = characterCardList,
+                                useSystemTime = chatViewModel.activeSession.value?.useSystemTime ?: false,
+                                onToggleSystemTime = { chatViewModel.toggleCurrentSessionSystemTime() },
                                 onTavernClick = {
                                     navController.navigate("tavern")
                                 },

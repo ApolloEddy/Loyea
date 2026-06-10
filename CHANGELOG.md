@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased] - 2026-06-10
 
 #### Added
+- **支持会话级系统时间提示词选择**：在 `ChatStorageManager.kt` 的 `ChatSession` 中增加了 `useSystemTime: Boolean` 配置，在 `PromptAssembler.kt` 中支持将格式化后的真实时间注入系统 Prompt。在 `ChatScreen.kt` 顶栏增加时钟切换按钮，提供 Toast 级交互提示。
 - **DeepSeek 候选模型升级与平滑迁移**：将 DeepSeek 的候选模型全面升级更新为 `deepseek-v4-pro` 与 `deepseek-v4-flash`。
 - **历史模型配置自动清洗**：在 `ChatViewModel` 中添加了 API 配置自动迁移逻辑，在加载已有配置时，自动将历史废弃的 `deepseek-chat` 升级为 `deepseek-v4-pro` 并回写至本地 SharedPreferences，无需用户手动维护，保证平滑过渡。
 - **设置与模板参数更新**：在 `SettingsScreen.kt` 中同步更新了 API 配置模板、推荐模型预设列表、模型名称输入框占位符（由 `deepseek-chat` 改为 `deepseek-v4-pro`）及预览数据集中的模型预设，保持全局配置的一致性。
@@ -52,8 +53,9 @@ All notable changes to this project will be documented in this file.
 - **自定义警告错误气泡渲染**：重构了 `MessageItem` 针对 AI 消息的处理逻辑。当消息状态为 `isError = true` 时，AI 回答将不采用通用 Markdown + 动作条排版，而是直接渲染为具有圆角淡红背景（`Color(0xFFFDE8E8)`）、淡红细线边框（`Color(0xFFF8B4B4)`）、警告深红文本（`Color(0xFFE02424)`）和 `Icons.Default.Error` 图标指示的警告卡片，同时剥离了无意义的动作条（复制、发音等），提升交互质量与体验。
  
 ### Fixed
+- **修复 Gson JsonNull 推理正文截断 Bug**：修复了在 `LlmClient.kt` 中从 Gson 元素中获取字符串时因 `JsonNull` 造成的解析异常，解决了开启“深度思考”后大模型只输出思考链而丢失正文回复的 Bug。
+- **优化 API 配置卡片 UI 挤压变形**：在 `SettingsScreen.kt` 中，将已保存的连接卡片属性 `Row` 设置为可横向滑动的容器（`horizontalScroll`），并限制每个 `BadgeLabel` 单行显示（`maxLines = 1`），完美解决了因标签超长挤压导致整个卡片纵向拉伸变形的 UI 缺陷。
 - **AI 回复行内 Markdown 粗体渲染修复**：重构了 `MarkdownText.kt` 中的 `renderInlineMarkdown` 函数，在行内代码分割以外，支持用双星号 `**` 语法块做奇偶过滤并绑定 `FontWeight.Bold`，彻底解决了 AI 回答时类似 `**Loyea**` 不加粗的展示 Bug。
-- **ChatScreen 多余右大括号删除**：清理了 `ChatScreen.kt` 核心组件大括号尾部多余的闭合花括号，彻底解决 "Expecting a top level declaration" 错误。切换成 Claude 3.5 驱动），而猫娘人设和记忆不受影响。
 - **顶栏胶囊双行级联复合选择器**：将原本的 ModelSelector 升级为全新的高颜值胶囊，支持左侧显示角色圆形头像（有本地头像加载与哈希底色首字母兜底）、角色姓名大字标题、底层模型小字副标题以及下拉小箭头，在兼顾解耦与角色品牌代言的同时实现完美的视觉交互。
 - **Gson 序列化依赖**：在 `app/build.gradle.kts` 中引入了 `com.google.code.gson:gson:2.10.1` 依赖，以支持聊天数据本地持久化。
 - **本地会话及消息存储管理器 (ChatStorageManager)**：全新创建了 `ChatStorageManager.kt`，利用 Android 应用私有目录（`context.filesDir`）以 JSON 格式存储会话列表元数据 (`sessions_metadata.json`) 以及各独立会话的消息历史 (`session_{id}.json`)。

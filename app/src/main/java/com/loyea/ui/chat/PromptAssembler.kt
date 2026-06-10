@@ -10,11 +10,17 @@ object PromptAssembler {
      *
      * 融合了：核心设定 (systemPrompt)、性格词 (personality)、情景场景 (scenario)、对话样本 (chatExamples)
      */
-    fun assembleSystemPrompt(card: CharacterCard, userName: String): String {
+    fun assembleSystemPrompt(card: CharacterCard, userName: String, useSystemTime: Boolean = false): String {
         val sb = StringBuilder()
 
         // 1. 系统扮演引导语
         sb.append("You are now roleplaying as the following character:\n\n")
+
+        // 插入当前系统时间
+        if (useSystemTime) {
+            sb.append("[Current System Time]\n")
+            sb.append(getFormattedSystemTime()).append("\n\n")
+        }
 
         // 2. 角色基础名称
         sb.append("[Character Name]\n")
@@ -78,5 +84,25 @@ object PromptAssembler {
             .replace("{{{user}}}", safeUser, ignoreCase = true)
 
         return result
+    }
+
+    private fun getFormattedSystemTime(): String {
+        val sdf = java.text.SimpleDateFormat("yyyy年MM月dd日 HH:mm:ss", java.util.Locale.CHINESE)
+        val now = java.util.Date()
+        val timeStr = sdf.format(now)
+        val calendar = java.util.Calendar.getInstance()
+        calendar.time = now
+        val dayOfWeek = calendar.get(java.util.Calendar.DAY_OF_WEEK)
+        val weekStr = when (dayOfWeek) {
+            java.util.Calendar.SUNDAY -> "星期日"
+            java.util.Calendar.MONDAY -> "星期一"
+            java.util.Calendar.TUESDAY -> "星期二"
+            java.util.Calendar.WEDNESDAY -> "星期三"
+            java.util.Calendar.THURSDAY -> "星期四"
+            java.util.Calendar.FRIDAY -> "星期五"
+            java.util.Calendar.SATURDAY -> "星期六"
+            else -> ""
+        }
+        return "$timeStr $weekStr"
     }
 }

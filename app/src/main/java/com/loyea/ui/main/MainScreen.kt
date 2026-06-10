@@ -57,6 +57,8 @@ fun MainScreen(
     characterCardList: List<CharacterCard>,
     onTavernClick: () -> Unit,
     onNavigateToSettings: () -> Unit,
+    useSystemTime: Boolean = false,
+    onToggleSystemTime: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -124,6 +126,8 @@ fun MainScreen(
                 },
                 activeCharacterCard = activeCharacterCard,
                 characterCardList = characterCardList,
+                useSystemTime = useSystemTime,
+                onToggleSystemTime = onToggleSystemTime,
                 modifier = modifier
             )
         }
