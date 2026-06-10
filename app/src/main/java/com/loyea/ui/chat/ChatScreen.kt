@@ -265,7 +265,6 @@ fun ChatScreen(
         }
     }
 }
-}
 
 // 1:1 复刻 Claude 顶部模型选择胶囊 (增强角色卡头像及双行文本解耦设计)
 @Composable
@@ -871,6 +870,7 @@ fun ThinkingIndicator() {
 @Composable
 fun ChatScreenPreview() {
     LoyeaTheme {
+        val defaultChar = TavernCardParser.getBuiltInCards().first()
         ChatScreen(
             apiConfig = ApiConfig(),
             apiConfigList = listOf(ApiConfig()),
@@ -880,7 +880,9 @@ fun ChatScreenPreview() {
             messages = emptyList(),
             onMessagesChange = {},
             onNewChatClick = {},
-            onMenuClick = {}
+            onMenuClick = {},
+            activeCharacterCard = defaultChar,
+            characterCardList = listOf(defaultChar)
         )
     }
 }

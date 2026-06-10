@@ -34,6 +34,8 @@ All notable changes to this project will be documented in this file.
 - **自定义警告错误气泡渲染**：重构了 `MessageItem` 针对 AI 消息的处理逻辑。当消息状态为 `isError = true` 时，AI 回答将不采用通用 Markdown + 动作条排版，而是直接渲染为具有圆角淡红背景（`Color(0xFFFDE8E8)`）、淡红细线边框（`Color(0xFFF8B4B4)`）、警告深红文本（`Color(0xFFE02424)`）和 `Icons.Default.Error` 图标指示的警告卡片，同时剥离了无意义的动作条（复制、发音等），提升交互质量与体验。
 
 ### Fixed
+- **ChatScreen 多余右大括号删除**：清理了 `ChatScreen.kt` 核心组件大括号尾部多余的闭合花括号，彻底解决 "Expecting a top level declaration" 错误。
+- **Preview 预览界面签名一致性修复**：修复了 `ChatScreenPreview` 和 `MainScreenPreview` 预览方法中因未同步匹配角色卡、酒馆路由回调和参数类型造成的编译报错，通过绑定测试 dummy 数据完成闭环。
 - **欢迎界面导入与引用修复**：修复了 [WelcomeScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/welcome/WelcomeScreen.kt) 仍在使用已废弃的 `ClaudeTheme` 导入及包装问题，已将其升级替换为最新的 `LoyeaTheme`；同时同步修改了欢迎界面（WelcomeScreen）内部大标题文本、欢迎小标语及底部服务条款中的 "Claude" / "Anthropic" 品牌提及，确保启动欢迎页的品牌一致性。
 - **模型选择菜单居中修复**：移除了 `ModelSelector` 中 `Box` 容器的 `fillMaxWidth()` 宽度占满设置，配合 `CenterAlignedTopAppBar` 的自适应机制，彻底修复了下拉菜单弹出位置偏左的问题，实现完美的水平垂直正中心弹出。
 - **用户气泡配色绑定修复**：修复了 `ChatScreen.kt` 中渲染用户消息气泡背景色时，因硬编码修饰符背景参数导致自定义底色及文字自适应不生效的 Bug。

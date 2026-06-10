@@ -403,6 +403,12 @@ data class HistoryGroup(
 @Composable
 fun MainScreenPreview() {
     LoyeaTheme {
+        val defaultChar = CharacterCard(
+            id = "char_loyea_default",
+            name = "Loyea",
+            shortIntro = "标准模式下的理性助理，冷静而深刻。",
+            systemPrompt = "You are a helpful AI assistant."
+        )
         MainScreen(
             userName = "Loyea Developer",
             apiConfig = ApiConfig(),
@@ -417,6 +423,9 @@ fun MainScreenPreview() {
             onSessionSelect = {},
             onSessionDelete = {},
             onNewChatClick = {},
+            activeCharacterCard = defaultChar,
+            characterCardList = listOf(defaultChar),
+            onTavernClick = {},
             onNavigateToSettings = {}
         )
     }
