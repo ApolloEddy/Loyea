@@ -59,7 +59,9 @@ data class ApiConfig(
     val apiUrl: String = "https://api.anthropic.com",
     val apiKey: String = "",
     val modelName: String = "claude-3-5-sonnet",
-    val isEnabled: Boolean = true
+    val isEnabled: Boolean = true,
+    val enableSearch: Boolean = false,
+    val enableReasoning: Boolean = true
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -583,6 +585,12 @@ fun ApiConfigLayout(
                                 if (config.apiKey.isNotBlank()) {
                                     BadgeLabel(text = "Key: ****" + config.apiKey.takeLast(4))
                                 }
+                                if (config.enableSearch) {
+                                    BadgeLabel(text = if (isEn) "Search" else "联网")
+                                }
+                                if (config.enableReasoning) {
+                                    BadgeLabel(text = if (isEn) "Reasoning" else "深度思考")
+                                }
                             }
                         }
                     }
@@ -662,6 +670,9 @@ fun AddOrEditSheet(
     var apiUrlInput by remember { mutableStateOf(editingConfig?.apiUrl ?: "https://api.anthropic.com") }
     var apiKeyInput by remember { mutableStateOf(editingConfig?.apiKey ?: "") }
     var modelInput by remember { mutableStateOf(editingConfig?.modelName ?: "claude-3-5-sonnet") }
+    
+    var enableSearch by remember { mutableStateOf(editingConfig?.enableSearch ?: false) }
+    var enableReasoning by remember { mutableStateOf(editingConfig?.enableReasoning ?: true) }
 
     var showApiKey by remember { mutableStateOf(false) }
     var providerDropdownExpanded by remember { mutableStateOf(false) }
@@ -932,6 +943,66 @@ fun AddOrEditSheet(
             }
         }
 
+        Spacer(modifier = Modifier.height(4.dp))
+
+        // 联网搜索开关
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = if (isEn) "Web Search" else "联网搜索",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Text(
+                    text = if (isEn) "Enable real-time web search capability" else "启用大模型实时网页搜索能力",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                )
+            }
+            Switch(
+                checked = enableSearch,
+                onCheckedChange = { enableSearch = it },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = MaterialTheme.colorScheme.primary
+                )
+            )
+        }
+
+        // 深度思考开关
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = if (isEn) "Deep Thinking" else "深度思考",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Text(
+                    text = if (isEn) "Reasoning logic and chain of thought (Default ON)" else "启用推理链与深度思考过程 (默认开启)",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                )
+            }
+            Switch(
+                checked = enableReasoning,
+                onCheckedChange = { enableReasoning = it },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = MaterialTheme.colorScheme.primary
+                )
+            )
+        }
+
         Button(
             onClick = {
                 val finalName = if (nameInput.isBlank()) "${selectedProvider} Model" else nameInput
@@ -942,7 +1013,9 @@ fun AddOrEditSheet(
                     apiUrl = apiUrlInput,
                     apiKey = apiKeyInput,
                     modelName = modelInput,
-                    isEnabled = true
+                    isEnabled = true,
+                    enableSearch = enableSearch,
+                    enableReasoning = enableReasoning
                 )
                 onSave(newConfig)
             },

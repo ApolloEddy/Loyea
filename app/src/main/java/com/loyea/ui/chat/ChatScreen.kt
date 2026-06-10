@@ -58,7 +58,9 @@ fun ChatScreen(
     appLanguage: String,
     userBubbleColor: String,
     messages: List<Message>,
-    onMessagesChange: (List<Message>) -> Unit,
+    isThinking: Boolean,
+    onSendMessage: (String) -> Unit,
+    onToggleThoughts: (String) -> Unit,
     onNewChatClick: (CharacterCard) -> Unit,
     onMenuClick: () -> Unit,
     activeCharacterCard: CharacterCard,
@@ -69,12 +71,10 @@ fun ChatScreen(
     val clipboardManager = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
-    val llmClient = remember { LlmClient() }
 
     val isEn = appLanguage == "en"
 
     var inputText by remember { mutableStateOf(TextFieldValue("")) }
-    var isThinking by remember { mutableStateOf(false) }
     var showPersonaSelector by remember { mutableStateOf(false) }
 
     // 自动滚动到底部
@@ -166,13 +166,7 @@ fun ChatScreen(
                             Toast.makeText(context, if (isEn) "Copied to clipboard" else "已复制到剪贴板", Toast.LENGTH_SHORT).show()
                         },
                         onToggleThoughts = {
-                            val updated = messages.map { msg ->
-                                if (msg.id == message.id) msg.copy(
-                                    isThoughtsExpanded = !msg.isThoughtsExpanded,
-                                    hasUserToggledThoughts = true
-                                ) else msg
-                            }
-                            onMessagesChange(updated)
+                            onToggleThoughts(message.id)
                         }
                     )
                 }
@@ -194,67 +188,8 @@ fun ChatScreen(
                 onValueChange = { inputText = it },
                 onSend = {
                     if (inputText.text.isNotBlank()) {
-                        val userText = inputText.text
-                        val userMsg = Message(
-                            id = System.currentTimeMillis().toString(),
-                            content = userText,
-                            sender = Sender.USER,
-                            characterId = activeCharacterCard.id
-                        )
-                        var currentList = messages + userMsg
-                        onMessagesChange(currentList)
+                        onSendMessage(inputText.text)
                         inputText = TextFieldValue("")
-                        
-                        scope.launch {
-                            isThinking = true
-                            val startTime = System.currentTimeMillis()
-                            val aiMessageId = (System.currentTimeMillis() + 1).toString()
-                            
-                            // 调用真实远程大模型 API，通过 PromptAssembler 组装完整的 SystemPrompt 并替换 Macros 占位符
-                            val response = llmClient.sendChatCompletion(
-                                config = apiConfig,
-                                systemPrompt = PromptAssembler.assembleSystemPrompt(activeCharacterCard, userName),
-                                history = currentList
-                            )
-                            isThinking = false
-                            val durationSeconds = ((System.currentTimeMillis() - startTime) / 1000).toInt()
-                            
-                            if (response.isError) {
-                                val errMessage = Message(
-                                    id = aiMessageId,
-                                    content = response.content,
-                                    sender = Sender.AI,
-                                    isError = true,
-                                    characterId = activeCharacterCard.id
-                                )
-                                currentList = currentList + errMessage
-                                onMessagesChange(currentList)
-                            } else {
-                                val aiMessage = Message(
-                                    id = aiMessageId,
-                                    content = "",
-                                    sender = Sender.AI,
-                                    thoughts = response.thoughts,
-                                    isThoughtsExpanded = response.thoughts != null,
-                                    thoughtDurationSeconds = durationSeconds,
-                                    isStillThinking = false,
-                                    characterId = activeCharacterCard.id
-                                )
-                                currentList = currentList + aiMessage
-                                onMessagesChange(currentList)
-                                
-                                // 启动打字机效果，逐字渲染正文
-                                var currentContent = ""
-                                response.content.forEach { char ->
-                                    currentContent += char
-                                    currentList = currentList.map { msg ->
-                                        if (msg.id == aiMessageId) msg.copy(content = currentContent) else msg
-                                    }
-                                    onMessagesChange(currentList)
-                                    delay(12)
-                                }
-                            }
-                        }
                     }
                 },
                 onAttach = {
@@ -914,7 +849,9 @@ fun ChatScreenPreview() {
             appLanguage = "zh",
             userBubbleColor = "",
             messages = emptyList(),
-            onMessagesChange = {},
+            isThinking = false,
+            onSendMessage = {},
+            onToggleThoughts = {},
             onNewChatClick = {},
             onMenuClick = {},
             activeCharacterCard = defaultChar,

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased] - 2026-06-10
 
 #### Added
+- **真实大模型 SSE 流式输出接入**：重构 `LlmClient.kt` 启用 Server-Sent Events 流式通道，实时按行流解析 `data:` 报文，完全废弃了原本的同步阻塞响应与人工延迟打字机动画；完美提取并展示 DeepSeek 推理链（`reasoning_content`）及内嵌的 `<think>` 标签内容，达到毫秒级交互体验。
+- **联网搜索与深度思考开关支持**：在新建或编辑 API 连接表单中引入“联网搜索”与“深度思考”（默认开启）两个物理 Switch 开关，数据挂载进 `ApiConfig` 实体且自动持久化；在通信层依据开关自动注入参数，且针对 DeepSeek 会话智能路由并热切换 `deepseek-chat` 与 `deepseek-reasoner` 推理模型。
+- **基于 ChatViewModel 的 MVVM 状态解耦重构**：新建 `ChatViewModel.kt`，集中式接管用户名、主题、语言、API Config 队列、会话列表及当前消息等核心状态，大模型异步接收闭环交由 `viewModelScope` 处理，彻底修复了 Activity 在屏幕旋转、配置重载后内存泄漏与状态全丢的 Bug。
+- **高颜值轻量级 Markdown 渲染器优化**：升级 `MarkdownText.kt`，实现行级扫描机制，扩展支持对 **多级标题 (`#`)**、**有序与无序列表 (`-`/`1.`)**、**引用块 (`>`)** 和 **分割线 (`---`)** 的高保真解析及 Compose 精致排版，修复了 `Divider` 的过期 API 调用警告。
+- **彻底清除 Git 历史硬编码 API Key 快照**：解除 `MainActivity.kt` 中的 DeepSeek API Key 硬编码限制，对默认参数改写为 `""` 以保护安全；配合专用的 python 脚本，通过 `git filter-branch` 彻底清洗了本地历史提交中的一切快照指纹。
+- **自动化 Gradle 编译与签名 APK 发布**：补充集成了 `gradlew.bat` 与 wrapper，并在 Gradle 中添加 release 签名密钥，在 Windows 环境下一键成功编译输出具备正式签名的首个 0.1 版本的 Release APK。
 - **SillyTavern 酒馆 V2 规格标准 PNG 角色卡隐写导出**：在 `TavernScreen.kt` 中设计并实现了高保真 PNG 隐写角色卡导出方法。当角色未设置头像时，系统通过 Canvas 在内存中自动渲染出带有角色大名、简介和 "Loyea Persona Card" 微光小标的莫兰迪色渐变 PNG 卡基；当存在头像时，自动调用系统位图引擎转码为 PNG。随后通过流式 Chunk 扫描定位在 IHDR 块后安全注入 Base64 后的 V2 标准 JSON 以及重新计算 CRC32，完美打通第三方酒馆应用导入兼容。
 - **SillyTavern 酒馆 V2 规格标准 JSON 配置文件导出**：支持通过原地多格式下拉菜单，一键将角色卡各项属性转换为 SillyTavern 官方 V2 Schema 格式并生成 JSON 文件，利用系统 Action_Send 与安全 FileProvider 导出分享。
 - **聊天界面低透明度淡雅背景壁纸渲染**：在 `ChatScreen.kt` 中引入了 `rememberBackgroundPainter`，利用 `Modifier.paint` 以 `alpha = 0.12f` 的超低不透明度和 `ContentScale.Crop` 的模式在聊天流消息主容器背景层渲染角色绑定的本地壁纸图片，不仅完美呼应了人设专属主题，且确保文字对比度优秀，丝丝毫不干扰前台文字阅读。
