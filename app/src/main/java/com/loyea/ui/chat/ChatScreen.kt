@@ -43,6 +43,9 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import android.graphics.BitmapFactory
 import java.io.File
+import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.draw.paint
+import androidx.compose.ui.layout.ContentScale
 import com.loyea.ui.chat.PromptAssembler
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -123,10 +126,22 @@ fun ChatScreen(
         },
         containerColor = MaterialTheme.colorScheme.background
     ) { paddingValues ->
+        val backgroundBitmap = rememberBackgroundPainter(activeCharacterCard.backgroundUri)
         Column(
             modifier = modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .then(
+                    if (backgroundBitmap != null) {
+                        Modifier.paint(
+                            painter = BitmapPainter(backgroundBitmap),
+                            contentScale = ContentScale.Crop,
+                            alpha = 0.12f
+                        )
+                    } else {
+                        Modifier
+                    }
+                )
                 .navigationBarsPadding()
                 .imePadding()
         ) {
@@ -392,6 +407,24 @@ fun rememberAvatarPainter(avatarUri: String?): ImageBitmap? {
     return remember(avatarUri) {
         try {
             val file = File(avatarUri)
+            if (file.exists()) {
+                BitmapFactory.decodeFile(file.absolutePath)?.asImageBitmap()
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+}
+
+@Composable
+fun rememberBackgroundPainter(backgroundUri: String?): ImageBitmap? {
+    if (backgroundUri.isNullOrBlank()) return null
+    return remember(backgroundUri) {
+        try {
+            val file = File(backgroundUri)
             if (file.exists()) {
                 BitmapFactory.decodeFile(file.absolutePath)?.asImageBitmap()
             } else {

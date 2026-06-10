@@ -21,7 +21,8 @@ data class CharacterCard(
     val firstMessage: String = "",   // 首条欢迎问候语
     val chatExamples: String = "",   // 对话示例
     val isBuiltIn: Boolean = false,  // 是否为系统内置
-    val creatorName: String? = null  // 创作者
+    val creatorName: String? = null, // 创作者
+    val backgroundUri: String? = null // 新增聊天背景图片路径
 )
 
 /**

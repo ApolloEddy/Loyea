@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- 允许共享应用私有缓存目录下的文件，例如导出的角色卡 -->
+    <cache-path name="shared_exports" path="exports/" />
+    <files-path name="shared_files" path="." />
+</paths>

@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased] - 2026-06-10
 
 #### Added
+- **SillyTavern 酒馆 V2 规格标准 PNG 角色卡隐写导出**：在 `TavernScreen.kt` 中设计并实现了高保真 PNG 隐写角色卡导出方法。当角色未设置头像时，系统通过 Canvas 在内存中自动渲染出带有角色大名、简介和 "Loyea Persona Card" 微光小标的莫兰迪色渐变 PNG 卡基；当存在头像时，自动调用系统位图引擎转码为 PNG。随后通过流式 Chunk 扫描定位在 IHDR 块后安全注入 Base64 后的 V2 标准 JSON 以及重新计算 CRC32，完美打通第三方酒馆应用导入兼容。
+- **SillyTavern 酒馆 V2 规格标准 JSON 配置文件导出**：支持通过原地多格式下拉菜单，一键将角色卡各项属性转换为 SillyTavern 官方 V2 Schema 格式并生成 JSON 文件，利用系统 Action_Send 与安全 FileProvider 导出分享。
+- **聊天界面低透明度淡雅背景壁纸渲染**：在 `ChatScreen.kt` 中引入了 `rememberBackgroundPainter`，利用 `Modifier.paint` 以 `alpha = 0.12f` 的超低不透明度和 `ContentScale.Crop` 的模式在聊天流消息主容器背景层渲染角色绑定的本地壁纸图片，不仅完美呼应了人设专属主题，且确保文字对比度优秀，丝丝毫不干扰前台文字阅读。
+- **安全跨应用 FileProvider 分享**：在缓存目录下的 `exports/` 分配临时安全共享区域，并配合 Intent Flag 对分享的 PNG 与 JSON 进行临时授权读取，杜绝了 Android 7.0+ 系统上的 FileUriExposedException。
 - **人设拼接与占位符宏渲染引擎 (PromptAssembler)**：全新创建了 `PromptAssembler.kt`，实现了将核心设定、性格、情景、少样本对话范例进行标准化酒馆格式拼接的引擎，并支持 `{{char}}` 和 `{{user}}` 等标签的宏替换，实现真正的角色扮演沉浸感。
 - **人格自定义表单扩充**：在 `TavernScreen.kt` 的自定义表单弹窗中补充了“性格词汇描述”、“对话场景设定”和“少样本对话范例”三个多行输入域，支持完备的多维度人格信息本地持久化与折叠页中高保真展示。
 - **兼容酒馆 (SillyTavern) 角色卡隐写与解析系统**：已全新创建了 `TavernCardParser.kt`，实现轻量流式的 PNG `tEXt` 块扫描与 Base64 隐写提取解析机制，自动兼容 V1 与 V2 `data` 节点人设规范。

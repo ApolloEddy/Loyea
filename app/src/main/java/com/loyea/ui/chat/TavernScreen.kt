@@ -37,6 +37,33 @@ import androidx.compose.ui.window.DialogProperties
 import com.google.gson.GsonBuilder
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.FileOutputStream
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.LinearGradient
+import android.graphics.Shader
+import androidx.core.content.FileProvider
+
+/**
+ * 拷贝 Uri 内容到本地应用私有目录下指定子目录中
+ */
+fun copyUriToLocal(context: Context, sourceUri: Uri, subDirName: String, fileName: String): String? {
+    return try {
+        val dir = File(context.filesDir, subDirName).apply { if (!exists()) mkdirs() }
+        val targetFile = File(dir, fileName)
+        context.contentResolver.openInputStream(sourceUri)?.use { input ->
+            targetFile.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+        targetFile.absolutePath
+    } catch (e: Exception) {
+        e.printStackTrace()
+        null
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -183,7 +210,8 @@ fun TavernScreen(
                     TavernCardItem(
                         card = card,
                         appLanguage = appLanguage,
-                        onExport = { exportCharacterCard(context, card) },
+                        onExportPng = { shareCharacterCardPng(context, card) },
+                        onExportJson = { shareCharacterCardJson(context, card) },
                         onDelete = { cardToDelete = card }
                     )
                 }
@@ -245,7 +273,8 @@ fun TavernScreen(
 fun TavernCardItem(
     card: CharacterCard,
     appLanguage: String,
-    onExport: () -> Unit,
+    onExportPng: () -> Unit,
+    onExportJson: () -> Unit,
     onDelete: () -> Unit
 ) {
     val isEn = appLanguage == "en"
@@ -451,8 +480,31 @@ fun TavernCardItem(
 
                 Spacer(modifier = Modifier.weight(1f))
 
-                IconButton(onClick = onExport) {
-                    Icon(imageVector = Icons.Default.Share, contentDescription = "Export Card", modifier = Modifier.size(18.dp))
+                // 原地 DropdownMenu 导出双格式选择
+                var exportMenuExpanded by remember { mutableStateOf(false) }
+                Box {
+                    IconButton(onClick = { exportMenuExpanded = true }) {
+                        Icon(imageVector = Icons.Default.Share, contentDescription = "Export Card", modifier = Modifier.size(18.dp))
+                    }
+                    DropdownMenu(
+                        expanded = exportMenuExpanded,
+                        onDismissRequest = { exportMenuExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(if (isEn) "Export as PNG Card (Standard)" else "导出为酒馆 PNG 角色卡 (推荐)") },
+                            onClick = {
+                                exportMenuExpanded = false
+                                onExportPng()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (isEn) "Export as JSON Config (Standard)" else "导出为 V2 JSON 配置文件") },
+                            onClick = {
+                                exportMenuExpanded = false
+                                onExportJson()
+                            }
+                        )
+                    }
                 }
 
                 if (!card.isBuiltIn) {
@@ -466,7 +518,7 @@ fun TavernCardItem(
 }
 
 /**
- * 弹窗表单：自定义创建角色卡
+ * 弹窗表单：自定义创建角色卡 (升级支持本地头像和聊天背景图选择)
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -475,6 +527,7 @@ fun CreatePersonaDialog(
     onDismiss: () -> Unit,
     onSave: (CharacterCard) -> Unit
 ) {
+    val context = LocalContext.current
     val isEn = appLanguage == "en"
 
     var name by remember { mutableStateOf("") }
@@ -486,7 +539,36 @@ fun CreatePersonaDialog(
     var scenario by remember { mutableStateOf("") }
     var chatExamples by remember { mutableStateOf("") }
 
-    // 头像背景色选择
+    // 本地头像及背景 URI 绝对路径
+    var localAvatarUri by remember { mutableStateOf<String?>(null) }
+    var localBackgroundUri by remember { mutableStateOf<String?>(null) }
+
+    // 头像及背景选择 Launcher
+    val avatarPickLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            val path = copyUriToLocal(context, it, "avatars", "avatar_${System.currentTimeMillis()}.png")
+            if (path != null) {
+                localAvatarUri = path
+                Toast.makeText(context, if (isEn) "Avatar selected" else "头像选择成功", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    val backgroundPickLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            val path = copyUriToLocal(context, it, "backgrounds", "bg_${System.currentTimeMillis()}.png")
+            if (path != null) {
+                localBackgroundUri = path
+                Toast.makeText(context, if (isEn) "Chat background selected" else "背景图选择成功", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // 头像背景色选择 (兜底色)
     val colors = listOf("#E5D3B3", "#D3E2CD", "#CBE3F5", "#E2D3F5", "#F2D4D7")
     var selectedColorIndex by remember { mutableStateOf(0) }
 
@@ -516,7 +598,7 @@ fun CreatePersonaDialog(
                                         val newCard = CharacterCard(
                                             id = "char_" + System.currentTimeMillis() + "_" + (100..999).random(),
                                             name = name,
-                                            avatarUri = null,
+                                            avatarUri = localAvatarUri,
                                             avatarColor = colors[selectedColorIndex],
                                             shortIntro = intro.ifBlank { if (isEn) "A unique custom AI companion." else "充满个性的自定义 AI 伙伴。" },
                                             systemPrompt = systemPrompt,
@@ -525,7 +607,8 @@ fun CreatePersonaDialog(
                                             firstMessage = firstMessage,
                                             chatExamples = chatExamples,
                                             isBuiltIn = false,
-                                            creatorName = creator.ifBlank { if (isEn) "User Custom" else "用户自建" }
+                                            creatorName = creator.ifBlank { if (isEn) "User Custom" else "用户自建" },
+                                            backgroundUri = localBackgroundUri
                                         )
                                         onSave(newCard)
                                     }
@@ -544,46 +627,144 @@ fun CreatePersonaDialog(
                     )
                 },
                 containerColor = MaterialTheme.colorScheme.background
-            ) { padding ->
+            ) { paddingValues ->
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(padding)
+                        .padding(paddingValues)
                         .padding(20.dp)
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    // 1. 头像微光颜色选择
+                    // 1. 头像与壁纸图片选择区
                     Text(
-                        text = if (isEn) "Select avatar theme color" else "选择头像主题色",
+                        text = if (isEn) "Custom Artworks" else "自定义形象与聊天室背景",
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onBackground
                     )
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        colors.forEachIndexed { index, hex ->
-                            val color = Color(android.graphics.Color.parseColor(hex))
+                        // 圆形头像预览/点击
+                        val avatarPainter = rememberAvatarPainter(localAvatarUri)
+                        Box(
+                            modifier = Modifier
+                                .size(72.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (localAvatarUri == null) {
+                                        Color(android.graphics.Color.parseColor(colors[selectedColorIndex])).copy(alpha = 0.3f)
+                                    } else {
+                                        Color.Transparent
+                                    }
+                                )
+                                .border(
+                                    width = 1.5.dp,
+                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f),
+                                    shape = CircleShape
+                                )
+                                .clickable { avatarPickLauncher.launch("image/*") },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (avatarPainter != null) {
+                                androidx.compose.foundation.Image(
+                                    bitmap = avatarPainter,
+                                    contentDescription = "Avatar Preview",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                                )
+                            } else {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(Icons.Default.Camera, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                                    Text(if (isEn) "Avatar" else "设头像", fontSize = 10.sp, color = MaterialTheme.colorScheme.primary)
+                                }
+                            }
+                        }
+
+                        // 背景图卡片选择器
+                        val bgPainter = rememberAvatarPainter(localBackgroundUri)
+                        Card(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(72.dp)
+                                .border(
+                                    width = 1.dp,
+                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f),
+                                    shape = RoundedCornerShape(12.dp)
+                                ),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f))
+                        ) {
                             Box(
                                 modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(CircleShape)
-                                    .background(color)
-                                    .border(
-                                        width = if (selectedColorIndex == index) 3.dp else 1.dp,
-                                        color = if (selectedColorIndex == index) MaterialTheme.colorScheme.primary else Color.Transparent,
-                                        shape = CircleShape
+                                    .fillMaxSize()
+                                    .clickable { backgroundPickLauncher.launch("image/*") },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (bgPainter != null) {
+                                    androidx.compose.foundation.Image(
+                                        bitmap = bgPainter,
+                                        contentDescription = "Background Preview",
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = androidx.compose.ui.layout.ContentScale.Crop
                                     )
-                                    .clickable { selectedColorIndex = index }
-                            )
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(Color.Black.copy(alpha = 0.35f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(if (isEn) "Change Wallpaper" else "已设背景 (点击更换)", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                } else {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text(if (isEn) "Add Chat Wallpaper" else "添加聊天背景壁纸", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 2. 头像微光颜色选择 (仅当未选择本地头像时起兜底渲染作用)
+                    if (localAvatarUri == null) {
+                        Text(
+                            text = if (isEn) "Select avatar fallback color" else "选择头像兜底背景色",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            colors.forEachIndexed { index, hex ->
+                                val color = Color(android.graphics.Color.parseColor(hex))
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .background(color)
+                                        .border(
+                                            width = if (selectedColorIndex == index) 3.dp else 1.dp,
+                                            color = if (selectedColorIndex == index) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                            shape = CircleShape
+                                        )
+                                        .clickable { selectedColorIndex = index }
+                                )
+                            }
                         }
                     }
 
                     Spacer(modifier = Modifier.height(4.dp))
 
-                    // 2. 表单字段
+                    // 3. 表单输入字段
                     OutlinedTextField(
                         value = name,
                         onValueChange = { name = it },
@@ -660,24 +841,277 @@ fun CreatePersonaDialog(
     }
 }
 
+/**
+ * 构造符合酒馆 V2 标准的角色卡 JSON
+ */
+fun buildTavernValueV2Json(card: CharacterCard): String {
+    val gson = GsonBuilder().setPrettyPrinting().create()
+    
+    val data = mutableMapOf<String, Any>()
+    data["name"] = card.name
+    data["description"] = card.shortIntro
+    data["short_description"] = card.shortIntro
+    data["personality"] = card.personality
+    data["scenario"] = card.scenario
+    data["first_mes"] = card.firstMessage
+    data["mes_example"] = card.chatExamples
+    data["creator_notes"] = ""
+    data["system_prompt"] = card.systemPrompt
+    data["post_history_instructions"] = ""
+    data["alternate_greetings"] = emptyList<String>()
+    data["creator"] = card.creatorName ?: "Loyea"
+    data["character_version"] = "1.0"
+    data["extensions"] = emptyMap<String, Any>()
+
+    val root = mutableMapOf<String, Any>()
+    root["spec"] = "chara_card_v2"
+    root["spec_version"] = "2.0"
+    root["data"] = data
+
+    return gson.toJson(root)
+}
 
 /**
- * 导出角色卡：通过系统 Intent 分享 JSON 配置
+ * 动态 Canvas 绘制莫兰迪色沙黄渐变的大卡片图作为 PNG 卡基
  */
-fun exportCharacterCard(context: Context, card: CharacterCard) {
-    try {
-        val gson = GsonBuilder().setPrettyPrinting().create()
-        val jsonStr = gson.toJson(card)
+fun drawDefaultCardBitmap(card: CharacterCard): Bitmap {
+    val width = 512
+    val height = 512
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
 
-        val sendIntent = android.content.Intent().apply {
-            action = android.content.Intent.ACTION_SEND
-            putExtra(android.content.Intent.EXTRA_TEXT, jsonStr)
-            type = "text/plain"
+    // 莫兰迪色沙黄渐变背景
+    val paint = Paint()
+    val startColor = android.graphics.Color.parseColor("#F5EAD4")
+    val endColor = android.graphics.Color.parseColor("#D5C6A9")
+    val shader = LinearGradient(
+        0f, 0f, 0f, height.toFloat(),
+        startColor, endColor,
+        Shader.TileMode.CLAMP
+    )
+    paint.shader = shader
+    canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
+
+    // 绘制微光几何框 (浅白色线条，增加质感)
+    val strokePaint = Paint().apply {
+        color = android.graphics.Color.WHITE
+        alpha = 100 // 半透明
+        style = Paint.Style.STROKE
+        strokeWidth = 2f
+        isAntiAlias = true
+    }
+    canvas.drawRect(24f, 24f, (width - 24).toFloat(), (height - 24).toFloat(), strokePaint)
+    canvas.drawRect(32f, 32f, (width - 32).toFloat(), (height - 32).toFloat(), strokePaint)
+
+    // 绘制名称 (大字)
+    val textPaint = Paint().apply {
+        color = android.graphics.Color.parseColor("#4A3F2C")
+        textSize = 48f
+        isFakeBoldText = true
+        isAntiAlias = true
+        textAlign = Paint.Align.CENTER
+    }
+    // 居中绘制
+    val xPos = width / 2f
+    val yPos = (height / 2f) - ((textPaint.descent() + textPaint.ascent()) / 2f)
+    canvas.drawText(card.name, xPos, yPos, textPaint)
+
+    // 绘制简介 (较小字体)
+    val introPaint = Paint().apply {
+        color = android.graphics.Color.parseColor("#6E5D47")
+        textSize = 20f
+        isAntiAlias = true
+        textAlign = Paint.Align.CENTER
+    }
+    
+    val cleanIntro = if (card.shortIntro.length > 20) card.shortIntro.take(18) + "..." else card.shortIntro
+    canvas.drawText(cleanIntro, xPos, yPos + 60f, introPaint)
+
+    // 绘制底部的 "Loyea Persona Card" 微光小标
+    val footerPaint = Paint().apply {
+        color = android.graphics.Color.WHITE
+        alpha = 180
+        textSize = 14f
+        isAntiAlias = true
+        textAlign = Paint.Align.CENTER
+    }
+    canvas.drawText("Loyea Persona Card", xPos, (height - 60).toFloat(), footerPaint)
+
+    return bitmap
+}
+
+/**
+ * 将 Base64 的 JSON 隐写写入 PNG 字节流中 (IHDR 块后安全插入自定义的 tEXt chunk)
+ */
+fun injectTavernMetadata(pngBytes: ByteArray, jsonBase64: String): ByteArray {
+    val inputStream = ByteArrayInputStream(pngBytes)
+    val outputStream = java.io.ByteArrayOutputStream()
+
+    // 读取并写入 8 字节 PNG 头部签名
+    val signature = ByteArray(8)
+    if (inputStream.read(signature) != 8) throw IllegalArgumentException("Invalid PNG signature")
+    outputStream.write(signature)
+
+    val buffer = ByteArray(4)
+    while (true) {
+        // 读取长度
+        if (inputStream.read(buffer) != 4) break
+        val length = ((buffer[0].toInt() and 0xFF) shl 24) or
+                     ((buffer[1].toInt() and 0xFF) shl 16) or
+                     ((buffer[2].toInt() and 0xFF) shl 8) or
+                     (buffer[3].toInt() and 0xFF)
+
+        // 读取类型
+        val typeBytes = ByteArray(4)
+        if (inputStream.read(typeBytes) != 4) break
+        val type = String(typeBytes, java.nio.charset.StandardCharsets.US_ASCII)
+
+        // 读取数据
+        val data = ByteArray(length)
+        var readBytes = 0
+        while (readBytes < length) {
+            val read = inputStream.read(data, readBytes, length - readBytes)
+            if (read == -1) break
+            readBytes += read
         }
-        val shareIntent = android.content.Intent.createChooser(sendIntent, "导出角色配置 [${card.name}]")
-        context.startActivity(shareIntent)
+        
+        // 读取 CRC
+        val crcBytes = ByteArray(4)
+        if (inputStream.read(crcBytes) != 4) break
+
+        // 写入当前 chunk
+        outputStream.write(buffer)
+        outputStream.write(typeBytes)
+        outputStream.write(data)
+        outputStream.write(crcBytes)
+
+        // 如果是 IHDR chunk，在此之后立即插入 tEXt chunk
+        if (type == "IHDR") {
+            val keyword = "chara".toByteArray(java.nio.charset.StandardCharsets.US_ASCII)
+            val text = jsonBase64.toByteArray(java.nio.charset.StandardCharsets.UTF_8)
+            val chunkData = ByteArray(keyword.size + 1 + text.size)
+            System.arraycopy(keyword, 0, chunkData, 0, keyword.size)
+            chunkData[keyword.size] = 0.toByte()
+            System.arraycopy(text, 0, chunkData, keyword.size + 1, text.size)
+
+            val textLength = chunkData.size
+            val lenBytes = ByteArray(4)
+            lenBytes[0] = ((textLength ushr 24) and 0xFF).toByte()
+            lenBytes[1] = ((textLength ushr 16) and 0xFF).toByte()
+            lenBytes[2] = ((textLength ushr 8) and 0xFF).toByte()
+            lenBytes[3] = (textLength and 0xFF).toByte()
+            outputStream.write(lenBytes)
+
+            val tEXtType = "tEXt".toByteArray(java.nio.charset.StandardCharsets.US_ASCII)
+            outputStream.write(tEXtType)
+            outputStream.write(chunkData)
+
+            val crc32 = java.util.zip.CRC32()
+            crc32.update(tEXtType)
+            crc32.update(chunkData)
+            val crcVal = crc32.value
+
+            val outCrc = ByteArray(4)
+            outCrc[0] = ((crcVal ushr 24) and 0xFF).toByte()
+            outCrc[1] = ((crcVal ushr 16) and 0xFF).toByte()
+            outCrc[2] = ((crcVal ushr 8) and 0xFF).toByte()
+            outCrc[3] = (crcVal and 0xFF).toByte()
+            outputStream.write(outCrc)
+        }
+
+        if (type == "IEND") break
+    }
+
+    return outputStream.toByteArray()
+}
+
+/**
+ * 分享 PNG 隐写角色卡
+ */
+fun shareCharacterCardPng(context: Context, card: CharacterCard) {
+    try {
+        val jsonV2 = buildTavernValueV2Json(card)
+        val base64Json = android.util.Base64.encodeToString(jsonV2.toByteArray(java.nio.charset.StandardCharsets.UTF_8), android.util.Base64.NO_WRAP)
+        
+        // 1. 获取基底图
+        val basePngBytes = if (card.avatarUri != null) {
+            val avatarFile = File(card.avatarUri)
+            if (avatarFile.exists()) {
+                val bitmap = BitmapFactory.decodeFile(card.avatarUri)
+                if (bitmap != null) {
+                    val baos = java.io.ByteArrayOutputStream()
+                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, baos)
+                    baos.toByteArray()
+                } else {
+                    val defaultBitmap = drawDefaultCardBitmap(card)
+                    val baos = java.io.ByteArrayOutputStream()
+                    defaultBitmap.compress(Bitmap.CompressFormat.PNG, 100, baos)
+                    baos.toByteArray()
+                }
+            } else {
+                val defaultBitmap = drawDefaultCardBitmap(card)
+                val baos = java.io.ByteArrayOutputStream()
+                defaultBitmap.compress(Bitmap.CompressFormat.PNG, 100, baos)
+                baos.toByteArray()
+            }
+        } else {
+            val defaultBitmap = drawDefaultCardBitmap(card)
+            val baos = java.io.ByteArrayOutputStream()
+            defaultBitmap.compress(Bitmap.CompressFormat.PNG, 100, baos)
+            baos.toByteArray()
+        }
+
+        // 2. 注入隐写信息
+        val finalPngBytes = injectTavernMetadata(basePngBytes, base64Json)
+
+        // 3. 写入缓存文件 exports 目录下
+        val exportsDir = File(context.cacheDir, "exports")
+        if (!exportsDir.exists()) exportsDir.mkdirs()
+        
+        val fileName = "${card.name.replace(Regex("[\\\\/:*?\"<>|]"), "_")}.png"
+        val outFile = File(exportsDir, fileName)
+        FileOutputStream(outFile).use { fos ->
+            fos.write(finalPngBytes)
+        }
+
+        // 4. 分享
+        val fileUri = FileProvider.getUriForFile(context, "com.loyea.fileprovider", outFile)
+        val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+            type = "image/png"
+            putExtra(android.content.Intent.EXTRA_STREAM, fileUri)
+            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(android.content.Intent.createChooser(intent, "分享 PNG 角色卡"))
     } catch (e: Exception) {
         e.printStackTrace()
-        Toast.makeText(context, "导出失败: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "分享失败: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+    }
+}
+
+/**
+ * 分享 JSON 配置文件
+ */
+fun shareCharacterCardJson(context: Context, card: CharacterCard) {
+    try {
+        val jsonV2 = buildTavernValueV2Json(card)
+        val exportsDir = File(context.cacheDir, "exports")
+        if (!exportsDir.exists()) exportsDir.mkdirs()
+
+        val fileName = "${card.name.replace(Regex("[\\\\/:*?\"<>|]"), "_")}.json"
+        val outFile = File(exportsDir, fileName)
+        FileOutputStream(outFile).use { fos ->
+            fos.write(jsonV2.toByteArray(java.nio.charset.StandardCharsets.UTF_8))
+        }
+
+        val fileUri = FileProvider.getUriForFile(context, "com.loyea.fileprovider", outFile)
+        val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+            type = "application/json"
+            putExtra(android.content.Intent.EXTRA_STREAM, fileUri)
+            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(android.content.Intent.createChooser(intent, "分享 JSON 配置文件"))
+    } catch (e: Exception) {
+        e.printStackTrace()
+        Toast.makeText(context, "分享失败: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
     }
 }
