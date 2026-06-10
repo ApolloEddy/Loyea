@@ -34,6 +34,8 @@ import kotlinx.coroutines.launch
 import java.util.Calendar
 import android.text.format.DateUtils
 
+import com.loyea.ui.chat.CharacterCard
+
 @Composable
 fun MainScreen(
     userName: String,
@@ -48,7 +50,10 @@ fun MainScreen(
     onMessagesChange: (List<Message>) -> Unit,
     onSessionSelect: (String) -> Unit,
     onSessionDelete: (String) -> Unit,
-    onNewChatClick: () -> Unit,
+    onNewChatClick: (CharacterCard) -> Unit,
+    activeCharacterCard: CharacterCard,
+    characterCardList: List<CharacterCard>,
+    onTavernClick: () -> Unit,
     onNavigateToSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -74,6 +79,12 @@ fun MainScreen(
                             onSessionSelect(sessionId)
                         },
                         onSessionDelete = onSessionDelete,
+                        onTavernClick = {
+                            scope.launch {
+                                drawerState.close()
+                                onTavernClick()
+                            }
+                        },
                         onSettingsClick = {
                             scope.launch {
                                 drawerState.close()
@@ -106,6 +117,8 @@ fun MainScreen(
                         }
                     }
                 },
+                activeCharacterCard = activeCharacterCard,
+                characterCardList = characterCardList,
                 modifier = modifier
             )
         }
@@ -133,6 +146,7 @@ fun SidebarContent(
     currentSessionId: String,
     onHistoryItemClick: (String) -> Unit,
     onSessionDelete: (String) -> Unit,
+    onTavernClick: () -> Unit,
     onSettingsClick: () -> Unit
 ) {
     val isEn = appLanguage == "en"
@@ -282,11 +296,34 @@ fun SidebarContent(
             }
         }
 
-        // 3. 底部区域 (设置)
+        // 3. 底部区域 (酒馆 & 设置)
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // 角色酒馆按钮
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onTavernClick() }
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.People,
+                    contentDescription = "Tavern",
+                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = if (isEn) "Character Tavern" else "角色酒馆",
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+            }
+
             // 设置按钮
             Row(
                 modifier = Modifier

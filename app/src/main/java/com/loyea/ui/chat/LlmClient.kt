@@ -37,6 +37,7 @@ class LlmClient {
      */
     suspend fun sendChatCompletion(
         config: com.loyea.ui.settings.ApiConfig,
+        systemPrompt: String?,
         history: List<Message>
     ): LlmResponse = withContext(Dispatchers.IO) {
         if (config.apiKey.isBlank()) {
@@ -47,15 +48,20 @@ class LlmClient {
         }
 
         try {
-            // 过滤掉错误提示消息，并将我们的模型消息转换为符合 API 规范的数组
-            val chatHistory = history.filter { 
-                it.content.isNotBlank() && !it.content.startsWith("[错误]") && !it.content.startsWith("[Error]")
-            }.map { msg ->
-                mapOf(
-                    "role" to if (msg.sender == Sender.USER) "user" else "assistant",
-                    "content" to msg.content
-                )
+            val chatHistory = mutableListOf<Map<String, String>>()
+            if (!systemPrompt.isNullOrBlank()) {
+                chatHistory.add(mapOf("role" to "system", "content" to systemPrompt))
             }
+            chatHistory.addAll(
+                history.filter { 
+                    it.content.isNotBlank() && !it.content.startsWith("[错误]") && !it.content.startsWith("[Error]")
+                }.map { msg ->
+                    mapOf(
+                        "role" to if (msg.sender == Sender.USER) "user" else "assistant",
+                        "content" to msg.content
+                    )
+                }
+            )
 
             val requestJson = JsonObject().apply {
                 addProperty("model", config.modelName)

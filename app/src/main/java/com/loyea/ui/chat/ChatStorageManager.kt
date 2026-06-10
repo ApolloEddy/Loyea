@@ -11,7 +11,8 @@ import java.io.File
 data class ChatSession(
     val id: String,                  // 唯一标识符 (时间戳或UUID)
     val title: String,               // 会话标题
-    val lastActiveTime: Long = System.currentTimeMillis() // 最后活动时间，用于排序
+    val lastActiveTime: Long = System.currentTimeMillis(), // 最后活动时间，用于排序
+    val characterId: String = "char_loyea_default" // 新增角色人格绑定
 )
 
 /**
@@ -99,6 +100,39 @@ class ChatStorageManager(private val context: Context) {
             saveSessionList(currentSessions)
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+    }
+
+    private val cardsFile = File(context.filesDir, "character_cards.json")
+
+    /**
+     * 保存所有角色卡列表
+     */
+    fun saveCharacterCards(cards: List<CharacterCard>) {
+        try {
+            val json = gson.toJson(cards)
+            cardsFile.writeText(json)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    /**
+     * 读取所有角色卡列表 (如不存在则自动注入内置角色模板)
+     */
+    fun loadCharacterCards(): List<CharacterCard> {
+        return try {
+            if (!cardsFile.exists()) {
+                val defaults = TavernCardParser.getBuiltInCards()
+                saveCharacterCards(defaults)
+                return defaults
+            }
+            val json = cardsFile.readText()
+            val type = object : TypeToken<List<CharacterCard>>() {}.type
+            gson.fromJson(json, type) ?: emptyList()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            emptyList()
         }
     }
 }

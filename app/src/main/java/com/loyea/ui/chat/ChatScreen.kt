@@ -39,6 +39,10 @@ import com.loyea.ui.theme.LoyeaTheme
 import com.loyea.ui.settings.ApiConfig
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import android.graphics.BitmapFactory
+import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -50,8 +54,10 @@ fun ChatScreen(
     userBubbleColor: String,
     messages: List<Message>,
     onMessagesChange: (List<Message>) -> Unit,
-    onNewChatClick: () -> Unit,
+    onNewChatClick: (CharacterCard) -> Unit,
     onMenuClick: () -> Unit,
+    activeCharacterCard: CharacterCard,
+    characterCardList: List<CharacterCard>,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -64,6 +70,7 @@ fun ChatScreen(
 
     var inputText by remember { mutableStateOf(TextFieldValue("")) }
     var isThinking by remember { mutableStateOf(false) }
+    var showPersonaSelector by remember { mutableStateOf(false) }
 
     // 自动滚动到底部
     LaunchedEffect(messages.size, isThinking) {
@@ -77,6 +84,7 @@ fun ChatScreen(
             CenterAlignedTopAppBar(
                 title = {
                     ModelSelector(
+                        activeCharacterCard = activeCharacterCard,
                         selectedModelName = apiConfig.name,
                         apiConfigList = apiConfigList,
                         onActiveConfigChange = onActiveConfigChange
@@ -96,7 +104,7 @@ fun ChatScreen(
                         messages.any { it.sender == Sender.USER }
                     }
                     if (hasUserSpoken) {
-                        IconButton(onClick = onNewChatClick) {
+                        IconButton(onClick = { showPersonaSelector = true }) {
                             Icon(
                                 imageVector = Icons.Default.EditNote,
                                 contentDescription = "New Chat",
@@ -173,7 +181,8 @@ fun ChatScreen(
                         val userMsg = Message(
                             id = System.currentTimeMillis().toString(),
                             content = userText,
-                            sender = Sender.USER
+                            sender = Sender.USER,
+                            characterId = activeCharacterCard.id
                         )
                         var currentList = messages + userMsg
                         onMessagesChange(currentList)
@@ -184,8 +193,12 @@ fun ChatScreen(
                             val startTime = System.currentTimeMillis()
                             val aiMessageId = (System.currentTimeMillis() + 1).toString()
                             
-                            // 调用真实远程大模型 API
-                            val response = llmClient.sendChatCompletion(apiConfig, currentList)
+                            // 调用真实远程大模型 API，传入人设 SystemPrompt
+                            val response = llmClient.sendChatCompletion(
+                                config = apiConfig,
+                                systemPrompt = activeCharacterCard.systemPrompt,
+                                history = currentList
+                            )
                             isThinking = false
                             val durationSeconds = ((System.currentTimeMillis() - startTime) / 1000).toInt()
                             
@@ -194,7 +207,8 @@ fun ChatScreen(
                                     id = aiMessageId,
                                     content = response.content,
                                     sender = Sender.AI,
-                                    isError = true
+                                    isError = true,
+                                    characterId = activeCharacterCard.id
                                 )
                                 currentList = currentList + errMessage
                                 onMessagesChange(currentList)
@@ -206,7 +220,8 @@ fun ChatScreen(
                                     thoughts = response.thoughts,
                                     isThoughtsExpanded = response.thoughts != null,
                                     thoughtDurationSeconds = durationSeconds,
-                                    isStillThinking = false
+                                    isStillThinking = false,
+                                    characterId = activeCharacterCard.id
                                 )
                                 currentList = currentList + aiMessage
                                 onMessagesChange(currentList)
@@ -230,12 +245,32 @@ fun ChatScreen(
                 }
             )
         }
+
+        if (showPersonaSelector) {
+            ModalBottomSheet(
+                onDismissRequest = { showPersonaSelector = false },
+                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+                containerColor = MaterialTheme.colorScheme.surface,
+                dragHandle = { BottomSheetDefaults.DragHandle(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.2f)) }
+            ) {
+                SelectPersonaContent(
+                    characterCardList = characterCardList,
+                    appLanguage = appLanguage,
+                    onSelect = { selectedChar ->
+                        showPersonaSelector = false
+                        onNewChatClick(selectedChar)
+                    }
+                )
+            }
+        }
     }
 }
+}
 
-// 1:1 复刻 Claude 顶部模型选择胶囊
+// 1:1 复刻 Claude 顶部模型选择胶囊 (增强角色卡头像及双行文本解耦设计)
 @Composable
 fun ModelSelector(
+    activeCharacterCard: CharacterCard,
     selectedModelName: String,
     apiConfigList: List<com.loyea.ui.settings.ApiConfig>,
     onActiveConfigChange: (String) -> Unit
@@ -245,34 +280,86 @@ fun ModelSelector(
         apiConfigList.filter { it.isEnabled }
     }
 
+    val avatarBitmap = rememberAvatarPainter(activeCharacterCard.avatarUri)
+
     Box(
         contentAlignment = Alignment.Center
     ) {
         Row(
             modifier = Modifier
-                .clip(RoundedCornerShape(20.dp))
-                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), RoundedCornerShape(20.dp))
-                .background(MaterialTheme.colorScheme.surface)
+                .clip(RoundedCornerShape(24.dp))
+                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f), RoundedCornerShape(24.dp))
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f))
                 .clickable { if (enabledConfigs.size > 1) expanded = true }
                 .padding(horizontal = 14.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center
         ) {
-            Text(
-                text = selectedModelName.ifBlank { "无可用模型" },
-                style = TextStyle(
-                    fontFamily = FontFamily.Default,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 14.sp
-                ),
-                color = MaterialTheme.colorScheme.onBackground
-            )
+            // 头像部分
+            if (avatarBitmap != null) {
+                androidx.compose.foundation.Image(
+                    bitmap = avatarBitmap,
+                    contentDescription = activeCharacterCard.name,
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                )
+            } else {
+                val bgColor = remember(activeCharacterCard.avatarColor) {
+                    try {
+                        Color(android.graphics.Color.parseColor(activeCharacterCard.avatarColor))
+                    } catch (e: Exception) {
+                        Color(0xFFE5D3B3)
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(bgColor),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = activeCharacterCard.name.take(1).uppercase(),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+            
+            Spacer(modifier = Modifier.width(10.dp))
+            
+            // 名字和模型配置
+            Column(
+                horizontalAlignment = Alignment.Start,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = activeCharacterCard.name,
+                    style = TextStyle(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    ),
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Text(
+                    text = selectedModelName.ifBlank { "无可用模型" },
+                    style = TextStyle(
+                        fontWeight = FontWeight.Normal,
+                        fontSize = 11.sp
+                    ),
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                )
+            }
+            
             if (enabledConfigs.size > 1) {
-                Spacer(modifier = Modifier.width(4.dp))
+                Spacer(modifier = Modifier.width(6.dp))
                 Icon(
                     imageVector = Icons.Default.ArrowDropDown,
                     contentDescription = "Select Model",
-                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                     modifier = Modifier.size(16.dp)
                 )
             }
@@ -295,6 +382,132 @@ fun ModelSelector(
                 }
             }
         }
+    }
+}
+
+@Composable
+fun rememberAvatarPainter(avatarUri: String?): ImageBitmap? {
+    if (avatarUri.isNullOrBlank()) return null
+    return remember(avatarUri) {
+        try {
+            val file = File(avatarUri)
+            if (file.exists()) {
+                BitmapFactory.decodeFile(file.absolutePath)?.asImageBitmap()
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+}
+
+@Composable
+fun SelectPersonaContent(
+    characterCardList: List<CharacterCard>,
+    appLanguage: String,
+    onSelect: (CharacterCard) -> Unit
+) {
+    val isEn = appLanguage == "en"
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp)
+    ) {
+        Text(
+            text = if (isEn) "Choose a Persona" else "选择对话人格",
+            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+            color = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.padding(bottom = 16.dp)
+        )
+        
+        LazyColumn(
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 400.dp)
+        ) {
+            items(characterCardList) { card ->
+                val avatarBitmap = rememberAvatarPainter(card.avatarUri)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .border(
+                            width = 1.dp,
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f),
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f))
+                        .clickable { onSelect(card) }
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (avatarBitmap != null) {
+                        androidx.compose.foundation.Image(
+                            bitmap = avatarBitmap,
+                            contentDescription = card.name,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape),
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                        )
+                    } else {
+                        val bgColor = remember(card.avatarColor) {
+                            try {
+                                Color(android.graphics.Color.parseColor(card.avatarColor))
+                            } catch (e: Exception) {
+                                Color(0xFFE5D3B3)
+                            }
+                        }
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .background(bgColor),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = card.name.take(1).uppercase(),
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                    
+                    Spacer(modifier = Modifier.width(16.dp))
+                    
+                    Column(
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(
+                            text = card.name,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = card.shortIntro,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                            maxLines = 2
+                        )
+                    }
+                    
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+        }
+        
+        Spacer(modifier = Modifier.height(16.dp))
     }
 }
 

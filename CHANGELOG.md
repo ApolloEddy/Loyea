@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased] - 2026-06-10
 
 ### Added
+- **兼容酒馆 (SillyTavern) 角色卡隐写与解析系统**：全新创建了 `TavernCardParser.kt`，实现轻量流式的 PNG `tEXt` 块扫描与 Base64 隐写提取解析机制，自动兼容 V1 与 V2 `data` 节点人设规范。
+- **5 款高品质系统预置人格**：内置了理性助理 Loyea、活泼傲娇猫娘小铃、废土毒舌酒保戴斯、豪放宋代文豪苏东坡以及代码审查导师 Linus 等 5 款个性鲜明、打招呼语与提示词打磨精细的初始角色。
+- **符合 Claude 美学的角色选择抽屉 (SelectPersonaSheet)**：新建会话时，不再直接创建空对话，而是自底向上拉起基于 Compose `ModalBottomSheet` 的雅致角色卡片挑选抽屉。选定后，为新会话永久锁定绑定该角色卡，并在消息流头部自动发出一声该角色专属的 `firstMessage` 欢迎语。
+- **全功能角色酒馆管理中心 (TavernScreen)**：全新创建了 `TavernScreen.kt`。用户可通过侧边栏底部新增的“角色酒馆”按钮直达。支持：
+  - **自定义创建**：包含头像主题色调选择、名称、简介、系统 System Prompt、打招呼欢迎词的完备创建 Dialog 表单。
+  - **PNG 与 JSON 文件选择导入**：使用 Android 系统 GetContent 文件选择器选择 PNG 角色卡（提取其中隐写数据，并自动将高清立绘原图复制到应用私有目录 `context.filesDir/avatars` 中持久化为头像）或导入 JSON 配置。
+  - **JSON 快捷分享导出**：基于 Action_Send 文本分享 Intent，一键将角色数据序列化导出分享，实现与其它平台和设备的完美流通。
+  - **卡片删除与头像缓存回收**：用户可随时移除自定义卡片，删除时会自动清理其占用的本地头像图片缓存，保持应用轻量。
+- **人设与大模型驱动全面解耦**：重构了 `LlmClient` 与 `ChatScreen` 的对话连线层。在向远程 LLM 发送聊天包时，自动把绑定角色的 `systemPrompt` 作为 `system` 角色组装到 payload 消息队列的第 0 位（即人设 System 提示词）。使得聊天过程中，用户可以在顶部任意热切换底层的大模型驱动配置（如把猫娘的会话由 Deepseek 切换成 Claude 3.5 驱动），而猫娘人设和记忆不受影响。
+- **顶栏胶囊双行级联复合选择器**：将原本的 ModelSelector 升级为全新的高颜值胶囊，支持左侧显示角色圆形头像（有本地头像加载与哈希底色首字母兜底）、角色姓名大字标题、底层模型小字副标题以及下拉小箭头，在兼顾解耦与角色品牌代言的同时实现完美的视觉交互。
 - **Gson 序列化依赖**：在 `app/build.gradle.kts` 中引入了 `com.google.code.gson:gson:2.10.1` 依赖，以支持聊天数据本地持久化。
 - **本地会话及消息存储管理器 (ChatStorageManager)**：全新创建了 `ChatStorageManager.kt`，利用 Android 应用私有目录（`context.filesDir`）以 JSON 格式存储会话列表元数据 (`sessions_metadata.json`) 以及各独立会话的消息历史 (`session_{id}.json`)。
 - **多会话隔离与动态切换**：在 `MainActivity` 层级重构成单数据源管理机制，在切换会话时精确动态读取并显示对应历史，彻底隔绝不同会话间的数据。在全部删除会话后能自动生成新的默认会话，提供了高容错边界逻辑。

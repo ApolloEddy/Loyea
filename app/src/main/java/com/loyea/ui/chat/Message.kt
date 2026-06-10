@@ -33,5 +33,6 @@ data class Message(
     val thoughtDurationSeconds: Int = 0,
     val mcpCalls: List<McpCall> = emptyList(),
     val isStillThinking: Boolean = false,
-    val isError: Boolean = false
+    val isError: Boolean = false,
+    val characterId: String? = null
 )

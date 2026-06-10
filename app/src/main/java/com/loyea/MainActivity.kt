@@ -21,6 +21,9 @@ import com.loyea.ui.chat.ChatStorageManager
 import com.loyea.ui.chat.ChatSession
 import com.loyea.ui.chat.Message
 import com.loyea.ui.chat.Sender
+import com.loyea.ui.chat.CharacterCard
+import com.loyea.ui.chat.TavernCardParser
+import com.loyea.ui.chat.TavernScreen
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
@@ -125,7 +128,8 @@ class MainActivity : ComponentActivity() {
                     val defaultSession = ChatSession(
                         id = System.currentTimeMillis().toString(),
                         title = if (appLanguage == "en") "Welcome Chat" else "欢迎会话",
-                        lastActiveTime = System.currentTimeMillis()
+                        lastActiveTime = System.currentTimeMillis(),
+                        characterId = "char_loyea_default"
                     )
                     list = listOf(defaultSession)
                     storageManager.saveSessionList(list)
@@ -134,7 +138,8 @@ class MainActivity : ComponentActivity() {
                         Message(
                             id = System.currentTimeMillis().toString(),
                             content = if (appLanguage == "en") "Hello! I'm Loyea. How can I help you today?" else "你好！我是 Loyea。今天我能帮您做点什么？",
-                            sender = Sender.AI
+                            sender = Sender.AI,
+                            characterId = "char_loyea_default"
                         )
                     )
                     storageManager.saveSessionMessages(defaultSession.id, defaultMsgs)
@@ -155,6 +160,16 @@ class MainActivity : ComponentActivity() {
 
             var messages by remember(currentSessionId) {
                 mutableStateOf(storageManager.loadSessionMessages(currentSessionId))
+            }
+
+            var characterCardList by remember { mutableStateOf(storageManager.loadCharacterCards()) }
+
+            val activeCharacterCard = remember(currentSessionId, characterCardList, sessions) {
+                val currentSession = sessions.find { it.id == currentSessionId }
+                val charId = currentSession?.characterId ?: "char_loyea_default"
+                characterCardList.find { it.id == charId }
+                    ?: characterCardList.firstOrNull { it.id == "char_loyea_default" }
+                    ?: TavernCardParser.getBuiltInCards().first()
             }
 
             LoyeaTheme(darkTheme = darkTheme) {
@@ -238,7 +253,8 @@ class MainActivity : ComponentActivity() {
                                             val defaultSession = ChatSession(
                                                 id = defaultSessionId,
                                                 title = if (appLanguage == "en") "Welcome Chat" else "欢迎会话",
-                                                lastActiveTime = System.currentTimeMillis()
+                                                lastActiveTime = System.currentTimeMillis(),
+                                                characterId = "char_loyea_default"
                                             )
                                             val newList = listOf(defaultSession)
                                             sessions = newList
@@ -248,7 +264,8 @@ class MainActivity : ComponentActivity() {
                                                 Message(
                                                     id = System.currentTimeMillis().toString(),
                                                     content = if (appLanguage == "en") "Hello! I'm Loyea. How can I help you today?" else "你好！我是 Loyea。今天我能帮您做点什么？",
-                                                    sender = Sender.AI
+                                                    sender = Sender.AI,
+                                                    characterId = "char_loyea_default"
                                                 )
                                             )
                                             storageManager.saveSessionMessages(defaultSessionId, defaultMsgs)
@@ -258,12 +275,13 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                 },
-                                onNewChatClick = {
+                                onNewChatClick = { selectedChar ->
                                     val newSessionId = System.currentTimeMillis().toString()
                                     val newSession = ChatSession(
                                         id = newSessionId,
                                         title = if (appLanguage == "en") "New Chat" else "新会话",
-                                        lastActiveTime = System.currentTimeMillis()
+                                        lastActiveTime = System.currentTimeMillis(),
+                                        characterId = selectedChar.id
                                     )
                                     val updatedSessions = (listOf(newSession) + sessions).sortedByDescending { it.lastActiveTime }
                                     sessions = updatedSessions
@@ -272,8 +290,11 @@ class MainActivity : ComponentActivity() {
                                     val initialMsgs = listOf(
                                         Message(
                                             id = System.currentTimeMillis().toString(),
-                                            content = if (appLanguage == "en") "Hello! I'm Loyea. How can I help you today?" else "你好！我是 Loyea。今天我能帮您做点什么？",
-                                            sender = Sender.AI
+                                            content = selectedChar.firstMessage.ifBlank {
+                                                if (appLanguage == "en") "Hello! I'm ${selectedChar.name}. How can I help you today?" else "你好！我是 ${selectedChar.name}。今天我能帮您做点什么？"
+                                            },
+                                            sender = Sender.AI,
+                                            characterId = selectedChar.id
                                         )
                                     )
                                     storageManager.saveSessionMessages(newSessionId, initialMsgs)
@@ -281,8 +302,30 @@ class MainActivity : ComponentActivity() {
                                     currentSessionId = newSessionId
                                     prefs.edit().putString("current_session_id", newSessionId).apply()
                                 },
+                                activeCharacterCard = activeCharacterCard,
+                                characterCardList = characterCardList,
+                                onTavernClick = {
+                                    navController.navigate("tavern")
+                                },
                                 onNavigateToSettings = {
                                     navController.navigate("settings")
+                                }
+                            )
+                        }
+
+                        // 角色卡酒馆管理页面
+                        composable("tavern") {
+                            TavernScreen(
+                                characterCardList = characterCardList,
+                                onCharacterCardListSave = { newList ->
+                                    characterCardList = newList
+                                    scope.launch(Dispatchers.IO) {
+                                        storageManager.saveCharacterCards(newList)
+                                    }
+                                },
+                                appLanguage = appLanguage,
+                                onBackClick = {
+                                    navController.popBackStack()
                                 }
                             )
                         }
