@@ -2,6 +2,7 @@ package com.loyea.ui.main
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -17,6 +18,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -94,7 +96,9 @@ fun MainScreen(
                                 drawerState.close()
                                 onNavigateToSettings()
                             }
-                        }
+                        },
+                        useSystemTime = useSystemTime,
+                        onToggleSystemTime = onToggleSystemTime
                     )
                 }
             }
@@ -126,8 +130,6 @@ fun MainScreen(
                 },
                 activeCharacterCard = activeCharacterCard,
                 characterCardList = characterCardList,
-                useSystemTime = useSystemTime,
-                onToggleSystemTime = onToggleSystemTime,
                 modifier = modifier
             )
         }
@@ -156,7 +158,9 @@ fun SidebarContent(
     onHistoryItemClick: (String) -> Unit,
     onSessionDelete: (String) -> Unit,
     onTavernClick: () -> Unit,
-    onSettingsClick: () -> Unit
+    onSettingsClick: () -> Unit,
+    useSystemTime: Boolean,
+    onToggleSystemTime: () -> Unit
 ) {
     val isEn = appLanguage == "en"
     var sessionToDelete by remember { mutableStateOf<String?>(null) }
@@ -305,54 +309,139 @@ fun SidebarContent(
             }
         }
 
-        // 3. 底部区域 (人格 & 设置)
+        // 3. 底部控制面板卡片 (物理感知、人格酒馆、设置的优雅融合)
         Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(MaterialTheme.colorScheme.background.copy(alpha = 0.6f))
+                .border(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                    shape = RoundedCornerShape(16.dp)
+                )
+                .padding(4.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            // 人格管理按钮
+            // A. 物理感知 (时间) 切换
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { onToggleSystemTime() }
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.AccessTime,
+                    contentDescription = "Physical Perception",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        text = if (isEn) "Physical Perception" else "物理感知",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Text(
+                        text = if (isEn) "Inject current system time" else "向AI注入系统真实时间",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                    )
+                }
+                Switch(
+                    checked = useSystemTime,
+                    onCheckedChange = { onToggleSystemTime() },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = MaterialTheme.colorScheme.primary,
+                        uncheckedThumbColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                        uncheckedTrackColor = MaterialTheme.colorScheme.outline
+                    ),
+                    modifier = Modifier.scale(0.75f)
+                )
+            }
+
+            // B. 人格/角色酒馆
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
                     .clickable { onTavernClick() }
-                    .padding(12.dp),
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
                     imageVector = Icons.Default.People,
                     contentDescription = "Personas",
-                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                    tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(20.dp)
                 )
                 Spacer(modifier = Modifier.width(12.dp))
-                Text(
-                    text = if (isEn) "Personas" else "人格",
-                    fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.onBackground
+                Column(
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        text = if (isEn) "Personas" else "角色酒馆",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Text(
+                        text = if (isEn) "Manage AI characters" else "管理您的AI角色与设定",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                    )
+                }
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
+                    modifier = Modifier.size(16.dp)
                 )
             }
 
-            // 设置按钮
+            // C. 系统设置
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
+                    .clip(RoundedCornerShape(12.dp))
                     .clickable { onSettingsClick() }
-                    .padding(12.dp),
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
                     imageVector = Icons.Outlined.Settings,
                     contentDescription = "Settings",
-                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                    tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(20.dp)
                 )
                 Spacer(modifier = Modifier.width(12.dp))
-                Text(
-                    text = if (isEn) "Settings" else "设置",
-                    fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.onBackground
+                Column(
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        text = if (isEn) "Settings" else "系统设置",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Text(
+                        text = if (isEn) "API keys & preferences" else "配置模型 API 及应用偏好",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                    )
+                }
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
+                    modifier = Modifier.size(16.dp)
                 )
             }
         }

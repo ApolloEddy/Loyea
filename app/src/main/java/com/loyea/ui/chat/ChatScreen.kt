@@ -66,8 +66,6 @@ fun ChatScreen(
     onMenuClick: () -> Unit,
     activeCharacterCard: CharacterCard,
     characterCardList: List<CharacterCard>,
-    useSystemTime: Boolean = false,
-    onToggleSystemTime: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -95,10 +93,7 @@ fun ChatScreen(
                         activeCharacterCard = activeCharacterCard,
                         selectedModelName = apiConfig.name,
                         apiConfigList = apiConfigList,
-                        onActiveConfigChange = onActiveConfigChange,
-                        useSystemTime = useSystemTime,
-                        onToggleSystemTime = onToggleSystemTime,
-                        appLanguage = appLanguage
+                        onActiveConfigChange = onActiveConfigChange
                     )
                 },
                 navigationIcon = {
@@ -111,79 +106,6 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    var menuExpanded by remember { mutableStateOf(false) }
-
-                    IconButton(onClick = { menuExpanded = true }) {
-                        Icon(
-                            imageVector = Icons.Default.MoreVert,
-                            contentDescription = "Session Settings",
-                            tint = MaterialTheme.colorScheme.onBackground
-                        )
-                    }
-
-                    DropdownMenu(
-                        expanded = menuExpanded,
-                        onDismissRequest = { menuExpanded = false },
-                        modifier = Modifier.background(MaterialTheme.colorScheme.surface)
-                    ) {
-                        // 1. 物理感知 (时间) 开关
-                        DropdownMenuItem(
-                            text = {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = if (isEn) "Physical Perception" else "物理感知 (时间)",
-                                        color = MaterialTheme.colorScheme.onBackground,
-                                        fontSize = 14.sp
-                                    )
-                                    Spacer(modifier = Modifier.width(24.dp))
-                                    Switch(
-                                        checked = useSystemTime,
-                                        onCheckedChange = null,
-                                        colors = SwitchDefaults.colors(
-                                            checkedThumbColor = Color.White,
-                                            checkedTrackColor = MaterialTheme.colorScheme.primary
-                                        ),
-                                        modifier = Modifier.scale(0.8f)
-                                    )
-                                }
-                            },
-                            onClick = {
-                                onToggleSystemTime()
-                            }
-                        )
-
-                        // 2. 模型选择备用入口
-                        val enabledConfigs = remember(apiConfigList) {
-                            apiConfigList.filter { it.isEnabled }
-                        }
-                        if (enabledConfigs.isNotEmpty()) {
-                            HorizontalDivider(
-                                modifier = Modifier.padding(vertical = 4.dp),
-                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
-                            )
-                            enabledConfigs.forEach { config ->
-                                val isSelected = config.name == apiConfig.name
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            text = config.name,
-                                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                        )
-                                    },
-                                    onClick = {
-                                        onActiveConfigChange(config.id)
-                                        menuExpanded = false
-                                    }
-                                )
-                            }
-                        }
-                    }
-
                     val hasUserSpoken = remember(messages) {
                         messages.any { it.sender == Sender.USER }
                     }
@@ -303,13 +225,9 @@ fun ModelSelector(
     activeCharacterCard: CharacterCard,
     selectedModelName: String,
     apiConfigList: List<com.loyea.ui.settings.ApiConfig>,
-    onActiveConfigChange: (String) -> Unit,
-    useSystemTime: Boolean,
-    onToggleSystemTime: () -> Unit,
-    appLanguage: String
+    onActiveConfigChange: (String) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val isEn = appLanguage == "en"
     val enabledConfigs = remember(apiConfigList) {
         apiConfigList.filter { it.isEnabled }
     }
@@ -324,7 +242,7 @@ fun ModelSelector(
                 .clip(RoundedCornerShape(24.dp))
                 .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f), RoundedCornerShape(24.dp))
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f))
-                .clickable { expanded = true }
+                .clickable { if (enabledConfigs.size > 1) expanded = true }
                 .padding(horizontal = 14.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center
@@ -399,12 +317,12 @@ fun ModelSelector(
             }
         }
 
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            modifier = Modifier.background(MaterialTheme.colorScheme.surface)
-        ) {
-            if (enabledConfigs.isNotEmpty()) {
+        if (enabledConfigs.size > 1) {
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                modifier = Modifier.background(MaterialTheme.colorScheme.surface)
+            ) {
                 enabledConfigs.forEach { config ->
                     DropdownMenuItem(
                         text = { Text(config.name, color = MaterialTheme.colorScheme.onBackground) },
@@ -414,41 +332,7 @@ fun ModelSelector(
                         }
                     )
                 }
-                
-                HorizontalDivider(
-                    modifier = Modifier.padding(vertical = 4.dp),
-                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
-                )
             }
-
-            DropdownMenuItem(
-                text = {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = if (isEn) "Physical Perception" else "物理感知 (时间)",
-                            color = MaterialTheme.colorScheme.onBackground,
-                            fontSize = 14.sp
-                        )
-                        Spacer(modifier = Modifier.width(24.dp))
-                        Switch(
-                            checked = useSystemTime,
-                            onCheckedChange = null,
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color.White,
-                                checkedTrackColor = MaterialTheme.colorScheme.primary
-                            ),
-                            modifier = Modifier.scale(0.8f)
-                        )
-                    }
-                },
-                onClick = {
-                    onToggleSystemTime()
-                }
-            )
         }
     }
 }

@@ -4,8 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-06-10
 
-#### Added
-- **支持会话级系统时间提示词选择**：在 `ChatStorageManager.kt` 的 `ChatSession` 中增加了 `useSystemTime: Boolean` 配置，在 `PromptAssembler.kt` 中支持将格式化后的真实时间注入系统 Prompt。在 `ChatScreen.kt` 顶栏增加时钟切换按钮，提供 Toast 级交互提示。
+- **会话级系统时间提示词选择 (物理感知)**：在 `ChatStorageManager.kt` 的 `ChatSession` 中增加了 `useSystemTime: Boolean` 配置，并在 `PromptAssembler.kt` 中支持将格式化后的真实时间注入系统 Prompt。
+- **物理感知交互与顶栏解耦重构**：完全剥离了 `ChatScreen.kt` 顶部模型选择胶囊 DropdownMenu 中的“物理感知”开关，彻底解决真机（如 OPPO Find X6, ColorOS 16 等）由于状态栏通知中心与全局手势热区冲突，导致下拉菜单根本无法点击触发的交互痛点。
+- **高档卡片式侧边栏底栏设计**：在侧边栏 `SidebarContent` 底部区域，引入了整合了“物理感知（时间）”、“角色酒馆”、“系统设置”的统一的控制面板卡片（Control Panel Card）。通过双行微观版式（带有各功能的说明性副标题）、统一的高档主色调 Icon 指引、指向性 Chevron 右箭头、以及精细缩放的 Switch 开关，实现了视觉美感的极大飞跃。
+- **整行响应与防误触点击**：为“物理感知”行提供全行点击事件消费支持（`.clickable`），即便点击文字也可安全且流畅地切换“系统时间感知”，解决真机上小尺寸 Switch 控件难以点中的操作缺陷。
 - **DeepSeek 候选模型升级与平滑迁移**：将 DeepSeek 的候选模型全面升级更新为 `deepseek-v4-pro` 与 `deepseek-v4-flash`。
 - **历史模型配置自动清洗**：在 `ChatViewModel` 中添加了 API 配置自动迁移逻辑，在加载已有配置时，自动将历史废弃的 `deepseek-chat` 升级为 `deepseek-v4-pro` 并回写至本地 SharedPreferences，无需用户手动维护，保证平滑过渡。
 - **设置与模板参数更新**：在 `SettingsScreen.kt` 中同步更新了 API 配置模板、推荐模型预设列表、模型名称输入框占位符（由 `deepseek-chat` 改为 `deepseek-v4-pro`）及预览数据集中的模型预设，保持全局配置的一致性。
