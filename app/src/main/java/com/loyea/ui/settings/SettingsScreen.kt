@@ -365,40 +365,57 @@ fun InlineEditNameField(
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (isEditing) {
-            BasicTextField(
-                value = nameText,
-                onValueChange = { nameText = it },
-                textStyle = TextStyle(
-                    fontFamily = FontFamily.Default,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onBackground
-                ),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(
-                    onDone = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                BasicTextField(
+                    value = nameText,
+                    onValueChange = { nameText = it },
+                    textStyle = TextStyle(
+                        fontFamily = FontFamily.Default,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    ),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(
+                        onDone = {
+                            if (nameText.isNotBlank()) {
+                                onSave(nameText)
+                            }
+                            isEditing = false
+                            focusManager.clearFocus()
+                        }
+                    ),
+                    modifier = Modifier
+                        .weight(1f)
+                        .focusRequester(focusRequester)
+                        .padding(vertical = 2.dp)
+                )
+                
+                Spacer(modifier = Modifier.width(6.dp))
+                
+                IconButton(
+                    onClick = {
                         if (nameText.isNotBlank()) {
                             onSave(nameText)
                         }
                         isEditing = false
                         focusManager.clearFocus()
-                    }
-                ),
-                modifier = Modifier
-                    .weight(1f)
-                    .focusRequester(focusRequester)
-                    .onFocusChanged { focusState ->
-                        if (!focusState.isFocused && isEditing) {
-                            if (nameText.isNotBlank()) {
-                                onSave(nameText)
-                            }
-                            isEditing = false
-                        }
-                    }
-                    .padding(vertical = 2.dp)
-            )
+                    },
+                    modifier = Modifier.size(24.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = "Save",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
             
             // 自动索要焦点弹出键盘
             LaunchedEffect(Unit) {
@@ -668,10 +685,10 @@ fun AddOrEditSheet(
     val isEn = appLanguage == "en"
 
     var nameInput by remember { mutableStateOf(editingConfig?.name ?: "") }
-    var selectedProvider by remember { mutableStateOf(editingConfig?.provider ?: "Anthropic") }
-    var apiUrlInput by remember { mutableStateOf(editingConfig?.apiUrl ?: "https://api.anthropic.com") }
+    var selectedProvider by remember { mutableStateOf(editingConfig?.provider ?: "DeepSeek") }
+    var apiUrlInput by remember { mutableStateOf(editingConfig?.apiUrl ?: "https://api.deepseek.com/v1") }
     var apiKeyInput by remember { mutableStateOf(editingConfig?.apiKey ?: "") }
-    var modelInput by remember { mutableStateOf(editingConfig?.modelName ?: "claude-3-5-sonnet") }
+    var modelInput by remember { mutableStateOf(editingConfig?.modelName ?: "deepseek-chat") }
     
     var enableSearch by remember { mutableStateOf(editingConfig?.enableSearch ?: false) }
     var enableReasoning by remember { mutableStateOf(editingConfig?.enableReasoning ?: true) }
@@ -680,7 +697,7 @@ fun AddOrEditSheet(
     var providerDropdownExpanded by remember { mutableStateOf(false) }
 
     val providersList = listOf(
-        "Anthropic", "OpenAI", "DeepSeek", 
+        "DeepSeek", "OpenAI", 
         "Kimi (Moonshot)", "Qwen (千问)", "MiniMax", "MiMo", "Custom"
     )
 
@@ -796,10 +813,6 @@ fun AddOrEditSheet(
                                 selectedProvider = provider
                                 providerDropdownExpanded = false
                                 when (provider) {
-                                    "Anthropic" -> {
-                                        apiUrlInput = "https://api.anthropic.com"
-                                        modelInput = "claude-3-5-sonnet"
-                                    }
                                     "OpenAI" -> {
                                         apiUrlInput = "https://api.openai.com/v1"
                                         modelInput = "gpt-4o"

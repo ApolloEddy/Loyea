@@ -117,21 +117,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 enableSearch = false,
                 enableReasoning = true
             )
-            val claude = ApiConfig(
-                id = "claude_3_5",
-                name = "Claude 3.5 Sonnet",
-                provider = "Anthropic",
-                apiUrl = "https://api.anthropic.com",
-                apiKey = "",
-                modelName = "claude-3-5-sonnet",
-                isEnabled = true,
-                enableSearch = false,
-                enableReasoning = true
-            )
-            list = listOf(deepseek, claude)
+            list = listOf(deepseek)
             prefs.edit().putString("api_config_list", Gson().toJson(list)).apply()
         }
-        apiConfigList.value = list
+        apiConfigList.value = list.filter { !it.provider.equals("Anthropic", ignoreCase = true) }
 
         val savedActiveId = prefs.getString("active_config_id", "") ?: ""
         activeConfigId.value = if (savedActiveId.isNotEmpty() && list.any { it.id == savedActiveId }) {

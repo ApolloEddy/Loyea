@@ -141,8 +141,10 @@ class LlmClient {
             val reader = BufferedReader(InputStreamReader(body.byteStream()))
             var line: String?
             
-            // 缓存内嵌思考标签状态
-            var inThinkTag = false
+            // 使用增量解析器，防范分块边界截断标签
+            val fullContentBuilder = StringBuilder()
+            var emittedThoughtsLength = 0
+            var emittedContentLength = 0
             
             while (reader.readLine().also { line = it } != null) {
                 val trimmedLine = line!!.trim()
@@ -157,40 +159,71 @@ class LlmClient {
                         if (choices != null && choices.size() > 0) {
                             val delta = choices.get(0).asJsonObject.getAsJsonObject("delta")
                             if (delta != null) {
-                                // 1. 官方 reasoning_content 思考流
+                                // 1. 官方 reasoning_content 推理流 (Deepseek R1 官方标准字段)
                                 val reasoningContent = delta.get("reasoning_content")?.asString
                                 if (!reasoningContent.isNullOrEmpty()) {
                                     emit(StreamEvent.Thoughts(reasoningContent))
                                 }
 
-                                // 2. 正文流
+                                // 2. 正文流 (兼容内嵌式 <think> 标签并增量对比提取)
                                 val content = delta.get("content")?.asString
                                 if (!content.isNullOrEmpty()) {
-                                    // 兼容内嵌的 <think> 和 </think> 标签
-                                    if (content.contains("<think>")) {
-                                        inThinkTag = true
-                                        val before = content.substringBefore("<think>")
-                                        val after = content.substringAfter("<think>")
-                                        if (before.isNotEmpty()) emit(StreamEvent.Content(before))
-                                        if (after.isNotEmpty()) emit(StreamEvent.Thoughts(after))
-                                    } else if (content.contains("</think>")) {
-                                        inThinkTag = false
-                                        val before = content.substringBefore("</think>")
-                                        val after = content.substringAfter("</think>")
-                                        if (before.isNotEmpty()) emit(StreamEvent.Thoughts(before))
-                                        if (after.isNotEmpty()) emit(StreamEvent.Content(after))
-                                    } else {
-                                        if (inThinkTag) {
-                                            emit(StreamEvent.Thoughts(content))
+                                    fullContentBuilder.append(content)
+                                    val fullStr = fullContentBuilder.toString()
+                                    
+                                    val thinkStart = fullStr.indexOf("<think>")
+                                    val thinkEnd = fullStr.indexOf("</think>")
+                                    
+                                    if (thinkStart != -1) {
+                                        if (thinkEnd != -1) {
+                                            // 思考段已完全结束
+                                            // 提取思考块
+                                            val thoughtsText = fullStr.substring(thinkStart + 7, thinkEnd)
+                                            if (thoughtsText.length > emittedThoughtsLength) {
+                                                val newThoughts = thoughtsText.substring(emittedThoughtsLength)
+                                                emit(StreamEvent.Thoughts(newThoughts))
+                                                emittedThoughtsLength = thoughtsText.length
+                                            }
+                                            
+                                            // 提取正文（去掉整个思考标签和内容）
+                                            val beforeThink = fullStr.substring(0, thinkStart)
+                                            val afterThink = fullStr.substring(thinkEnd + 8)
+                                            val totalContent = beforeThink + afterThink
+                                            if (totalContent.length > emittedContentLength) {
+                                                val newContent = totalContent.substring(emittedContentLength)
+                                                emit(StreamEvent.Content(newContent))
+                                                emittedContentLength = totalContent.length
+                                            }
                                         } else {
-                                            emit(StreamEvent.Content(content))
+                                            // 思考块仍在持续中
+                                            // <think> 之前的部分已经属于正文
+                                            val beforeThink = fullStr.substring(0, thinkStart)
+                                            if (beforeThink.length > emittedContentLength) {
+                                                val newContent = beforeThink.substring(emittedContentLength)
+                                                emit(StreamEvent.Content(newContent))
+                                                emittedContentLength = beforeThink.length
+                                            }
+                                            // <think> 之后的是思考内容
+                                            val thoughtsText = fullStr.substring(thinkStart + 7)
+                                            if (thoughtsText.length > emittedThoughtsLength) {
+                                                val newThoughts = thoughtsText.substring(emittedThoughtsLength)
+                                                emit(StreamEvent.Thoughts(newThoughts))
+                                                emittedThoughtsLength = thoughtsText.length
+                                            }
+                                        }
+                                    } else {
+                                        // 全属于普通正文，无思考标签
+                                        if (fullStr.length > emittedContentLength) {
+                                            val newContent = fullStr.substring(emittedContentLength)
+                                            emit(StreamEvent.Content(newContent))
+                                            emittedContentLength = fullStr.length
                                         }
                                     }
                                 }
                             }
                         }
                     } catch (e: Exception) {
-                        // 忽略格式解析失败的空行等
+                        // 忽略解析失败的行，可能是非 JSON 报文
                     }
                 }
             }
