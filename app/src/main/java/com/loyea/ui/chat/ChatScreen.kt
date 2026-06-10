@@ -43,10 +43,12 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import android.graphics.BitmapFactory
 import java.io.File
+import com.loyea.ui.chat.PromptAssembler
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
+    userName: String,
     apiConfig: com.loyea.ui.settings.ApiConfig,
     apiConfigList: List<com.loyea.ui.settings.ApiConfig>,
     onActiveConfigChange: (String) -> Unit,
@@ -193,10 +195,10 @@ fun ChatScreen(
                             val startTime = System.currentTimeMillis()
                             val aiMessageId = (System.currentTimeMillis() + 1).toString()
                             
-                            // 调用真实远程大模型 API，传入人设 SystemPrompt
+                            // 调用真实远程大模型 API，通过 PromptAssembler 组装完整的 SystemPrompt 并替换 Macros 占位符
                             val response = llmClient.sendChatCompletion(
                                 config = apiConfig,
-                                systemPrompt = activeCharacterCard.systemPrompt,
+                                systemPrompt = PromptAssembler.assembleSystemPrompt(activeCharacterCard, userName),
                                 history = currentList
                             )
                             isThinking = false
@@ -872,6 +874,7 @@ fun ChatScreenPreview() {
     LoyeaTheme {
         val defaultChar = TavernCardParser.getBuiltInCards().first()
         ChatScreen(
+            userName = "Loyea Developer",
             apiConfig = ApiConfig(),
             apiConfigList = listOf(ApiConfig()),
             onActiveConfigChange = {},

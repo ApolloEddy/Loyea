@@ -4,8 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-06-10
 
-### Added
-- **兼容酒馆 (SillyTavern) 角色卡隐写与解析系统**：全新创建了 `TavernCardParser.kt`，实现轻量流式的 PNG `tEXt` 块扫描与 Base64 隐写提取解析机制，自动兼容 V1 与 V2 `data` 节点人设规范。
+#### Added
+- **人设拼接与占位符宏渲染引擎 (PromptAssembler)**：全新创建了 `PromptAssembler.kt`，实现了将核心设定、性格、情景、少样本对话范例进行标准化酒馆格式拼接的引擎，并支持 `{{char}}` 和 `{{user}}` 等标签的宏替换，实现真正的角色扮演沉浸感。
+- **人格自定义表单扩充**：在 `TavernScreen.kt` 的自定义表单弹窗中补充了“性格词汇描述”、“对话场景设定”和“少样本对话范例”三个多行输入域，支持完备的多维度人格信息本地持久化与折叠页中高保真展示。
+- **兼容酒馆 (SillyTavern) 角色卡隐写与解析系统**：已全新创建了 `TavernCardParser.kt`，实现轻量流式的 PNG `tEXt` 块扫描与 Base64 隐写提取解析机制，自动兼容 V1 与 V2 `data` 节点人设规范。
 - **5 款高品质系统预置人格**：内置了理性助理 Loyea、活泼傲娇猫娘小铃、废土毒舌酒保戴斯、豪放宋代文豪苏东坡以及代码审查导师 Linus 等 5 款个性鲜明、打招呼语与提示词打磨精细的初始角色。
 - **符合 Claude 美学的角色选择抽屉 (SelectPersonaSheet)**：新建会话时，不再直接创建空对话，而是自底向上拉起基于 Compose `ModalBottomSheet` 的雅致角色卡片挑选抽屉。选定后，为新会话永久锁定绑定该角色卡，并在消息流头部自动发出一声该角色专属的 `firstMessage` 欢迎语。
 - **全功能角色酒馆管理中心 (TavernScreen)**：全新创建了 `TavernScreen.kt`。用户可通过侧边栏底部新增的“角色酒馆”按钮直达。支持：
@@ -13,7 +15,32 @@ All notable changes to this project will be documented in this file.
   - **PNG 与 JSON 文件选择导入**：使用 Android 系统 GetContent 文件选择器选择 PNG 角色卡（提取其中隐写数据，并自动将高清立绘原图复制到应用私有目录 `context.filesDir/avatars` 中持久化为头像）或导入 JSON 配置。
   - **JSON 快捷分享导出**：基于 Action_Send 文本分享 Intent，一键将角色数据序列化导出分享，实现与其它平台和设备的完美流通。
   - **卡片删除与头像缓存回收**：用户可随时移除自定义卡片，删除时会自动清理其占用的本地头像图片缓存，保持应用轻量。
-- **人设与大模型驱动全面解耦**：重构了 `LlmClient` 与 `ChatScreen` 的对话连线层。在向远程 LLM 发送聊天包时，自动把绑定角色的 `systemPrompt` 作为 `system` 角色组装到 payload 消息队列的第 0 位（即人设 System 提示词）。使得聊天过程中，用户可以在顶部任意热切换底层的大模型驱动配置（如把猫娘的会话由 Deepseek 切换成 Claude 3.5 驱动），而猫娘人设和记忆不受影响。
+- **人设与大模型驱动全面解耦**：重构了 `LlmClient` 与 `ChatScreen` 的对话连线层。在向远程 LLM 发送聊天包时，自动把绑定角色的 `systemPrompt` 作为 `system` 角色组装到 payload 消息队列 of 第 0 位（即人设 System 提示词）。使得聊天过程中，用户可以在顶部任意热切换底层的大模型驱动配置（如把猫娘的会话由 Deepseek 切换成 Claude 3.5 驱动），而猫娘人设和记忆不受影响。
+- **顶栏胶囊双行级联复合选择器**：将原本 of ModelSelector 升级为全新的高颜值胶囊，支持左侧显示角色圆形头像（有本地头像加载与哈希底色首字母兜底）、角色姓名大字标题、底层模型小字副标题以及下拉小箭头，在兼顾解耦与角色品牌代言的同时实现完美的视觉交互。
+- **Gson 序列化依赖**：在 `app/build.gradle.kts` 中引入了 `com.google.code.gson:gson:2.10.1` 依赖，以支持聊天数据本地持久化。
+- **本地会话及消息存储管理器 (ChatStorageManager)**：全新创建了 `ChatStorageManager.kt`，利用 Android 应用私有目录（`context.filesDir`）以 JSON 格式存储会话列表元数据 (`sessions_metadata.json`) 以及各独立会话的消息历史 (`session_{id}.json`)。
+- **多会话隔离与动态切换**：在 `MainActivity` 层级重构成单数据源管理机制，在切换会话时精确动态读取并显示对应历史，彻底隔绝不同会话间的数据。在全部删除会话后能自动生成新的默认会话，提供了高容错边界逻辑。
+- **首条用户消息自动生成会话标题**：新创建的会话当发送第一条用户消息时，系统会自动提取该消息的前 15 个字作为该会话的标题并同步持久化到本地，优化了标题生成体验。
+- **侧边栏行内快捷删除会话**：在侧边栏 (`SidebarContent`) 的历史会话项中增加了删除按钮，点击即可直接删除该会话及其对应的本地 JSON 文件，并自动重新对准可用会话，提高了会话生命周期管理能力。
+- **侧边栏历史会话时间动态分组**：基于会话的最后活动时间（`lastActiveTime`），实现了“今天”、“昨天”、“前 7 天”、“更早”的智能动态分类渲染。
+- **网络错误消息字段**：在 `Message.kt` 中为 `Message` 实体类新增了 `isError: Boolean` 属性（默认值为 `false`），以精确感知和存储对话过程中的连接及配置错误。
+ 
+### Removed
+- **升级 Pro 广告移出**：从侧边栏（`SidebarContent`）中彻底移除了黄金质感的 "Upgrade to Claude Pro" 广告卡片，移除了对应的 `onUpgradeClick` 事件参数及 Toast 提示逻辑，净化了侧边栏的界面视觉，提升用户体验。
+ 
+### Changed
+- **“角色酒馆”重命名为“人格”**：将所有的 UI、侧栏底部导航选项、人格卡管理中心的顶栏标题、PNG 导入的引导语以及内部路由注释等话术全局重命名为“人格 (Personas)”。
+- **新会话欢迎语占位符热渲染**：在 `MainActivity` 开启新会话时，利用 `PromptAssembler.formatMessageContent` 自动把欢迎语中的 `{{user}}` 等标签渲染替换为用户的实际名称。
+- **发送端拼接参数层打通**：将 `userName` 透传打通至 `ChatScreen` 的网络发送链路，调用 LLM 接口时传入 `PromptAssembler` 精心拼装并替换后的结构化系统 Prompt。
+- **全面重命名替换为 Loyea 项目名**：
+  - 将所有用户 UI 界面中对 "Claude" 助理和应用的提及全面替换为 "Loyea"，包括 Chat 界面的默认欢迎语、新建会话初始语、输入框占位符（"Talk to Loyea"/"与 Loyea 对话"）、配置页的主题风格描述（"Loyea Warm Amber"）。
+  - 将内部代码逻辑（类名、变量名、字体定义名）中的 `Claude` 前缀全面重命名为 `Loyea`（如 `ClaudeTheme` 更改为 `LoyeaTheme`，`ClaudeTypography` 更改为 `LoyeaTypography`，以及 `ClaudeLightBg`、`ClaudeDarkBg` 等系列颜色配置重命名为 `LoyeaLightBg`、`LoyeaDarkBg` 等）。
+- **真实大模型网络通信挂载**：在 `ChatScreen.kt` 的 `onSend` 发送消息逻辑中，移除写死的 MCP 多阶段仿真动画，挂接真实的 `LlmClient.sendChatCompletion(...)` 异步请求。现在，在等待期间正常展现全局加载闪烁指示器，接收响应后计算精确的 API 思考时间并赋给 `thoughtDurationSeconds`，然后通过打字机逐字输出。
+- **自定义警告错误气泡渲染**：重构了 `MessageItem` 针对 AI 消息的处理逻辑。当消息状态为 `isError = true` 时，AI 回答将不采用通用 Markdown + 动作条排版，而是直接渲染为具有圆角淡红背景（`Color(0xFFFDE8E8)`）、淡红细线边框（`Color(0xFFF8B4B4)`）、警告深红文本（`Color(0xFFE02424)`）和 `Icons.Default.Error` 图标指示的警告卡片，同时剥离了无意义的动作条（复制、发音等），提升交互质量与体验。
+ 
+### Fixed
+- **AI 回复行内 Markdown 粗体渲染修复**：重构了 `MarkdownText.kt` 中的 `renderInlineMarkdown` 函数，在行内代码分割以外，支持用双星号 `**` 语法块做奇偶过滤并绑定 `FontWeight.Bold`，彻底解决了 AI 回答时类似 `**Loyea**` 不加粗的展示 Bug。
+- **ChatScreen 多余右大括号删除**：清理了 `ChatScreen.kt` 核心组件大括号尾部多余的闭合花括号，彻底解决 "Expecting a top level declaration" 错误。切换成 Claude 3.5 驱动），而猫娘人设和记忆不受影响。
 - **顶栏胶囊双行级联复合选择器**：将原本的 ModelSelector 升级为全新的高颜值胶囊，支持左侧显示角色圆形头像（有本地头像加载与哈希底色首字母兜底）、角色姓名大字标题、底层模型小字副标题以及下拉小箭头，在兼顾解耦与角色品牌代言的同时实现完美的视觉交互。
 - **Gson 序列化依赖**：在 `app/build.gradle.kts` 中引入了 `com.google.code.gson:gson:2.10.1` 依赖，以支持聊天数据本地持久化。
 - **本地会话及消息存储管理器 (ChatStorageManager)**：全新创建了 `ChatStorageManager.kt`，利用 Android 应用私有目录（`context.filesDir`）以 JSON 格式存储会话列表元数据 (`sessions_metadata.json`) 以及各独立会话的消息历史 (`session_{id}.json`)。

@@ -98,7 +98,7 @@ private fun parseMarkdown(text: String): List<MarkdownBlock> {
     return blocks
 }
 
-// 行内代码 `code` 渲染
+// 行内代码与粗体渲染
 @Composable
 private fun renderInlineMarkdown(text: String, textColor: Color): AnnotatedString {
     return buildAnnotatedString {
@@ -110,16 +110,30 @@ private fun renderInlineMarkdown(text: String, textColor: Color): AnnotatedStrin
                     SpanStyle(
                         fontFamily = FontFamily.Monospace,
                         fontSize = 14.sp,
-                        background = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                        background = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                         color = MaterialTheme.colorScheme.primary
                     )
                 )
                 append(part)
                 pop()
             } else {
-                pushStyle(SpanStyle(color = textColor))
-                append(part)
-                pop()
+                val boldParts = part.split("**")
+                var isBold = false
+                boldParts.forEach { boldPart ->
+                    if (isBold) {
+                        pushStyle(
+                            SpanStyle(
+                                fontWeight = FontWeight.Bold,
+                                color = textColor
+                            )
+                        )
+                        append(boldPart)
+                        pop()
+                    } else {
+                        append(boldPart)
+                    }
+                    isBold = !isBold
+                }
             }
             isCode = !isCode
         }

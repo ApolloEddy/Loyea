@@ -75,7 +75,7 @@ fun TavernScreen(
                         onCharacterCardListSave(characterCardList + finalCard)
                         Toast.makeText(context, if (isEn) "Imported [${parsedCard.name}] successfully" else "成功导入角色卡 [${parsedCard.name}]", Toast.LENGTH_SHORT).show()
                     } else {
-                        Toast.makeText(context, if (isEn) "No valid character card metadata found in PNG" else "未能在此 PNG 中找到有效的角色卡设定，请确认其为标准酒馆卡", Toast.LENGTH_LONG).show()
+                        Toast.makeText(context, if (isEn) "No valid character card metadata found in PNG" else "未能在此 PNG 中找到有效的人格卡设定，请确认其为标准角色卡", Toast.LENGTH_LONG).show()
                     }
                 }
             } catch (e: Exception) {
@@ -111,7 +111,7 @@ fun TavernScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (isEn) "Character Tavern" else "角色酒馆", fontWeight = FontWeight.Bold) },
+                title = { Text(if (isEn) "Personas" else "人格", fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
                         Icon(imageVector = Icons.Outlined.ArrowBack, contentDescription = "Back")
@@ -164,9 +164,9 @@ fun TavernScreen(
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = if (isEn) 
-                            "• SillyTavern PNG Character Card (V1 / V2 Metadata)\n• Tavern Character Card exported JSON config"
+                            "• Standard PNG Character Card (V1 / V2 Metadata)\n• Character Card exported JSON config"
                             else 
-                            "• 各种标准酒馆 APP 生成的 PNG 角色设定卡 (隐写 V1/V2 数据)\n• 各种酒馆导出的 JSON 纯文本人物配置",
+                            "• 各种标准角色扮演 APP 生成的 PNG 角色设定卡 (隐写 V1/V2 数据)\n• 各种平台导出的 JSON 纯文本人物配置",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                         lineHeight = 18.sp
@@ -346,9 +346,9 @@ fun TavernCardItem(
             var showSettingsPreview by remember { mutableStateOf(false) }
             if (showSettingsPreview) {
                 Divider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "System Prompt:",
+                        text = "System Prompt (核心人设):",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
@@ -363,15 +363,69 @@ fun TavernCardItem(
                             .padding(8.dp)
                     )
 
+                    if (card.personality.isNotBlank()) {
+                        Text(
+                            text = "Personality (性格特征):",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = card.personality,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f))
+                                .padding(8.dp)
+                        )
+                    }
+
+                    if (card.scenario.isNotBlank()) {
+                        Text(
+                            text = "Scenario (对话场景):",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = card.scenario,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f))
+                                .padding(8.dp)
+                        )
+                    }
+
                     if (card.firstMessage.isNotBlank()) {
                         Text(
-                            text = "First Message:",
+                            text = "First Message (首句打招呼):",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
                         )
                         Text(
                             text = card.firstMessage,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f))
+                                .padding(8.dp)
+                        )
+                    }
+
+                    if (card.chatExamples.isNotBlank()) {
+                        Text(
+                            text = "Examples (少样本范例):",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = card.chatExamples,
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                             modifier = Modifier
@@ -428,6 +482,9 @@ fun CreatePersonaDialog(
     var systemPrompt by remember { mutableStateOf("") }
     var firstMessage by remember { mutableStateOf("") }
     var creator by remember { mutableStateOf("") }
+    var personality by remember { mutableStateOf("") }
+    var scenario by remember { mutableStateOf("") }
+    var chatExamples by remember { mutableStateOf("") }
 
     // 头像背景色选择
     val colors = listOf("#E5D3B3", "#D3E2CD", "#CBE3F5", "#E2D3F5", "#F2D4D7")
@@ -463,7 +520,10 @@ fun CreatePersonaDialog(
                                             avatarColor = colors[selectedColorIndex],
                                             shortIntro = intro.ifBlank { if (isEn) "A unique custom AI companion." else "充满个性的自定义 AI 伙伴。" },
                                             systemPrompt = systemPrompt,
+                                            personality = personality,
+                                            scenario = scenario,
                                             firstMessage = firstMessage,
+                                            chatExamples = chatExamples,
                                             isBuiltIn = false,
                                             creatorName = creator.ifBlank { if (isEn) "User Custom" else "用户自建" }
                                         )
@@ -552,6 +612,24 @@ fun CreatePersonaDialog(
                     )
 
                     OutlinedTextField(
+                        value = personality,
+                        onValueChange = { personality = it },
+                        label = { Text(if (isEn) "Personality Description" else "性格词汇描述（如：傲娇粘人、冷静高智商）") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = scenario,
+                        onValueChange = { scenario = it },
+                        label = { Text(if (isEn) "Scenario Background" else "对话场景设定（如：在灯光昏暗的废土酒吧里）") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
                         value = firstMessage,
                         onValueChange = { firstMessage = it },
                         label = { Text(if (isEn) "First greeting message" else "首句欢迎词 / 打招呼语") },
@@ -563,6 +641,14 @@ fun CreatePersonaDialog(
                         value = systemPrompt,
                         onValueChange = { systemPrompt = it },
                         label = { Text(if (isEn) "System Prompt (Character Settings)" else "系统核心设定 / 人格 Prompt（必填）") },
+                        minLines = 4,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = chatExamples,
+                        onValueChange = { chatExamples = it },
+                        label = { Text(if (isEn) "Example Dialogs (use <START> to split)" else "少样本对话范例（多行，使用 <START> 划分对话片段）") },
                         minLines = 4,
                         modifier = Modifier.fillMaxWidth()
                     )

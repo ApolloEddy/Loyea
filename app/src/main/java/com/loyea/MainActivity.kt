@@ -24,6 +24,7 @@ import com.loyea.ui.chat.Sender
 import com.loyea.ui.chat.CharacterCard
 import com.loyea.ui.chat.TavernCardParser
 import com.loyea.ui.chat.TavernScreen
+import com.loyea.ui.chat.PromptAssembler
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
@@ -287,12 +288,15 @@ class MainActivity : ComponentActivity() {
                                     sessions = updatedSessions
                                     storageManager.saveSessionList(updatedSessions)
 
+                                    val welcomeText = selectedChar.firstMessage.ifBlank {
+                                        if (appLanguage == "en") "Hello! I'm {{char}}. How can I help you today?" else "你好！我是 {{char}}。今天我能帮您做点什么？"
+                                    }
+                                    val formattedWelcome = PromptAssembler.formatMessageContent(welcomeText, selectedChar, userName)
+
                                     val initialMsgs = listOf(
                                         Message(
                                             id = System.currentTimeMillis().toString(),
-                                            content = selectedChar.firstMessage.ifBlank {
-                                                if (appLanguage == "en") "Hello! I'm ${selectedChar.name}. How can I help you today?" else "你好！我是 ${selectedChar.name}。今天我能帮您做点什么？"
-                                            },
+                                            content = formattedWelcome,
                                             sender = Sender.AI,
                                             characterId = selectedChar.id
                                         )
@@ -313,7 +317,7 @@ class MainActivity : ComponentActivity() {
                             )
                         }
 
-                        // 角色卡酒馆管理页面
+                        // 人格管理页面
                         composable("tavern") {
                             TavernScreen(
                                 characterCardList = characterCardList,

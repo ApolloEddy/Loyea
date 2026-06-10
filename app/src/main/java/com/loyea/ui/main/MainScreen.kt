@@ -96,6 +96,7 @@ fun MainScreen(
             }
         ) {
             ChatScreen(
+                userName = userName,
                 apiConfig = apiConfig,
                 apiConfigList = apiConfigList,
                 onActiveConfigChange = onActiveConfigChange,
@@ -296,12 +297,12 @@ fun SidebarContent(
             }
         }
 
-        // 3. 底部区域 (酒馆 & 设置)
+        // 3. 底部区域 (人格 & 设置)
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // 角色酒馆按钮
+            // 人格管理按钮
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -312,13 +313,13 @@ fun SidebarContent(
             ) {
                 Icon(
                     imageVector = Icons.Default.People,
-                    contentDescription = "Tavern",
+                    contentDescription = "Personas",
                     tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
                     modifier = Modifier.size(20.dp)
                 )
                 Spacer(modifier = Modifier.width(12.dp))
                 Text(
-                    text = if (isEn) "Character Tavern" else "角色酒馆",
+                    text = if (isEn) "Personas" else "人格",
                     fontSize = 14.sp,
                     color = MaterialTheme.colorScheme.onBackground
                 )
