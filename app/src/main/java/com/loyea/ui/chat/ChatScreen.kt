@@ -21,6 +21,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
@@ -94,7 +95,10 @@ fun ChatScreen(
                         activeCharacterCard = activeCharacterCard,
                         selectedModelName = apiConfig.name,
                         apiConfigList = apiConfigList,
-                        onActiveConfigChange = onActiveConfigChange
+                        onActiveConfigChange = onActiveConfigChange,
+                        useSystemTime = useSystemTime,
+                        onToggleSystemTime = onToggleSystemTime,
+                        appLanguage = appLanguage
                     )
                 },
                 navigationIcon = {
@@ -107,26 +111,6 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    // 真实系统时间切换按钮
-                    val context = LocalContext.current
-                    IconButton(onClick = {
-                        onToggleSystemTime()
-                        val msgText = if (useSystemTime) {
-                            if (isEn) "System time disabled" else "已为此会话关闭系统时间"
-                        } else {
-                            if (isEn) "System time enabled" else "已为此会话开启系统时间"
-                        }
-                        Toast.makeText(context, msgText, Toast.LENGTH_SHORT).show()
-                    }) {
-                        Icon(
-                            imageVector = Icons.Default.AccessTime,
-                            contentDescription = "System Time",
-                            tint = if (useSystemTime) MaterialTheme.colorScheme.primary 
-                                   else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-
                     val hasUserSpoken = remember(messages) {
                         messages.any { it.sender == Sender.USER }
                     }
@@ -246,9 +230,13 @@ fun ModelSelector(
     activeCharacterCard: CharacterCard,
     selectedModelName: String,
     apiConfigList: List<com.loyea.ui.settings.ApiConfig>,
-    onActiveConfigChange: (String) -> Unit
+    onActiveConfigChange: (String) -> Unit,
+    useSystemTime: Boolean,
+    onToggleSystemTime: () -> Unit,
+    appLanguage: String
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val isEn = appLanguage == "en"
     val enabledConfigs = remember(apiConfigList) {
         apiConfigList.filter { it.isEnabled }
     }
@@ -263,7 +251,7 @@ fun ModelSelector(
                 .clip(RoundedCornerShape(24.dp))
                 .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f), RoundedCornerShape(24.dp))
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f))
-                .clickable { if (enabledConfigs.size > 1) expanded = true }
+                .clickable { expanded = true }
                 .padding(horizontal = 14.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center
@@ -338,12 +326,12 @@ fun ModelSelector(
             }
         }
 
-        if (enabledConfigs.size > 1) {
-            DropdownMenu(
-                expanded = expanded,
-                onDismissRequest = { expanded = false },
-                modifier = Modifier.background(MaterialTheme.colorScheme.surface)
-            ) {
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.background(MaterialTheme.colorScheme.surface)
+        ) {
+            if (enabledConfigs.isNotEmpty()) {
                 enabledConfigs.forEach { config ->
                     DropdownMenuItem(
                         text = { Text(config.name, color = MaterialTheme.colorScheme.onBackground) },
@@ -353,7 +341,41 @@ fun ModelSelector(
                         }
                     )
                 }
+                
+                HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 4.dp),
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                )
             }
+
+            DropdownMenuItem(
+                text = {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (isEn) "Physical Perception" else "物理感知 (时间)",
+                            color = MaterialTheme.colorScheme.onBackground,
+                            fontSize = 14.sp
+                        )
+                        Spacer(modifier = Modifier.width(24.dp))
+                        Switch(
+                            checked = useSystemTime,
+                            onCheckedChange = null,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = MaterialTheme.colorScheme.primary
+                            ),
+                            modifier = Modifier.scale(0.8f)
+                        )
+                    }
+                },
+                onClick = {
+                    onToggleSystemTime()
+                }
+            )
         }
     }
 }

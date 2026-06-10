@@ -13,7 +13,7 @@ data class ChatSession(
     val title: String,               // 会话标题
     val lastActiveTime: Long = System.currentTimeMillis(), // 最后活动时间，用于排序
     val characterId: String = "char_loyea_default", // 新增角色人格绑定
-    val useSystemTime: Boolean = false // 是否在此会话中使用真实系统时间
+    val useSystemTime: Boolean? = false // 是否在此会话中使用真实系统时间
 )
 
 /**

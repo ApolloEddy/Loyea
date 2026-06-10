@@ -535,7 +535,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val currentList = sessions.value
         val updated = currentList.map { session ->
             if (session.id == sessionId) {
-                session.copy(useSystemTime = !session.useSystemTime)
+                session.copy(useSystemTime = session.useSystemTime != true)
             } else {
                 session
             }
