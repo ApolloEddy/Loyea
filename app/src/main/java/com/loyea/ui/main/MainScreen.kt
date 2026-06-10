@@ -23,59 +23,104 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
 import com.loyea.ui.chat.ChatScreen
+import com.loyea.ui.chat.ChatSession
+import com.loyea.ui.chat.Message
 import com.loyea.ui.settings.ApiConfig
 import com.loyea.ui.theme.LoyeaTheme
 import kotlinx.coroutines.launch
+import java.util.Calendar
+import android.text.format.DateUtils
 
 @Composable
 fun MainScreen(
     userName: String,
     apiConfig: ApiConfig,
+    apiConfigList: List<ApiConfig>,
+    onActiveConfigChange: (String) -> Unit,
     appLanguage: String,
     userBubbleColor: String,
-    onApiConfigChange: (ApiConfig) -> Unit,
+    sessions: List<ChatSession>,
+    currentSessionId: String,
+    messages: List<Message>,
+    onMessagesChange: (List<Message>) -> Unit,
+    onSessionSelect: (String) -> Unit,
+    onSessionDelete: (String) -> Unit,
+    onNewChatClick: () -> Unit,
     onNavigateToSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
-    val context = LocalContext.current
+    var lastMenuClickTime by remember { mutableStateOf(0L) }
 
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        drawerContent = {
-            ModalDrawerSheet(
-                drawerContainerColor = MaterialTheme.colorScheme.surface,
-                modifier = Modifier.width(300.dp)
-            ) {
-                SidebarContent(
-                    userName = userName,
-                    appLanguage = appLanguage,
-                    onHistoryItemClick = { title ->
-                        scope.launch { drawerState.close() }
-                        Toast.makeText(context, if (appLanguage == "en") "Opened: $title" else "已打开：$title", Toast.LENGTH_SHORT).show()
-                    },
-                    onSettingsClick = {
+    Box(modifier = Modifier.fillMaxSize()) {
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            drawerContent = {
+                ModalDrawerSheet(
+                    drawerContainerColor = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier.width(300.dp)
+                ) {
+                    SidebarContent(
+                        userName = userName,
+                        appLanguage = appLanguage,
+                        sessions = sessions,
+                        currentSessionId = currentSessionId,
+                        onHistoryItemClick = { sessionId ->
+                            scope.launch { drawerState.close() }
+                            onSessionSelect(sessionId)
+                        },
+                        onSessionDelete = onSessionDelete,
+                        onSettingsClick = {
+                            scope.launch {
+                                drawerState.close()
+                                onNavigateToSettings()
+                            }
+                        }
+                    )
+                }
+            }
+        ) {
+            ChatScreen(
+                apiConfig = apiConfig,
+                apiConfigList = apiConfigList,
+                onActiveConfigChange = onActiveConfigChange,
+                appLanguage = appLanguage,
+                userBubbleColor = userBubbleColor,
+                messages = messages,
+                onMessagesChange = onMessagesChange,
+                onNewChatClick = onNewChatClick,
+                onMenuClick = {
+                    val currentTime = System.currentTimeMillis()
+                    if (currentTime - lastMenuClickTime > 800L) {
+                        lastMenuClickTime = currentTime
                         scope.launch {
-                            drawerState.close()
-                            onNavigateToSettings()
+                            try {
+                                drawerState.open()
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
                         }
                     }
-                )
-            }
+                },
+                modifier = modifier
+            )
         }
-    ) {
-        ChatScreen(
-            apiConfig = apiConfig,
-            appLanguage = appLanguage,
-            userBubbleColor = userBubbleColor,
-            onApiConfigChange = onApiConfigChange,
-            onMenuClick = {
-                scope.launch { drawerState.open() }
-            },
-            modifier = modifier
-        )
+
+        // 核心交互优化：在侧栏滑出（打开）或缩回（关闭）动画运行期间，在最上层覆盖透明拦截层，
+        // 拦截并消费一切快速点击，彻底杜绝连击事件落入 Scrim 导致抽屉半路缩回或反复震荡的缺陷。
+        if (drawerState.isAnimationRunning) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures { /* 消费事件，不做任何处理 */ }
+                    }
+            )
+        }
     }
 }
 
@@ -84,33 +129,54 @@ fun MainScreen(
 fun SidebarContent(
     userName: String,
     appLanguage: String,
+    sessions: List<ChatSession>,
+    currentSessionId: String,
     onHistoryItemClick: (String) -> Unit,
+    onSessionDelete: (String) -> Unit,
     onSettingsClick: () -> Unit
 ) {
     val isEn = appLanguage == "en"
-    val historyGroups = remember(appLanguage) {
-        listOf(
-            HistoryGroup(
-                if (isEn) "Today" else "今天", listOf(
-                    "Jetpack Compose Button Design",
-                    "RAG Optimization Logic",
-                    "Android Gradle Setup"
-                )
-            ),
-            HistoryGroup(
-                if (isEn) "Yesterday" else "昨天", listOf(
-                    "Loyea App UI Spec",
-                    "Consolas Font Configuration"
-                )
-            ),
-            HistoryGroup(
-                if (isEn) "Previous 7 Days" else "前 7 天", listOf(
-                    "Kotlin Flow vs LiveData",
-                    "Retrofit Network Architecture",
-                    "Room Database Auto-migration"
-                )
-            )
-        )
+    var sessionToDelete by remember { mutableStateOf<String?>(null) }
+    val historyGroups = remember(sessions, appLanguage) {
+        val todayList = mutableListOf<ChatSession>()
+        val yesterdayList = mutableListOf<ChatSession>()
+        val last7DaysList = mutableListOf<ChatSession>()
+        val olderList = mutableListOf<ChatSession>()
+
+        val todayStart = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+
+        val yesterdayStart = todayStart - DateUtils.DAY_IN_MILLIS
+        val sevenDaysAgoStart = todayStart - 7 * DateUtils.DAY_IN_MILLIS
+
+        for (session in sessions) {
+            val time = session.lastActiveTime
+            when {
+                time >= todayStart -> todayList.add(session)
+                time >= yesterdayStart -> yesterdayList.add(session)
+                time >= sevenDaysAgoStart -> last7DaysList.add(session)
+                else -> olderList.add(session)
+            }
+        }
+
+        val groups = mutableListOf<HistoryGroup>()
+        if (todayList.isNotEmpty()) {
+            groups.add(HistoryGroup(if (isEn) "Today" else "今天", todayList))
+        }
+        if (yesterdayList.isNotEmpty()) {
+            groups.add(HistoryGroup(if (isEn) "Yesterday" else "昨天", yesterdayList))
+        }
+        if (last7DaysList.isNotEmpty()) {
+            groups.add(HistoryGroup(if (isEn) "Previous 7 Days" else "前 7 天", last7DaysList))
+        }
+        if (olderList.isNotEmpty()) {
+            groups.add(HistoryGroup(if (isEn) "Older" else "更早", olderList))
+        }
+        groups
     }
 
     Column(
@@ -175,13 +241,14 @@ fun SidebarContent(
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
                     // 会话项
-                    group.items.forEach { item ->
+                    group.items.forEach { session ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(8.dp))
-                                .clickable { onHistoryItemClick(item) }
-                                .padding(vertical = 10.dp, horizontal = 8.dp),
+                                .background(if (session.id == currentSessionId) MaterialTheme.colorScheme.primary.copy(alpha = 0.1f) else Color.Transparent)
+                                .clickable { onHistoryItemClick(session.id) }
+                                .padding(vertical = 6.dp, horizontal = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
@@ -192,11 +259,23 @@ fun SidebarContent(
                             )
                             Spacer(modifier = Modifier.width(12.dp))
                             Text(
-                                text = item,
+                                text = session.title,
                                 fontSize = 14.sp,
                                 maxLines = 1,
-                                color = MaterialTheme.colorScheme.onBackground
+                                color = MaterialTheme.colorScheme.onBackground,
+                                modifier = Modifier.weight(1f)
                             )
+                            IconButton(
+                                onClick = { sessionToDelete = session.id },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Delete",
+                                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -231,12 +310,56 @@ fun SidebarContent(
                 )
             }
         }
+
+        // 删除确认弹窗 (多语言兼容 & Loyea 燕麦沙黄主题风格)
+        if (sessionToDelete != null) {
+            val targetSessionId = sessionToDelete!!
+            AlertDialog(
+                onDismissRequest = { sessionToDelete = null },
+                title = {
+                    Text(
+                        text = if (isEn) "Delete Chat?" else "确认删除会话？",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
+                    )
+                },
+                text = {
+                    Text(
+                        text = if (isEn) "This will permanently delete this conversation." else "此操作将永久删除此会话历史记录。",
+                        fontSize = 14.sp
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            onSessionDelete(targetSessionId)
+                            sessionToDelete = null
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Text(text = if (isEn) "Delete" else "删除")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { sessionToDelete = null }) {
+                        Text(
+                            text = if (isEn) "Cancel" else "取消",
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        )
+                    }
+                },
+                shape = RoundedCornerShape(16.dp),
+                containerColor = MaterialTheme.colorScheme.surface
+            )
+        }
     }
 }
 
 data class HistoryGroup(
     val timeLabel: String,
-    val items: List<String>
+    val items: List<ChatSession>
 )
 
 @Preview(showBackground = true)
@@ -246,9 +369,17 @@ fun MainScreenPreview() {
         MainScreen(
             userName = "Loyea Developer",
             apiConfig = ApiConfig(),
+            apiConfigList = listOf(ApiConfig()),
+            onActiveConfigChange = {},
             appLanguage = "zh",
             userBubbleColor = "",
-            onApiConfigChange = {},
+            sessions = listOf(ChatSession("1", "Jetpack Compose Button Design")),
+            currentSessionId = "1",
+            messages = emptyList(),
+            onMessagesChange = {},
+            onSessionSelect = {},
+            onSessionDelete = {},
+            onNewChatClick = {},
             onNavigateToSettings = {}
         )
     }

@@ -43,10 +43,14 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
-    apiConfig: ApiConfig,
+    apiConfig: com.loyea.ui.settings.ApiConfig,
+    apiConfigList: List<com.loyea.ui.settings.ApiConfig>,
+    onActiveConfigChange: (String) -> Unit,
     appLanguage: String,
     userBubbleColor: String,
-    onApiConfigChange: (ApiConfig) -> Unit,
+    messages: List<Message>,
+    onMessagesChange: (List<Message>) -> Unit,
+    onNewChatClick: () -> Unit,
     onMenuClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -54,31 +58,9 @@ fun ChatScreen(
     val clipboardManager = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+    val llmClient = remember { LlmClient() }
 
     val isEn = appLanguage == "en"
-
-    // 默认对话历史 (稳定状态，不因重组而丢失)
-    var messages by remember {
-        mutableStateOf(
-            listOf(
-                Message(
-                    "1", 
-                    "你好！我是 Loyea。今天我能帮您做点什么？", 
-                    Sender.AI
-                ),
-                Message(
-                    "2", 
-                    "你能向我展示如何用 `Button` 编写一个简单的 Jetpack Compose 布局吗？", 
-                    Sender.USER
-                ),
-                Message(
-                    "3", 
-                    "当然！下面是一个使用 `Button` 和 `Text` 的简单布局：\n\n```kotlin\n@Composable\nfun MyButtonLayout() {\n    Column(\n        modifier = Modifier.padding(16.dp),\n        horizontalAlignment = Alignment.CenterVertically\n    ) {\n        Text(text = \"点击下方的按钮！\")\n        Spacer(modifier = Modifier.height(8.dp))\n        Button(onClick = { /* 处理点击事件 */ }) {\n            Text(text = \"点击我\")\n        }\n    }\n}\n```\n如果您需要任何其他修改，请告诉我！", 
-                    Sender.AI
-                )
-            )
-        )
-    }
 
     var inputText by remember { mutableStateOf(TextFieldValue("")) }
     var isThinking by remember { mutableStateOf(false) }
@@ -95,10 +77,9 @@ fun ChatScreen(
             CenterAlignedTopAppBar(
                 title = {
                     ModelSelector(
-                        selectedModel = apiConfig.modelName,
-                        onModelChange = { newModelName ->
-                            onApiConfigChange(apiConfig.copy(modelName = newModelName))
-                        }
+                        selectedModelName = apiConfig.name,
+                        apiConfigList = apiConfigList,
+                        onActiveConfigChange = onActiveConfigChange
                     )
                 },
                 navigationIcon = {
@@ -111,21 +92,18 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = {
-                        messages = listOf(
-                            Message(
-                                System.currentTimeMillis().toString(), 
-                                if (isEn) "Hello! I'm Loyea. How can I help you today?" else "你好！我是 Loyea。今天我能帮您做点什么？", 
-                                Sender.AI
+                    val hasUserSpoken = remember(messages) {
+                        messages.any { it.sender == Sender.USER }
+                    }
+                    if (hasUserSpoken) {
+                        IconButton(onClick = onNewChatClick) {
+                            Icon(
+                                imageVector = Icons.Default.EditNote,
+                                contentDescription = "New Chat",
+                                tint = MaterialTheme.colorScheme.onBackground,
+                                modifier = Modifier.size(28.dp)
                             )
-                        )
-                    }) {
-                        Icon(
-                            imageVector = Icons.Default.EditNote,
-                            contentDescription = "New Chat",
-                            tint = MaterialTheme.colorScheme.onBackground,
-                            modifier = Modifier.size(28.dp)
-                        )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
@@ -163,12 +141,13 @@ fun ChatScreen(
                             Toast.makeText(context, if (isEn) "Copied to clipboard" else "已复制到剪贴板", Toast.LENGTH_SHORT).show()
                         },
                         onToggleThoughts = {
-                            messages = messages.map { msg ->
+                            val updated = messages.map { msg ->
                                 if (msg.id == message.id) msg.copy(
                                     isThoughtsExpanded = !msg.isThoughtsExpanded,
                                     hasUserToggledThoughts = true
                                 ) else msg
                             }
+                            onMessagesChange(updated)
                         }
                     )
                 }
@@ -191,102 +170,57 @@ fun ChatScreen(
                 onSend = {
                     if (inputText.text.isNotBlank()) {
                         val userText = inputText.text
-                        messages = messages + Message(
+                        val userMsg = Message(
                             id = System.currentTimeMillis().toString(),
                             content = userText,
                             sender = Sender.USER
                         )
+                        var currentList = messages + userMsg
+                        onMessagesChange(currentList)
                         inputText = TextFieldValue("")
                         
-                        // 开启多阶段高仿真 AI 推理 + 工具调用流
                         scope.launch {
-                            // 阶段 1：显示全局闪烁点，代表大模型正在调度资源
                             isThinking = true
-                            delay(800)
-                            isThinking = false
-                            
+                            val startTime = System.currentTimeMillis()
                             val aiMessageId = (System.currentTimeMillis() + 1).toString()
                             
-                            // 阶段 2：插入一个工具调用 read_file (正在运行状态)
-                            val call1 = McpCall(
-                                id = "c1", 
-                                toolName = "read_file", 
-                                actionText = "mcp-server: read_file", 
-                                status = McpStatus.RUNNING,
-                                input = "file: app/build.gradle.kts"
-                            )
-                            val initialAiMsg = Message(
-                                id = aiMessageId,
-                                content = "",
-                                sender = Sender.AI,
-                                mcpCalls = listOf(call1)
-                            )
-                            messages = messages + initialAiMsg
-                            delay(1800) // 齿轮无限旋转动效维持 1.8 秒
-
-                            // 阶段 3：工具调用成功，并开启思维链进行深度思考 (Thinking)
-                            val call1Success = call1.copy(
-                                status = McpStatus.SUCCESS,
-                                output = "dependencies {\n    implementation(\"androidx.compose.material:material-icons-extended\")\n}"
-                            )
-                            val thoughtContent = "1. Found dependencies for icons-extended in build.gradle.kts.\n2. The compose framework configuration looks fully stable.\n3. The user wants to integrate MCP and Thinking visual elements.\n4. I should write a detailed explanation and a code snippet to demonstrate."
+                            // 调用真实远程大模型 API
+                            val response = llmClient.sendChatCompletion(apiConfig, currentList)
+                            isThinking = false
+                            val durationSeconds = ((System.currentTimeMillis() - startTime) / 1000).toInt()
                             
-                            messages = messages.map { msg ->
-                                if (msg.id == aiMessageId) msg.copy(
-                                    mcpCalls = listOf(call1Success),
-                                    thoughts = thoughtContent,
-                                    isStillThinking = true,
-                                    isThoughtsExpanded = true, // 默认展开思考链，让动画更动感
-                                    thoughtDurationSeconds = 1
-                                ) else msg
-                            }
-                            delay(1200) // 思考中维持 1.2 秒
-
-                            // 阶段 4：思考结束，耗时计数增加为 2s，并开启第二个工具 Web Search
-                            val call2 = McpCall(
-                                id = "c2",
-                                toolName = "web_search",
-                                actionText = "mcp-server: web_search",
-                                status = McpStatus.RUNNING,
-                                input = "query: Jetpack Compose AnimatedContent"
-                            )
-                            messages = messages.map { msg ->
-                                if (msg.id == aiMessageId) {
-                                    val shouldCollapse = !msg.hasUserToggledThoughts
-                                    msg.copy(
-                                        isStillThinking = false,
-                                        thoughtDurationSeconds = 2,
-                                        isThoughtsExpanded = if (shouldCollapse) false else msg.isThoughtsExpanded,
-                                        mcpCalls = listOf(call1Success, call2)
-                                    )
-                                } else msg
-                            }
-                            delay(1500) // 网页搜索等待 1.5 秒
-
-                            // 阶段 5：第二个工具执行成功，并开始流式打字输出正文
-                            val call2Success = call2.copy(
-                                status = McpStatus.SUCCESS,
-                                output = "Found 3 articles about Compose animations."
-                            )
-                            messages = messages.map { msg ->
-                                if (msg.id == aiMessageId) msg.copy(
-                                    mcpCalls = listOf(call1Success, call2Success)
-                                ) else msg
-                            }
-
-                            val fullResponse = if (isEn) {
-                                "Here is how you can use the MCP and Thinking UI components. The tools have executed successfully!\n\nCheck the thoughts box above to see my exact reasoning process. I used the `read_file` tool to inspect dependencies and `web_search` to verify documentation.\n\n```kotlin\n// The tools run smoothly!\nMcpStatus.SUCCESS -> \"Gear stops and green check displays\"\n```\nAll animations run dynamically!"
+                            if (response.isError) {
+                                val errMessage = Message(
+                                    id = aiMessageId,
+                                    content = response.content,
+                                    sender = Sender.AI,
+                                    isError = true
+                                )
+                                currentList = currentList + errMessage
+                                onMessagesChange(currentList)
                             } else {
-                                "这就是您可以使用 MCP 和 Thinking UI 组件的方法。工具已成功执行！\n\n检查上方的思考框以查看我确切的推理过程。我使用了 `read_file` 工具检查依赖，使用 `web_search` 验证了文档。\n\n```kotlin\n// 工具运行顺畅！\nMcpStatus.SUCCESS -> \"齿轮停止并显示绿色对勾\"\n```\n所有动画都在动态运行！"
-                            }
-                            
-                            var currentContent = ""
-                            fullResponse.forEach { char ->
-                                currentContent += char
-                                messages = messages.map { msg ->
-                                    if (msg.id == aiMessageId) msg.copy(content = currentContent) else msg
+                                val aiMessage = Message(
+                                    id = aiMessageId,
+                                    content = "",
+                                    sender = Sender.AI,
+                                    thoughts = response.thoughts,
+                                    isThoughtsExpanded = response.thoughts != null,
+                                    thoughtDurationSeconds = durationSeconds,
+                                    isStillThinking = false
+                                )
+                                currentList = currentList + aiMessage
+                                onMessagesChange(currentList)
+                                
+                                // 启动打字机效果，逐字渲染正文
+                                var currentContent = ""
+                                response.content.forEach { char ->
+                                    currentContent += char
+                                    currentList = currentList.map { msg ->
+                                        if (msg.id == aiMessageId) msg.copy(content = currentContent) else msg
+                                    }
+                                    onMessagesChange(currentList)
+                                    delay(12)
                                 }
-                                delay(12) // 逐字输出打字速度优化
                             }
                         }
                     }
@@ -302,25 +236,13 @@ fun ChatScreen(
 // 1:1 复刻 Claude 顶部模型选择胶囊
 @Composable
 fun ModelSelector(
-    selectedModel: String,
-    onModelChange: (String) -> Unit
+    selectedModelName: String,
+    apiConfigList: List<com.loyea.ui.settings.ApiConfig>,
+    onActiveConfigChange: (String) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val models = remember(selectedModel) {
-        val defaults = listOf(
-            "claude-3-5-sonnet", 
-            "gpt-4o", 
-            "deepseek-chat", 
-            "moonshot-v1-8k", 
-            "qwen-turbo", 
-            "abab6.5-chat", 
-            "mimo-v1"
-        )
-        if (selectedModel in defaults) {
-            defaults
-        } else {
-            listOf(selectedModel) + defaults.filter { it != selectedModel }
-        }
+    val enabledConfigs = remember(apiConfigList) {
+        apiConfigList.filter { it.isEnabled }
     }
 
     Box(
@@ -329,15 +251,15 @@ fun ModelSelector(
         Row(
             modifier = Modifier
                 .clip(RoundedCornerShape(20.dp))
-                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp))
+                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), RoundedCornerShape(20.dp))
                 .background(MaterialTheme.colorScheme.surface)
-                .clickable { expanded = true }
+                .clickable { if (enabledConfigs.size > 1) expanded = true }
                 .padding(horizontal = 14.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center
         ) {
             Text(
-                text = selectedModel,
+                text = selectedModelName.ifBlank { "无可用模型" },
                 style = TextStyle(
                     fontFamily = FontFamily.Default,
                     fontWeight = FontWeight.SemiBold,
@@ -345,28 +267,32 @@ fun ModelSelector(
                 ),
                 color = MaterialTheme.colorScheme.onBackground
             )
-            Spacer(modifier = Modifier.width(4.dp))
-            Icon(
-                imageVector = Icons.Default.ArrowDropDown,
-                contentDescription = "Select Model",
-                tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
-                modifier = Modifier.size(16.dp)
-            )
+            if (enabledConfigs.size > 1) {
+                Spacer(modifier = Modifier.width(4.dp))
+                Icon(
+                    imageVector = Icons.Default.ArrowDropDown,
+                    contentDescription = "Select Model",
+                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                    modifier = Modifier.size(16.dp)
+                )
+            }
         }
 
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            modifier = Modifier.background(MaterialTheme.colorScheme.surface)
-        ) {
-            models.forEach { model ->
-                DropdownMenuItem(
-                    text = { Text(model, color = MaterialTheme.colorScheme.onBackground) },
-                    onClick = {
-                        onModelChange(model)
-                        expanded = false
-                    }
-                )
+        if (enabledConfigs.size > 1) {
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                modifier = Modifier.background(MaterialTheme.colorScheme.surface)
+            ) {
+                enabledConfigs.forEach { config ->
+                    DropdownMenuItem(
+                        text = { Text(config.name, color = MaterialTheme.colorScheme.onBackground) },
+                        onClick = {
+                            onActiveConfigChange(config.id)
+                            expanded = false
+                        }
+                    )
+                }
             }
         }
     }
@@ -448,6 +374,40 @@ fun MessageItem(
                     style = MaterialTheme.typography.bodyLarge,
                     color = bubbleTextColor
                 )
+            }
+        } else if (message.isError) {
+            // 错误气泡：柔和淡红背景，警告深红文字，类似警告通知卡片
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.85f)
+                    .clip(
+                        RoundedCornerShape(
+                            topStart = 16.dp,
+                            topEnd = 16.dp,
+                            bottomStart = 4.dp,
+                            bottomEnd = 16.dp
+                        )
+                    )
+                    .background(Color(0xFFFDE8E8)) // 柔和浅红背景
+                    .border(1.dp, Color(0xFFF8B4B4), RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp))
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Error,
+                        contentDescription = "Error",
+                        tint = Color(0xFFE02424),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = message.content.replace("[错误]", "").trim(),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = Color(0xFFE02424) // 警告深红文字
+                    )
+                }
             }
         } else {
             // AI 气泡：无背景，纯文本，左侧缩进排版，支持 MCP & Thinking 展开
@@ -700,9 +660,13 @@ fun ChatScreenPreview() {
     LoyeaTheme {
         ChatScreen(
             apiConfig = ApiConfig(),
+            apiConfigList = listOf(ApiConfig()),
+            onActiveConfigChange = {},
             appLanguage = "zh",
             userBubbleColor = "",
-            onApiConfigChange = {},
+            messages = emptyList(),
+            onMessagesChange = {},
+            onNewChatClick = {},
             onMenuClick = {}
         )
     }

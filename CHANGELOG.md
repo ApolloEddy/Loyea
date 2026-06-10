@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-06-10
 
+### Added
+- **Gson 序列化依赖**：在 `app/build.gradle.kts` 中引入了 `com.google.code.gson:gson:2.10.1` 依赖，以支持聊天数据本地持久化。
+- **本地会话及消息存储管理器 (ChatStorageManager)**：全新创建了 `ChatStorageManager.kt`，利用 Android 应用私有目录（`context.filesDir`）以 JSON 格式存储会话列表元数据 (`sessions_metadata.json`) 以及各独立会话的消息历史 (`session_{id}.json`)。
+- **多会话隔离与动态切换**：在 `MainActivity` 层级重构成单数据源管理机制，在切换会话时精确动态读取并显示对应历史，彻底隔绝不同会话间的数据。在全部删除会话后能自动生成新的默认会话，提供了高容错边界逻辑。
+- **首条用户消息自动生成会话标题**：新创建的会话当发送第一条用户消息时，系统会自动提取该消息的前 15 个字作为该会话的标题并同步持久化到本地，优化了标题生成体验。
+- **侧边栏行内快捷删除会话**：在侧边栏 (`SidebarContent`) 的历史会话项中增加了删除按钮，点击即可直接删除该会话及其对应的本地 JSON 文件，并自动重新对准可用会话，提高了会话生命周期管理能力。
+- **侧边栏历史会话时间动态分组**：基于会话的最后活动时间（`lastActiveTime`），实现了“今天”、“昨天”、“前 7 天”、“更早”的智能动态分类渲染。
+- **网络错误消息字段**：在 `Message.kt` 中为 `Message` 实体类新增了 `isError: Boolean` 属性（默认值为 `false`），以精确感知和存储对话过程中的连接及配置错误。
+
 ### Removed
 - **升级 Pro 广告移出**：从侧边栏（`SidebarContent`）中彻底移除了黄金质感的 "Upgrade to Claude Pro" 广告卡片，移除了对应的 `onUpgradeClick` 事件参数及 Toast 提示逻辑，净化了侧边栏的界面视觉，提升用户体验。
 
@@ -11,6 +20,8 @@ All notable changes to this project will be documented in this file.
 - **全面重命名替换为 Loyea 项目名**：
   - 将所有用户 UI 界面中对 "Claude" 助理和应用的提及全面替换为 "Loyea"，包括 Chat 界面的默认欢迎语、新建会话初始语、输入框占位符（"Talk to Loyea"/"与 Loyea 对话"）、配置页的主题风格描述（"Loyea Warm Amber"）。
   - 将内部代码逻辑（类名、变量名、字体定义名）中的 `Claude` 前缀全面重命名为 `Loyea`（如 `ClaudeTheme` 更改为 `LoyeaTheme`，`ClaudeTypography` 更改为 `LoyeaTypography`，以及 `ClaudeLightBg`、`ClaudeDarkBg` 等系列颜色配置重命名为 `LoyeaLightBg`、`LoyeaDarkBg` 等）。
+- **真实大模型网络通信挂载**：在 `ChatScreen.kt` 的 `onSend` 发送消息逻辑中，移除写死的 MCP 多阶段仿真动画，挂接真实的 `LlmClient.sendChatCompletion(...)` 异步请求。现在，在等待期间正常展现全局加载闪烁指示器，接收响应后计算精确的 API 思考时间并赋给 `thoughtDurationSeconds`，然后通过打字机逐字输出。
+- **自定义警告错误气泡渲染**：重构了 `MessageItem` 针对 AI 消息的处理逻辑。当消息状态为 `isError = true` 时，AI 回答将不采用通用 Markdown + 动作条排版，而是直接渲染为具有圆角淡红背景（`Color(0xFFFDE8E8)`）、淡红细线边框（`Color(0xFFF8B4B4)`）、警告深红文本（`Color(0xFFE02424)`）和 `Icons.Default.Error` 图标指示的警告卡片，同时剥离了无意义的动作条（复制、发音等），提升交互质量与体验。
 
 ### Fixed
 - **欢迎界面导入与引用修复**：修复了 [WelcomeScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/welcome/WelcomeScreen.kt) 仍在使用已废弃的 `ClaudeTheme` 导入及包装问题，已将其升级替换为最新的 `LoyeaTheme`；同时同步修改了欢迎界面（WelcomeScreen）内部大标题文本、欢迎小标语及底部服务条款中的 "Claude" / "Anthropic" 品牌提及，确保启动欢迎页的品牌一致性。
@@ -18,6 +29,17 @@ All notable changes to this project will be documented in this file.
 - **用户气泡配色绑定修复**：修复了 `ChatScreen.kt` 中渲染用户消息气泡背景色时，因硬编码修饰符背景参数导致自定义底色及文字自适应不生效的 Bug。
 - **主界面导入异常修复**：修复了 `MainScreen.kt` 中因缺少 Compose 运行时 `remember` 依赖导入导致的 `Unresolved reference: remember` 编译报错。
 - **输入框语言引用异常修复**：修复了 `ChatScreen.kt` 中因 `ChatInputBar` Composable 函数缺少 `appLanguage` 签名而直接使用 `isEn` 造成的 `Unresolved reference` 编译报错。
+- **ChatScreen 预览参数同步修复**：修复了 `ChatScreenPreview` 中由于未传入 `apiConfigList` 且使用了废弃的 `onApiConfigChange` 回调所导致的编译错误。
+- **Gson 全局包名及引用修复**：修复了 `MainActivity.kt`、`ChatStorageManager.kt` 与 `LlmClient.kt` 中因将 `com.google.gson` 错误引用为 `com.google.code.gson` 导致的大面积 unresolved reference 编译报错。
+- **协程 launch 导入缺失及作用域冗余修复**：在 `MainActivity.kt` 中导入了缺失的 `kotlinx.coroutines.launch` 库以支持异步请求任务，并消除了 `setContent` 作用域内多余的 `val scope` 同名声明，解决了声明冲突编译错。
+- **泛型类型推导修复**：在 `MainActivity.kt` 的 `initialConfigs` 的 remember 表达式中显式指定了 `<List<ApiConfig>>` 泛型，消除了类型推导不足的报错。
+- **ModelSelector 参数不匹配修复**：重构了 `ChatScreen.kt` 内的 `ModelSelector` 顶层胶囊参数及逻辑体，使之接收 `selectedModelName`、`apiConfigList`、`onActiveConfigChange` 并根据用户配置的连接别名进行下拉列表渲染，解决了在 `ChatScreen` 中调用不匹配的报错。
+- **SettingsScreen 重复代码及列表导入修复**：删除了 `SettingsScreen.kt` 尾部不慎重复合并的大段多余代码（消除了 `ThemeSettingsLayout` 和 `SettingsScreenPreview` 重复定义报错），并补齐了 `LazyColumn` 和 `items` 导入包，扫清了设置界面全部编译报错。
+- **侧边栏物理时间防抖及全屏透明拦截屏障优化**：在 `MainScreen.kt` 中除了在 `onMenuClick` 引入 800ms 点击防抖外，还在最外层设计了全屏无感透明拦截层（PointerInput Barrier）。该层仅在侧边栏滑出动画运行期间（`isAnimationRunning && targetValue == Open`）显形并消费所有的屏幕点击，彻底隔绝了连击时后续点击落入刚显影的 Scrim 遮罩上而自动触发 `close()` 缩回的原生缺陷，彻底实现了连击不丢失、侧栏完美滑出的绝佳体验。
+- **用户名设置页回显与编辑状态切换修复**：修复了 `SettingsScreen.kt` 内的 `InlineEditNameField` 中 Viewer（`Text` 与 `Icon`）分支被错误嵌套进 `isEditing` 判断中的嵌套 bug，使其能够正确作为 `else` 分支进行渲染，彻底解决了已保存的用户名在设置页展示空白的缺陷。
+- **新空白会话重复创建限制**：在 `ChatScreen.kt` 的右上角操作区中增加了用户是否发言过 (`hasUserSpoken`) 的条件判定。只有当前会话中包含用户发送的消息时，才会显示“新建会话”按钮；新创建会话下默认对该按钮进行隐藏，彻底防止了频繁连击造成重复生成一堆空白会话的交互痛点，也使新用户初始界面更加聚焦清爽。
+- **侧边栏收回期间的反复误触拦截**：优化了 `MainScreen.kt` 的透明拦截屏障判定。将全屏拦截的显示条件由 `drawerState.isAnimationRunning && targetValue == Open` 改为在整个 `drawerState.isAnimationRunning`（滑出与缩回动画期间）下通用生效。这彻底阻断了用户在点击 Scrim 收回抽屉动画期间连续点击外部导致动画反复中断、倒退和状态震荡的原生 bug。
+- **会话行内快捷删除确认二次弹窗**：在 `MainScreen.kt` 内的 `SidebarContent` 的会话项删除逻辑中设计了二次确认 `AlertDialog`。点击删除图标时弹出具备 Loyea 精致大圆角、中英文多语言自适应及红字强警示的确认卡片，点击确认方可删除，极大提高了对话销毁的容错防误触能力。
 
 ### Added
 - **多语言（中英文）自适应与参数打通**：全新引入应用语言首选项（支持中文与英文一键动态无缝切换），从 `MainActivity` 读写 SharedPreferences 动态感知，并在 `MainScreen`、`ChatScreen` 问候语/提示语/输入栏及 `SettingsScreen` 全方位绑定，打通了多语言全局响应式更新通路。

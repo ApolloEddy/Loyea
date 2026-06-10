@@ -32,5 +32,6 @@ data class Message(
     val hasUserToggledThoughts: Boolean = false, // 标记用户是否手动干预过思考链折叠
     val thoughtDurationSeconds: Int = 0,
     val mcpCalls: List<McpCall> = emptyList(),
-    val isStillThinking: Boolean = false
+    val isStillThinking: Boolean = false,
+    val isError: Boolean = false
 )

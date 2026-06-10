@@ -7,6 +7,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -51,10 +53,13 @@ enum class SettingsSubPage {
 
 // API 配置数据模型
 data class ApiConfig(
+    val id: String = System.currentTimeMillis().toString(),
+    val name: String = "Default",
     val provider: String = "Anthropic",
     val apiUrl: String = "https://api.anthropic.com",
     val apiKey: String = "",
-    val modelName: String = "claude-3-5-sonnet"
+    val modelName: String = "claude-3-5-sonnet",
+    val isEnabled: Boolean = true
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -64,8 +69,10 @@ fun SettingsScreen(
     onThemeChange: (ThemeMode) -> Unit,
     userName: String,
     onUserNameSave: (String) -> Unit,
-    apiConfig: ApiConfig,
-    onApiConfigSave: (ApiConfig) -> Unit,
+    apiConfigList: List<ApiConfig>,
+    activeConfigId: String,
+    onApiConfigListSave: (List<ApiConfig>) -> Unit,
+    onActiveConfigSelect: (String) -> Unit,
     appLanguage: String,
     onAppLanguageChange: (String) -> Unit,
     userBubbleColor: String,
@@ -96,7 +103,8 @@ fun SettingsScreen(
                     currentTheme = currentTheme,
                     userName = userName,
                     onUserNameSave = onUserNameSave,
-                    apiConfig = apiConfig,
+                    apiConfigList = apiConfigList,
+                    activeConfigId = activeConfigId,
                     appLanguage = appLanguage,
                     userBubbleColor = userBubbleColor,
                     onNavigateToApi = { subPage = SettingsSubPage.API_CONFIG },
@@ -106,9 +114,11 @@ fun SettingsScreen(
             }
             SettingsSubPage.API_CONFIG -> {
                 ApiConfigLayout(
-                    apiConfig = apiConfig,
+                    apiConfigList = apiConfigList,
+                    activeConfigId = activeConfigId,
                     appLanguage = appLanguage,
-                    onApiConfigSave = onApiConfigSave,
+                    onApiConfigListSave = onApiConfigListSave,
+                    onActiveConfigSelect = onActiveConfigSelect,
                     onBackClick = { subPage = SettingsSubPage.MAIN }
                 )
             }
@@ -134,7 +144,8 @@ fun SettingsMainLayout(
     currentTheme: ThemeMode,
     userName: String,
     onUserNameSave: (String) -> Unit,
-    apiConfig: ApiConfig,
+    apiConfigList: List<ApiConfig>,
+    activeConfigId: String,
     appLanguage: String,
     userBubbleColor: String,
     onNavigateToApi: () -> Unit,
@@ -142,6 +153,10 @@ fun SettingsMainLayout(
     onBackClick: () -> Unit
 ) {
     val isEn = appLanguage == "en"
+    val activeConfig = remember(apiConfigList, activeConfigId) {
+        apiConfigList.find { it.id == activeConfigId }
+    }
+    val activeName = activeConfig?.name ?: (if (isEn) "None Selected" else "未选择")
 
     Scaffold(
         topBar = {
@@ -247,12 +262,12 @@ fun SettingsMainLayout(
                         Spacer(modifier = Modifier.width(12.dp))
                         Column {
                             Text(
-                                text = if (isEn) "API & Model Connections" else "API 与模型连接",
+                                text = if (isEn) "API & Model Connections" else "API 与模型连接管理",
                                 fontSize = 15.sp,
                                 color = MaterialTheme.colorScheme.onBackground
                             )
                             Text(
-                                text = "${if (isEn) "Provider" else "提供商"}: ${apiConfig.provider} (${apiConfig.modelName})",
+                                text = if (isEn) "Active: $activeName (${apiConfigList.size} configured)" else "正在使用：$activeName (已保存 ${apiConfigList.size} 个模型)",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
                             )
@@ -403,50 +418,27 @@ fun InlineEditNameField(
     }
 }
 
-// =================== 二级 API 配置页布局 ===================
+// =================== 二级 API 配置页布局 (多连接管理) ===================
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ApiConfigLayout(
-    apiConfig: ApiConfig,
+    apiConfigList: List<ApiConfig>,
+    activeConfigId: String,
     appLanguage: String,
-    onApiConfigSave: (ApiConfig) -> Unit,
+    onApiConfigListSave: (List<ApiConfig>) -> Unit,
+    onActiveConfigSelect: (String) -> Unit,
     onBackClick: () -> Unit
 ) {
     val context = LocalContext.current
     val isEn = appLanguage == "en"
 
-    var selectedProvider by remember(apiConfig.provider) { mutableStateOf(apiConfig.provider) }
-    var apiUrlInput by remember(apiConfig.apiUrl) { mutableStateOf(apiConfig.apiUrl) }
-    var apiKeyInput by remember(apiConfig.apiKey) { mutableStateOf(apiConfig.apiKey) }
-    var modelInput by remember(apiConfig.modelName) { mutableStateOf(apiConfig.modelName) }
-    
-    var showApiKey by remember { mutableStateOf(false) }
-    var providerDropdownExpanded by remember { mutableStateOf(false) }
-
-    // 扩展大模型商，新增 MiMo, Kimi, 千问, MiniMax
-    val providersList = listOf(
-        "Anthropic", "OpenAI", "DeepSeek", 
-        "Kimi (Moonshot)", "Qwen (千问)", "MiniMax", "MiMo", "Custom"
-    )
-
-    // 动态推荐模型快捷键
-    val recommendedModels = remember(selectedProvider) {
-        when (selectedProvider) {
-            "Anthropic" -> listOf("claude-3-5-sonnet", "claude-3-haiku", "claude-3-opus")
-            "OpenAI" -> listOf("gpt-4o", "gpt-4o-mini", "o1-mini")
-            "DeepSeek" -> listOf("deepseek-chat", "deepseek-coder")
-            "Kimi (Moonshot)" -> listOf("moonshot-v1-8k", "moonshot-v1-32k")
-            "Qwen (千问)" -> listOf("qwen-turbo", "qwen-plus", "qwen-max")
-            "MiniMax" -> listOf("abab6.5g-chat", "abab6.5t-chat", "abab6.5-chat")
-            "MiMo" -> listOf("mimo-v1", "mimo-lite")
-            else -> emptyList()
-        }
-    }
+    var showSheet by remember { mutableStateOf(false) }
+    var editingConfig by remember { mutableStateOf<ApiConfig?>(null) }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("API & Model Connection", fontSize = 18.sp, fontWeight = FontWeight.Bold) },
+                title = { Text(if (isEn) "Models & API Manager" else "模型与 API 连接管理", fontSize = 18.sp, fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
                         Icon(
@@ -456,244 +448,514 @@ fun ApiConfigLayout(
                         )
                     }
                 },
+                actions = {
+                    IconButton(onClick = {
+                        editingConfig = null
+                        showSheet = true
+                    }) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "Add Connection",
+                            tint = MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
             )
         },
         containerColor = MaterialTheme.colorScheme.background
     ) { paddingValues ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Column(
+            LazyColumn(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.surface)
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // 服务商选择
-                Column {
-                    Text(
-                        text = "API PROVIDER",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
-                        modifier = Modifier.padding(bottom = 6.dp)
-                    )
-                    
-                    Box(modifier = Modifier.fillMaxWidth()) {
-                        Row(
+                if (apiConfigList.isEmpty()) {
+                    item {
+                        Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(6.dp))
-                                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(6.dp))
-                                .clickable { providerDropdownExpanded = true }
-                                .padding(horizontal = 14.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                                .padding(vertical = 60.dp),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Text(text = selectedProvider, fontSize = 15.sp, color = MaterialTheme.colorScheme.onBackground)
-                            Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
-                        }
-
-                        DropdownMenu(
-                            expanded = providerDropdownExpanded,
-                            onDismissRequest = { providerDropdownExpanded = false },
-                            modifier = Modifier.fillMaxWidth(0.85f).background(MaterialTheme.colorScheme.surface)
-                        ) {
-                            providersList.forEach { provider ->
-                                DropdownMenuItem(
-                                    text = { Text(provider, color = MaterialTheme.colorScheme.onBackground) },
-                                    onClick = {
-                                        selectedProvider = provider
-                                        providerDropdownExpanded = false
-                                        // 各大运营商预设参数智能配置
-                                        when (provider) {
-                                            "Anthropic" -> {
-                                                apiUrlInput = "https://api.anthropic.com"
-                                                modelInput = "claude-3-5-sonnet"
-                                            }
-                                            "OpenAI" -> {
-                                                apiUrlInput = "https://api.openai.com/v1"
-                                                modelInput = "gpt-4o"
-                                            }
-                                            "DeepSeek" -> {
-                                                apiUrlInput = "https://api.deepseek.com/v1"
-                                                modelInput = "deepseek-chat"
-                                            }
-                                            "Kimi (Moonshot)" -> {
-                                                apiUrlInput = "https://api.moonshot.cn/v1"
-                                                modelInput = "moonshot-v1-8k"
-                                            }
-                                            "Qwen (千问)" -> {
-                                                apiUrlInput = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-                                                modelInput = "qwen-turbo"
-                                            }
-                                            "MiniMax" -> {
-                                                apiUrlInput = "https://api.minimax.chat/v1"
-                                                modelInput = "abab6.5-chat"
-                                            }
-                                            "MiMo" -> {
-                                                apiUrlInput = "https://api.mimo.com/v1"
-                                                modelInput = "mimo-v1"
-                                            }
-                                            "Custom" -> {
-                                                apiUrlInput = ""
-                                                modelInput = ""
-                                            }
-                                        }
-                                    }
-                                )
-                            }
+                            Text(
+                                text = if (isEn) "No API connections saved.\nClick '+' on top right to add." else "暂无 API 账号连接，\n请点击右上角 '+' 按钮添加。",
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                                fontSize = 14.sp,
+                                modifier = Modifier.padding(16.dp)
+                            )
                         }
                     }
-                }
-
-                // API Base URL
-                Column {
-                    Text(
-                        text = "API BASE URL",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
-                        modifier = Modifier.padding(bottom = 6.dp)
-                    )
-                    OutlinedTextField(
-                        value = apiUrlInput,
-                        onValueChange = { apiUrlInput = it },
-                        placeholder = { Text("e.g. https://api.anthropic.com") },
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-
-                // API Key
-                Column {
-                    Text(
-                        text = "API KEY",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
-                        modifier = Modifier.padding(bottom = 6.dp)
-                    )
-                    OutlinedTextField(
-                        value = apiKeyInput,
-                        onValueChange = { apiKeyInput = it },
-                        placeholder = { Text("sk-...") },
-                        singleLine = true,
-                        visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        trailingIcon = {
-                            IconButton(onClick = { showApiKey = !showApiKey }) {
-                                Icon(
-                                    imageVector = if (showApiKey) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                } else {
+                    items(apiConfigList) { config ->
+                        val isActive = config.id == activeConfigId
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .border(
+                                    1.dp,
+                                    if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.8f),
+                                    RoundedCornerShape(12.dp)
                                 )
-                            }
-                        },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-
-                // Model Name
-                Column {
-                    Text(
-                        text = "MODEL NAME",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
-                        modifier = Modifier.padding(bottom = 6.dp)
-                    )
-                    OutlinedTextField(
-                        value = modelInput,
-                        onValueChange = { modelInput = it },
-                        placeholder = { Text("e.g. claude-3-5-sonnet") },
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    
-                    if (recommendedModels.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier.fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surface)
+                                .clickable { 
+                                    onActiveConfigSelect(config.id)
+                                    Toast.makeText(context, if (isEn) "Activated: ${config.name}" else "已激活连接：${config.name}", Toast.LENGTH_SHORT).show()
+                                }
+                                .padding(16.dp)
                         ) {
-                            recommendedModels.forEach { model ->
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(
-                                            if (modelInput == model) 
-                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-                                            else 
-                                                MaterialTheme.colorScheme.onBackground.copy(alpha = 0.05f)
-                                        )
-                                        .border(
-                                            1.dp,
-                                            if (modelInput == model) MaterialTheme.colorScheme.primary else Color.Transparent,
-                                            RoundedCornerShape(12.dp)
-                                        )
-                                        .clickable { modelInput = model }
-                                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
                                 ) {
+                                    if (isActive) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .clip(CircleShape)
+                                                .background(MaterialTheme.colorScheme.primary)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                    }
                                     Text(
-                                        text = model,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = if (modelInput == model) 
-                                            MaterialTheme.colorScheme.primary 
-                                        else 
-                                            MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                                        text = config.name,
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onBackground
                                     )
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    IconButton(
+                                        onClick = {
+                                            editingConfig = config
+                                            showSheet = true
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Edit,
+                                            contentDescription = "Edit",
+                                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            val updated = apiConfigList.filter { it.id != config.id }
+                                            onApiConfigListSave(updated)
+                                            if (isActive && updated.isNotEmpty()) {
+                                                onActiveConfigSelect(updated.first().id)
+                                            }
+                                            Toast.makeText(context, if (isEn) "Deleted" else "已删除连接", Toast.LENGTH_SHORT).show()
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = "Delete",
+                                            tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            }
+                            
+                            Spacer(modifier = Modifier.height(6.dp))
+                            
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                BadgeLabel(text = config.provider)
+                                BadgeLabel(text = config.modelName)
+                                if (config.apiKey.isNotBlank()) {
+                                    BadgeLabel(text = "Key: ****" + config.apiKey.takeLast(4))
                                 }
                             }
                         }
                     }
                 }
+            }
 
-                // Save Connection Settings Button
-                Button(
-                    onClick = {
-                        val newConfig = ApiConfig(
-                            provider = selectedProvider,
-                            apiUrl = apiUrlInput,
-                            apiKey = apiKeyInput,
-                            modelName = modelInput
-                        )
-                        onApiConfigSave(newConfig)
-                        Toast.makeText(context, if (isEn) "API Configuration Saved" else "API 接口配置保存成功", Toast.LENGTH_SHORT).show()
+            // =================== 自定义 Claude 风格 BottomSheet / 抽屉遮罩 ===================
+            AnimatedVisibility(
+                visible = showSheet,
+                enter = fadeIn(),
+                exit = fadeOut()
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.4f))
+                        .clickable { showSheet = false }
+                )
+            }
+
+            AnimatedVisibility(
+                visible = showSheet,
+                enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+                modifier = Modifier.align(Alignment.BottomCenter)
+            ) {
+                AddOrEditSheet(
+                    editingConfig = editingConfig,
+                    appLanguage = appLanguage,
+                    onSave = { newOrUpdated ->
+                        val updatedList = if (editingConfig == null) {
+                            apiConfigList + newOrUpdated
+                        } else {
+                            apiConfigList.map { if (it.id == newOrUpdated.id) newOrUpdated else it }
+                        }
+                        onApiConfigListSave(updatedList)
+                        if (editingConfig == null) {
+                            onActiveConfigSelect(newOrUpdated.id)
+                        }
+                        showSheet = false
                     },
-                    shape = RoundedCornerShape(24.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                    onDismiss = { showSheet = false }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun BadgeLabel(text: String) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.05f))
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+    ) {
+        Text(
+            text = text,
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AddOrEditSheet(
+    editingConfig: ApiConfig?,
+    appLanguage: String,
+    onSave: (ApiConfig) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val isEn = appLanguage == "en"
+
+    var nameInput by remember { mutableStateOf(editingConfig?.name ?: "") }
+    var selectedProvider by remember { mutableStateOf(editingConfig?.provider ?: "Anthropic") }
+    var apiUrlInput by remember { mutableStateOf(editingConfig?.apiUrl ?: "https://api.anthropic.com") }
+    var apiKeyInput by remember { mutableStateOf(editingConfig?.apiKey ?: "") }
+    var modelInput by remember { mutableStateOf(editingConfig?.modelName ?: "claude-3-5-sonnet") }
+
+    var showApiKey by remember { mutableStateOf(false) }
+    var providerDropdownExpanded by remember { mutableStateOf(false) }
+
+    val providersList = listOf(
+        "Anthropic", "OpenAI", "DeepSeek", 
+        "Kimi (Moonshot)", "Qwen (千问)", "MiniMax", "MiMo", "Custom"
+    )
+
+    val recommendedModels = remember(selectedProvider) {
+        when (selectedProvider) {
+            "Anthropic" -> listOf("claude-3-5-sonnet", "claude-3-haiku")
+            "OpenAI" -> listOf("gpt-4o", "gpt-4o-mini")
+            "DeepSeek" -> listOf("deepseek-chat", "deepseek-coder")
+            "Kimi (Moonshot)" -> listOf("moonshot-v1-8k")
+            "Qwen (千问)" -> listOf("qwen-turbo", "qwen-max")
+            "MiniMax" -> listOf("abab6.5-chat")
+            "MiMo" -> listOf("mimo-v1")
+            else -> emptyList()
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+            .padding(20.dp)
+            .imePadding()
+            .navigationBarsPadding(),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterHorizontally)
+                .size(width = 36.dp, height = 4.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.15f))
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = if (editingConfig == null) {
+                    if (isEn) "Add Model Connection" else "添加模型连接"
+                } else {
+                    if (isEn) "Edit Model Connection" else "编辑模型连接"
+                },
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            IconButton(onClick = onDismiss) {
+                Icon(imageVector = Icons.Default.Close, contentDescription = "Close", tint = MaterialTheme.colorScheme.onBackground)
+            }
+        }
+
+        Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+
+        Column {
+            Text(
+                text = if (isEn) "CONNECTION ALIAS" else "连接别名 (例如 Deepseek V4 Pro)",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+            OutlinedTextField(
+                value = nameInput,
+                onValueChange = { nameInput = it },
+                singleLine = true,
+                placeholder = { Text("e.g. Deepseek Pro", color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f)) },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                ),
+                textStyle = TextStyle(color = MaterialTheme.colorScheme.onBackground),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        Column {
+            Text(
+                text = "API PROVIDER",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+            Box(modifier = Modifier.fillMaxWidth()) {
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(48.dp)
-                        .padding(top = 8.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(6.dp))
+                        .clickable { providerDropdownExpanded = true }
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Icon(imageVector = Icons.Default.CloudQueue, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(if (isEn) "Save Connection Settings" else "保存连接配置", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Text(text = selectedProvider, fontSize = 15.sp, color = MaterialTheme.colorScheme.onBackground)
+                    Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, tint = MaterialTheme.colorScheme.onBackground)
+                }
+
+                DropdownMenu(
+                    expanded = providerDropdownExpanded,
+                    onDismissRequest = { providerDropdownExpanded = false },
+                    modifier = Modifier.fillMaxWidth(0.9f).background(MaterialTheme.colorScheme.surface)
+                ) {
+                    providersList.forEach { provider ->
+                        DropdownMenuItem(
+                            text = { Text(provider, color = MaterialTheme.colorScheme.onBackground) },
+                            onClick = {
+                                selectedProvider = provider
+                                providerDropdownExpanded = false
+                                when (provider) {
+                                    "Anthropic" -> {
+                                        apiUrlInput = "https://api.anthropic.com"
+                                        modelInput = "claude-3-5-sonnet"
+                                    }
+                                    "OpenAI" -> {
+                                        apiUrlInput = "https://api.openai.com/v1"
+                                        modelInput = "gpt-4o"
+                                    }
+                                    "DeepSeek" -> {
+                                        apiUrlInput = "https://api.deepseek.com/v1"
+                                        modelInput = "deepseek-chat"
+                                    }
+                                    "Kimi (Moonshot)" -> {
+                                        apiUrlInput = "https://api.moonshot.cn/v1"
+                                        modelInput = "moonshot-v1-8k"
+                                    }
+                                    "Qwen (千问)" -> {
+                                        apiUrlInput = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+                                        modelInput = "qwen-turbo"
+                                    }
+                                    "MiniMax" -> {
+                                        apiUrlInput = "https://api.minimax.chat/v1"
+                                        modelInput = "abab6.5-chat"
+                                    }
+                                    "MiMo" -> {
+                                        apiUrlInput = "https://api.mimo.com/v1"
+                                        modelInput = "mimo-v1"
+                                    }
+                                    "Custom" -> {
+                                        apiUrlInput = ""
+                                        modelInput = ""
+                                    }
+                                }
+                            }
+                        )
+                    }
                 }
             }
+        }
+
+        Column {
+            Text(
+                text = "API BASE URL",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+            OutlinedTextField(
+                value = apiUrlInput,
+                onValueChange = { apiUrlInput = it },
+                singleLine = true,
+                placeholder = { Text("e.g. https://api.deepseek.com/v1", color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f)) },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                ),
+                textStyle = TextStyle(color = MaterialTheme.colorScheme.onBackground),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        Column {
+            Text(
+                text = "API KEY",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+            OutlinedTextField(
+                value = apiKeyInput,
+                onValueChange = { apiKeyInput = it },
+                singleLine = true,
+                placeholder = { Text("sk-...", color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f)) },
+                visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = {
+                    IconButton(onClick = { showApiKey = !showApiKey }) {
+                        Icon(
+                            imageVector = if (showApiKey) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                        )
+                    }
+                },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                ),
+                textStyle = TextStyle(color = MaterialTheme.colorScheme.onBackground),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        Column {
+            Text(
+                text = "MODEL NAME",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+            OutlinedTextField(
+                value = modelInput,
+                onValueChange = { modelInput = it },
+                singleLine = true,
+                placeholder = { Text("e.g. deepseek-chat", color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f)) },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                ),
+                textStyle = TextStyle(color = MaterialTheme.colorScheme.onBackground),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            if (recommendedModels.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    recommendedModels.forEach { model ->
+                        val isSelected = modelInput == model
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.05f)
+                                )
+                                .border(
+                                    1.dp,
+                                    if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                    RoundedCornerShape(12.dp)
+                                )
+                                .clickable { modelInput = model }
+                                .padding(horizontal = 10.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = model,
+                                fontSize = 11.sp,
+                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        Button(
+            onClick = {
+                val finalName = if (nameInput.isBlank()) "${selectedProvider} Model" else nameInput
+                val newConfig = ApiConfig(
+                    id = editingConfig?.id ?: System.currentTimeMillis().toString(),
+                    name = finalName,
+                    provider = selectedProvider,
+                    apiUrl = apiUrlInput,
+                    apiKey = apiKeyInput,
+                    modelName = modelInput,
+                    isEnabled = true
+                )
+                onSave(newConfig)
+            },
+            shape = RoundedCornerShape(24.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .padding(top = 10.dp)
+        ) {
+            Icon(imageVector = Icons.Default.Save, contentDescription = null, tint = Color.White)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(if (isEn) "Save Connection" else "保存连接设置", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
         }
     }
 }
@@ -828,7 +1090,6 @@ fun ThemeSettingsLayout(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                // 预览小彩圆
                                 Box(
                                     modifier = Modifier
                                         .size(16.dp)
@@ -928,7 +1189,6 @@ fun ThemeSettingsLayout(
 fun SettingsScreenPreview() {
     var theme by remember { mutableStateOf(ThemeMode.SYSTEM) }
     var userName by remember { mutableStateOf("Loyea Developer") }
-    var apiConfig by remember { mutableStateOf(ApiConfig()) }
     var appLanguage by remember { mutableStateOf("zh") }
     var userBubbleColor by remember { mutableStateOf("") }
     
@@ -938,8 +1198,10 @@ fun SettingsScreenPreview() {
             onThemeChange = { theme = it },
             userName = userName,
             onUserNameSave = { userName = it },
-            apiConfig = apiConfig,
-            onApiConfigSave = { apiConfig = it },
+            apiConfigList = listOf(ApiConfig(name = "Deepseek Pro", provider = "DeepSeek", modelName = "deepseek-chat")),
+            activeConfigId = "ds_pro",
+            onApiConfigListSave = {},
+            onActiveConfigSelect = {},
             appLanguage = appLanguage,
             onAppLanguageChange = { appLanguage = it },
             userBubbleColor = userBubbleColor,
@@ -948,3 +1210,5 @@ fun SettingsScreenPreview() {
         )
     }
 }
+
+
