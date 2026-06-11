@@ -59,6 +59,7 @@ fun MainScreen(
     characterCardList: List<CharacterCard>,
     onTavernClick: () -> Unit,
     onNavigateToSettings: () -> Unit,
+    onUserNameChange: (String) -> Unit = {},
     useSystemTime: Boolean = false,
     onToggleSystemTime: () -> Unit = {},
     modifier: Modifier = Modifier
@@ -98,7 +99,8 @@ fun MainScreen(
                             }
                         },
                         useSystemTime = useSystemTime,
-                        onToggleSystemTime = onToggleSystemTime
+                        onToggleSystemTime = onToggleSystemTime,
+                        onUserNameSave = onUserNameChange
                     )
                 }
             }
@@ -160,10 +162,13 @@ fun SidebarContent(
     onTavernClick: () -> Unit,
     onSettingsClick: () -> Unit,
     useSystemTime: Boolean,
-    onToggleSystemTime: () -> Unit
+    onToggleSystemTime: () -> Unit,
+    onUserNameSave: (String) -> Unit
 ) {
     val isEn = appLanguage == "en"
     var sessionToDelete by remember { mutableStateOf<String?>(null) }
+    var showEditNameDialog by remember { mutableStateOf(false) }
+    var tempName by remember { mutableStateOf("") }
     val historyGroups = remember(sessions, appLanguage) {
         val todayList = mutableListOf<ChatSession>()
         val yesterdayList = mutableListOf<ChatSession>()
@@ -216,7 +221,12 @@ fun SidebarContent(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 8.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .clickable {
+                    tempName = userName
+                    showEditNameDialog = true
+                }
+                .padding(horizontal = 8.dp, vertical = 8.dp)
         ) {
             Box(
                 modifier = Modifier
@@ -233,19 +243,62 @@ fun SidebarContent(
                 )
             }
             Spacer(modifier = Modifier.width(12.dp))
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = userName,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onBackground
                 )
-                Text(
-                    text = "loyea@example.com",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
-                )
             }
+            Icon(
+                imageVector = Icons.Default.Edit,
+                contentDescription = "Edit Name",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                modifier = Modifier.size(16.dp)
+            )
+        }
+
+        // 修改用户名的对话框
+        if (showEditNameDialog) {
+            AlertDialog(
+                onDismissRequest = { showEditNameDialog = false },
+                title = {
+                    Text(
+                        text = if (isEn) "Edit Display Name" else "修改称呼",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                text = {
+                    Column {
+                        OutlinedTextField(
+                            value = tempName,
+                            onValueChange = { tempName = it },
+                            label = { Text(if (isEn) "User Name" else "用户名称") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            if (tempName.isNotBlank()) {
+                                onUserNameSave(tempName.trim())
+                                showEditNameDialog = false
+                            }
+                        }
+                    ) {
+                        Text(if (isEn) "Save" else "保存")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showEditNameDialog = false }) {
+                        Text(if (isEn) "Cancel" else "取消")
+                    }
+                }
+            )
         }
 
         Spacer(modifier = Modifier.height(16.dp))

@@ -93,7 +93,8 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onNavigateToSettings = {
                                     navController.navigate("settings")
-                                }
+                                },
+                                onUserNameChange = { chatViewModel.saveUserName(it) }
                             )
                         }
 

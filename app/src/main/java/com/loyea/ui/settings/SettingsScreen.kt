@@ -188,49 +188,7 @@ fun SettingsMainLayout(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
-            // 1. 用户资料卡片 (精致的迷你极简编辑行)
-            Text(
-                text = if (isEn) "ACCOUNT PROFILE" else "个人资料",
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
-            )
-            
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.surface)
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // 迷你精致头像
-                Box(
-                    modifier = Modifier
-                        .size(32.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = if (userName.isNotBlank()) userName.take(1).uppercase() else "L",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-                
-                Spacer(modifier = Modifier.width(12.dp))
-                
-                InlineEditNameField(
-                    initialName = userName,
-                    onSave = onUserNameSave,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            // 2. 首选项与二级跳转
+            // 系统设置分组
             Text(
                 text = if (isEn) "SYSTEM SETTINGS" else "系统设置",
                 fontSize = 11.sp,
@@ -1087,6 +1045,7 @@ fun ThemeSettingsLayout(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
@@ -1271,6 +1230,8 @@ fun ThemeSettingsLayout(
                     }
                 }
             }
+            
+            Spacer(modifier = Modifier.height(24.dp))
         }
     }
 }

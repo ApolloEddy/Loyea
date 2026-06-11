@@ -79,6 +79,7 @@ fun TavernScreen(
 
     var showCreateDialog by remember { mutableStateOf(false) }
     var cardToDelete by remember { mutableStateOf<CharacterCard?>(null) }
+    var cardToEdit by remember { mutableStateOf<CharacterCard?>(null) }
 
     // 1. PNG 导入启动器
     val pngImportLauncher = rememberLauncherForActivityResult(
@@ -212,6 +213,7 @@ fun TavernScreen(
                         appLanguage = appLanguage,
                         onExportPng = { shareCharacterCardPng(context, card) },
                         onExportJson = { shareCharacterCardJson(context, card) },
+                        onEdit = { cardToEdit = card },
                         onDelete = { cardToDelete = card }
                     )
                 }
@@ -263,6 +265,23 @@ fun TavernScreen(
                 }
             )
         }
+
+        // 5. 编辑弹窗
+        if (cardToEdit != null) {
+            val targetCard = cardToEdit!!
+            EditPersonaDialog(
+                existingCard = targetCard,
+                appLanguage = appLanguage,
+                onDismiss = { cardToEdit = null },
+                onSave = { updatedCard ->
+                    onCharacterCardListSave(
+                        characterCardList.map { if (it.id == updatedCard.id) updatedCard else it }
+                    )
+                    cardToEdit = null
+                    Toast.makeText(context, if (isEn) "Updated successfully" else "角色更新成功", Toast.LENGTH_SHORT).show()
+                }
+            )
+        }
     }
 }
 
@@ -275,6 +294,7 @@ fun TavernCardItem(
     appLanguage: String,
     onExportPng: () -> Unit,
     onExportJson: () -> Unit,
+    onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
     val isEn = appLanguage == "en"
@@ -480,6 +500,11 @@ fun TavernCardItem(
 
                 Spacer(modifier = Modifier.weight(1f))
 
+                // 编辑按钮
+                IconButton(onClick = onEdit) {
+                    Icon(imageVector = Icons.Default.Edit, contentDescription = "Edit Card", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                }
+
                 // 原地 DropdownMenu 导出双格式选择
                 var exportMenuExpanded by remember { mutableStateOf(false) }
                 Box {
@@ -611,6 +636,331 @@ fun CreatePersonaDialog(
                                             backgroundUri = localBackgroundUri
                                         )
                                         onSave(newCard)
+                                    }
+                                },
+                                enabled = name.isNotBlank() && systemPrompt.isNotBlank()
+                            ) {
+                                Text(
+                                    text = if (isEn) "Save" else "保存",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp,
+                                    color = if (name.isNotBlank() && systemPrompt.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                                )
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+                    )
+                },
+                containerColor = MaterialTheme.colorScheme.background
+            ) { paddingValues ->
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(paddingValues)
+                        .padding(20.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // 1. 头像与壁纸图片选择区
+                    Text(
+                        text = if (isEn) "Custom Artworks" else "自定义形象与聊天室背景",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // 圆形头像预览/点击
+                        val avatarPainter = rememberAvatarPainter(localAvatarUri)
+                        Box(
+                            modifier = Modifier
+                                .size(72.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (localAvatarUri == null) {
+                                        Color(android.graphics.Color.parseColor(colors[selectedColorIndex])).copy(alpha = 0.3f)
+                                    } else {
+                                        Color.Transparent
+                                    }
+                                )
+                                .border(
+                                    width = 1.5.dp,
+                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f),
+                                    shape = CircleShape
+                                )
+                                .clickable { avatarPickLauncher.launch("image/*") },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (avatarPainter != null) {
+                                androidx.compose.foundation.Image(
+                                    bitmap = avatarPainter,
+                                    contentDescription = "Avatar Preview",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                                )
+                            } else {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(Icons.Default.Camera, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                                    Text(if (isEn) "Avatar" else "设头像", fontSize = 10.sp, color = MaterialTheme.colorScheme.primary)
+                                }
+                            }
+                        }
+
+                        // 背景图卡片选择器
+                        val bgPainter = rememberAvatarPainter(localBackgroundUri)
+                        Card(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(72.dp)
+                                .border(
+                                    width = 1.dp,
+                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f),
+                                    shape = RoundedCornerShape(12.dp)
+                                ),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f))
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clickable { backgroundPickLauncher.launch("image/*") },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (bgPainter != null) {
+                                    androidx.compose.foundation.Image(
+                                        bitmap = bgPainter,
+                                        contentDescription = "Background Preview",
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(Color.Black.copy(alpha = 0.35f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(if (isEn) "Change Wallpaper" else "已设背景 (点击更换)", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                } else {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text(if (isEn) "Add Chat Wallpaper" else "添加聊天背景壁纸", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 2. 头像微光颜色选择 (仅当未选择本地头像时起兜底渲染作用)
+                    if (localAvatarUri == null) {
+                        Text(
+                            text = if (isEn) "Select avatar fallback color" else "选择头像兜底背景色",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            colors.forEachIndexed { index, hex ->
+                                val color = Color(android.graphics.Color.parseColor(hex))
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .background(color)
+                                        .border(
+                                            width = if (selectedColorIndex == index) 3.dp else 1.dp,
+                                            color = if (selectedColorIndex == index) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                            shape = CircleShape
+                                        )
+                                        .clickable { selectedColorIndex = index }
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    // 3. 表单输入字段
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = { Text(if (isEn) "Character Name" else "人物姓名（必填）") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = creator,
+                        onValueChange = { creator = it },
+                        label = { Text(if (isEn) "Creator Name" else "创作者署名") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = intro,
+                        onValueChange = { intro = it },
+                        label = { Text(if (isEn) "One-line Intro" else "一句话简介") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = personality,
+                        onValueChange = { personality = it },
+                        label = { Text(if (isEn) "Personality Description" else "性格词汇描述（如：傲娇粘人、冷静高智商）") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = scenario,
+                        onValueChange = { scenario = it },
+                        label = { Text(if (isEn) "Scenario Background" else "对话场景设定（如：在灯光昏暗的废土酒吧里）") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = firstMessage,
+                        onValueChange = { firstMessage = it },
+                        label = { Text(if (isEn) "First greeting message" else "首句欢迎词 / 打招呼语") },
+                        minLines = 2,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = systemPrompt,
+                        onValueChange = { systemPrompt = it },
+                        label = { Text(if (isEn) "System Prompt (Character Settings)" else "系统核心设定 / 人格 Prompt（必填）") },
+                        minLines = 4,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    OutlinedTextField(
+                        value = chatExamples,
+                        onValueChange = { chatExamples = it },
+                        label = { Text(if (isEn) "Example Dialogs (use <START> to split)" else "少样本对话范例（多行，使用 <START> 划分对话片段）") },
+                        minLines = 4,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(20.dp))
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 弹窗表单：编辑已有角色卡 (复用 CreatePersonaDialog 的结构，但预填充已有数据)
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun EditPersonaDialog(
+    existingCard: CharacterCard,
+    appLanguage: String,
+    onDismiss: () -> Unit,
+    onSave: (CharacterCard) -> Unit
+) {
+    val context = LocalContext.current
+    val isEn = appLanguage == "en"
+
+    var name by remember { mutableStateOf(existingCard.name) }
+    var intro by remember { mutableStateOf(existingCard.shortIntro) }
+    var systemPrompt by remember { mutableStateOf(existingCard.systemPrompt) }
+    var firstMessage by remember { mutableStateOf(existingCard.firstMessage) }
+    var creator by remember { mutableStateOf(existingCard.creatorName ?: "") }
+    var personality by remember { mutableStateOf(existingCard.personality) }
+    var scenario by remember { mutableStateOf(existingCard.scenario) }
+    var chatExamples by remember { mutableStateOf(existingCard.chatExamples) }
+
+    // 本地头像及背景 URI 绝对路径
+    var localAvatarUri by remember { mutableStateOf(existingCard.avatarUri) }
+    var localBackgroundUri by remember { mutableStateOf(existingCard.backgroundUri) }
+
+    // 头像及背景选择 Launcher
+    val avatarPickLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            val path = copyUriToLocal(context, it, "avatars", "avatar_${System.currentTimeMillis()}.png")
+            if (path != null) {
+                localAvatarUri = path
+                Toast.makeText(context, if (isEn) "Avatar selected" else "头像选择成功", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    val backgroundPickLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            val path = copyUriToLocal(context, it, "backgrounds", "bg_${System.currentTimeMillis()}.png")
+            if (path != null) {
+                localBackgroundUri = path
+                Toast.makeText(context, if (isEn) "Chat background selected" else "背景图选择成功", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // 头像背景色选择 (兜底色)
+    val colors = listOf("#E5D3B3", "#D3E2CD", "#CBE3F5", "#E2D3F5", "#F2D4D7")
+    var selectedColorIndex by remember {
+        mutableStateOf(colors.indexOf(existingCard.avatarColor).takeIf { it >= 0 } ?: 0)
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight()
+                .background(MaterialTheme.colorScheme.background)
+        ) {
+            Scaffold(
+                topBar = {
+                    TopAppBar(
+                        title = { Text(if (isEn) "Edit Persona" else "编辑角色", fontWeight = FontWeight.Bold) },
+                        navigationIcon = {
+                            IconButton(onClick = onDismiss) {
+                                Icon(Icons.Default.Close, contentDescription = "Dismiss")
+                            }
+                        },
+                        actions = {
+                            TextButton(
+                                onClick = {
+                                    if (name.isNotBlank() && systemPrompt.isNotBlank()) {
+                                        val updatedCard = existingCard.copy(
+                                            name = name,
+                                            avatarUri = localAvatarUri,
+                                            avatarColor = colors[selectedColorIndex],
+                                            shortIntro = intro.ifBlank { if (isEn) "A unique custom AI companion." else "充满个性的自定义 AI 伙伴。" },
+                                            systemPrompt = systemPrompt,
+                                            personality = personality,
+                                            scenario = scenario,
+                                            firstMessage = firstMessage,
+                                            chatExamples = chatExamples,
+                                            creatorName = creator.ifBlank { if (isEn) "User Custom" else "用户自建" },
+                                            backgroundUri = localBackgroundUri
+                                        )
+                                        onSave(updatedCard)
                                     }
                                 },
                                 enabled = name.isNotBlank() && systemPrompt.isNotBlank()

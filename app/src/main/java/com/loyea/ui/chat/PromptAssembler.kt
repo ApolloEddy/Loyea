@@ -16,6 +16,11 @@ object PromptAssembler {
         // 1. 系统扮演引导语
         sb.append("You are now roleplaying as the following character:\n\n")
 
+        // 插入用户称呼（让 LLM 在对话中自然使用）
+        val safeUserName = if (userName.isBlank()) "User" else userName
+        sb.append("[User Info]\n")
+        sb.append("The user's name is \"$safeUserName\". Address them by this name naturally in conversation.\n\n")
+
         // 插入当前系统时间
         if (useSystemTime) {
             sb.append("[Current System Time]\n")

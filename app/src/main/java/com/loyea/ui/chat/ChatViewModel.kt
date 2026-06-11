@@ -345,13 +345,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun sendMessage(inputText: String) {
         if (inputText.isBlank()) return
         val activeCard = activeCharacterCard.value
+        
+        // 发送新消息时，主动折叠之前的历史 Thinking 过程
+        val collapsedHistory = messages.value.map { msg ->
+            if (msg.sender == Sender.AI && msg.isThoughtsExpanded) {
+                msg.copy(isThoughtsExpanded = false)
+            } else {
+                msg
+            }
+        }
+        
         val userMsg = Message(
             id = System.currentTimeMillis().toString(),
             content = inputText,
             sender = Sender.USER,
             characterId = activeCard.id
         )
-        val updatedMsgs = messages.value + userMsg
+        val updatedMsgs = collapsedHistory + userMsg
         messages.value = updatedMsgs
         
         val sessionId = currentSessionId.value
@@ -410,23 +420,35 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val aiMessageId = (System.currentTimeMillis() + 1).toString()
             val startTime = System.currentTimeMillis()
 
-            // 首先创建一个占位的空 AI 回复消息
+            // 再次确保历史消息的 Thinking 已被折叠
+            val collapsedHistoryList = messages.value.map { msg ->
+                if (msg.sender == Sender.AI && msg.isThoughtsExpanded) {
+                    msg.copy(isThoughtsExpanded = false)
+                } else {
+                    msg
+                }
+            }
+
+            // 首先创建一个占位的空 AI 回复消息 (思考开始时，默认处于展开状态)
             val placeholderAiMsg = Message(
                 id = aiMessageId,
                 content = "",
                 sender = Sender.AI,
                 thoughts = null,
-                isThoughtsExpanded = false,
+                isThoughtsExpanded = true,
                 thoughtDurationSeconds = 0,
                 isStillThinking = true, // 指示正在思考/输出中
                 characterId = characterCard.id
             )
             
-            var currentList = messages.value + placeholderAiMsg
+            var currentList = collapsedHistoryList + placeholderAiMsg
             messages.value = currentList
 
             var accumulatedContent = ""
             var accumulatedThoughts = ""
+            
+            // 锁定思考计时的局部变量
+            var calculatedDuration: Int? = null
 
             // 开始 SSE 流式接收
             try {
@@ -442,12 +464,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     when (event) {
                         is StreamEvent.Thoughts -> {
                             accumulatedThoughts += event.text
-                            // 实时更新 AI 消息中的思考链内容
+                            // 实时更新 AI 消息中的思考链内容 (若用户在生成时未手动折叠则保持展开)
                             currentList = currentList.map { msg ->
                                 if (msg.id == aiMessageId) {
                                     msg.copy(
                                         thoughts = accumulatedThoughts,
-                                        isThoughtsExpanded = true
+                                        isThoughtsExpanded = if (msg.hasUserToggledThoughts) msg.isThoughtsExpanded else true
                                     )
                                 } else {
                                     msg
@@ -457,14 +479,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         }
                         is StreamEvent.Content -> {
                             accumulatedContent += event.text
+                            // 首次收到正式回答正文，结算并锁定思考计时时长，后续 content 不再增加耗时
+                            if (calculatedDuration == null) {
+                                val duration = ((System.currentTimeMillis() - startTime) / 1000).toInt()
+                                calculatedDuration = if (accumulatedThoughts.isNotEmpty()) duration else 0
+                            }
                             // 收到正文了，如果还在 isStillThinking，我们可以逐步将其移除思考状态
                             currentList = currentList.map { msg ->
                                 if (msg.id == aiMessageId) {
-                                    val duration = ((System.currentTimeMillis() - startTime) / 1000).toInt()
                                     msg.copy(
                                         content = accumulatedContent,
                                         isStillThinking = false, // 正文开始，大模型不再是仅仅在思考
-                                        thoughtDurationSeconds = if (accumulatedThoughts.isNotEmpty()) duration else 0
+                                        thoughtDurationSeconds = calculatedDuration ?: 0
                                     )
                                 } else {
                                     msg
@@ -487,12 +513,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             messages.value = currentList
                         }
                         is StreamEvent.Done -> {
-                            val duration = ((System.currentTimeMillis() - startTime) / 1000).toInt()
+                            // 兜底结算思考时间
+                            if (calculatedDuration == null) {
+                                val duration = ((System.currentTimeMillis() - startTime) / 1000).toInt()
+                                calculatedDuration = if (accumulatedThoughts.isNotEmpty()) duration else 0
+                            }
                             currentList = currentList.map { msg ->
                                 if (msg.id == aiMessageId) {
                                     msg.copy(
                                         isStillThinking = false,
-                                        thoughtDurationSeconds = if (accumulatedThoughts.isNotEmpty()) duration else 0
+                                        isThoughtsExpanded = false, // 思考和正式输出完成后，主动折叠Thinking内容
+                                        thoughtDurationSeconds = calculatedDuration ?: 0
                                     )
                                 } else {
                                     msg

@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] - 2026-06-11
+
+### Added (新增)
+- **角色卡二次编辑功能**：在 `TavernScreen.kt` 中为每张角色卡新增编辑按钮（铅笔图标），点击后打开全屏 `EditPersonaDialog` 弹窗，预填充已有角色数据（名称、简介、性格、场景、首句欢迎词、系统核心设定、少样本范例、头像、背景壁纸、兜底色）。保存时通过 `data class copy()` 保留原始 ID 和内置标记，更新后自动回写到角色列表持久化。
+- **LLM 提示词显式用户称呼注入**：在 `PromptAssembler.kt` 的 `assembleSystemPrompt` 中，于角色引导语之后新增 `[User Info]` 段落，显式告知 LLM 用户的称呼（如 `The user's name is "xxx". Address them by this name naturally in conversation.`）。此前仅依赖 `{{user}}` 宏替换，若角色卡未使用该宏则 LLM 无从得知用户名。
+- **侧边栏用户名直接编辑功能**：在 `MainScreen.kt` 侧边栏顶部用户信息栏加入水波纹整行点击交互与编辑图标，点击可拉起精致的 `AlertDialog` 弹窗修改并保存用户名，并通过 ViewModel 实现即时持久化，打通“去设置页冗余编辑，保留侧栏唯一编辑入口”的闭环体验。
+- **Markdown 表格高颜值渲染支持**：在 `MarkdownText.kt` 的轻量 Markdown 引擎中扩展手写了流式表格（`TableBlock`）解析状态机。配套实现了 `TableLayout` 渲染组件，支持斑马线底色、多列分割线及单元格行内 Markdown 样式；引入了智能自适应宽度机制（$\le 3$ 列充满气泡均分，$> 3$ 列锁定 `120.dp` 宽并支持横向顺滑滚动），解决了对话中大模型输出表格时无法解析乱成一团的排版痛点。
+- **Markdown 表格测量错乱与闪退 Bug 修复**：解决了在 $\le 3$ 列时使用 `weight` 布局却被外层 `horizontalScroll` 提供无限宽约束（`Constraints.Infinity`）导致 Compose 无法计算单元格空间分配、进而产生表格折叠或渲染异常的缺陷。重构为仅在列数 $> 3$ 时激活横向滚动容器，彻底防范了布局测量死锁。
+- **外观设置页文字底部截断缺陷修复**：在 `SettingsScreen.kt` 中为“外观与语言”设置子页（`ThemeSettingsLayout`）的根 `Column` 挂载了 `verticalScroll(rememberScrollState())` 并增加了底部 `24.dp` 呼吸间距，解决了低分辨率设备或系统导航栏遮挡导致“英文”选项行底部文字被截断的缺陷；同时对全局 Screen 的滚动能力进行了拉网式排查，保障了全局 UI 控件的安全度。
+
+### Changed (变更)
+- **Thinking 展开折叠策略优化**：优化了聊天页面 Thinking 推理链的展示逻辑，在开启新一轮会话时自动折叠历史 AI 消息的 Thinking 过程；最新回复在思考时默认展开，在生成完成（`Done` 事件）后自动收缩折叠；若用户在输出期间手动点击了折叠，则会记录干预状态并尊重用户选择，不再强行重新摊开。
+- **Thinking 计时精准化修复**：修正了思考时间的统计逻辑，将计时的截止点由“整个流接收完毕”修正为“开始吐出正式回答正文的瞬间”（即首个 Content 帧到达时锁定计时），彻底解决了生成正文期间时间差不断累加导致思考耗时虚高的缺陷。
+- **精简设置页用户资料区块**：移除 `SettingsScreen.kt` 中冗余的"个人资料"卡片（含头像和 `InlineEditNameField` 行内编辑框），用户称呼仅保留在侧栏顶部入口统一编辑，避免多处入口造成体验混乱。
+- **移除侧栏硬编码邮箱占位符**：删除 `MainScreen.kt` 侧栏用户名下方的 `"loyea@example.com"` 假邮箱文字。本应用主打离线使用，无需登录功能，该占位符无实际意义。
+
 ## [Unreleased] - 2026-06-10
 
 - **会话级系统时间提示词选择 (物理感知)**：在 `ChatStorageManager.kt` 的 `ChatSession` 中增加了 `useSystemTime: Boolean` 配置，并在 `PromptAssembler.kt` 中支持将格式化后的真实时间注入系统 Prompt。

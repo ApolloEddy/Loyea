@@ -50,6 +50,14 @@ fun MarkdownText(
                 is MarkdownBlock.DividerBlock -> {
                     DividerLayout()
                 }
+                is MarkdownBlock.TableBlock -> {
+                    TableLayout(
+                        headers = block.headers,
+                        alignments = block.alignments,
+                        rows = block.rows,
+                        color = color
+                    )
+                }
                 is MarkdownBlock.TextBlock -> {
                     Text(
                         text = renderInlineMarkdown(block.text, color),
@@ -69,6 +77,11 @@ sealed class MarkdownBlock {
     data class ListBlock(val items: List<String>, val ordered: Boolean) : MarkdownBlock()
     data class QuoteBlock(val text: String) : MarkdownBlock()
     object DividerBlock : MarkdownBlock()
+    data class TableBlock(
+        val headers: List<String>,
+        val alignments: List<TableAlignment>,
+        val rows: List<List<String>>
+    ) : MarkdownBlock()
 }
 
 // 优化的 Markdown 解析器，支持列表、标题、引用块和分割线
@@ -85,6 +98,12 @@ private fun parseMarkdown(text: String): List<MarkdownBlock> {
     var currentListOrdered = false
     var inList = false
 
+    // 用于表格的临时变量
+    var inTable = false
+    var tableHeaders = mutableListOf<String>()
+    var tableAlignments = mutableListOf<TableAlignment>()
+    val tableRows = mutableListOf<List<String>>()
+
     fun flushTextBlock() {
         if (currentTextBlock.isNotEmpty()) {
             blocks.add(MarkdownBlock.TextBlock(currentTextBlock.toString().trimEnd()))
@@ -100,11 +119,33 @@ private fun parseMarkdown(text: String): List<MarkdownBlock> {
         }
     }
 
+    fun flushTableBlock() {
+        if (inTable) {
+            blocks.add(MarkdownBlock.TableBlock(tableHeaders.toList(), tableAlignments.toList(), tableRows.toList()))
+            inTable = false
+            tableHeaders.clear()
+            tableAlignments.clear()
+            tableRows.clear()
+        }
+    }
+
     for (line in lines) {
         val trimmedLine = line.trim()
         
-        // 解析代码块
+        // 1. 如果在代码块内部，正常收集代码内容，不进行表格等块解析
+        if (inCodeBlock && !trimmedLine.startsWith("```")) {
+            codeBuilder.append(line).append("\n")
+            continue
+        }
+
+        // 2. 如果在表格中，但当前行不再包含 '|'，则先结算表格
+        if (inTable && !line.contains("|")) {
+            flushTableBlock()
+        }
+
+        // 3. 解析代码块起始与结束
         if (trimmedLine.startsWith("```")) {
+            flushTableBlock()
             flushListBlock()
             if (inCodeBlock) {
                 blocks.add(MarkdownBlock.CodeBlock(codeBuilder.toString().trimEnd(), codeLanguage))
@@ -119,12 +160,43 @@ private fun parseMarkdown(text: String): List<MarkdownBlock> {
             continue
         }
 
-        if (inCodeBlock) {
-            codeBuilder.append(line).append("\n")
-            continue
+        // 4. 解析表格对齐/分隔行 (例如 |:---|:---:|---:|)
+        if (!inTable && isTableSeparatorLine(line)) {
+            val lastLineOfText = currentTextBlock.toString().trimEnd().split("\n").lastOrNull()
+            if (lastLineOfText != null && lastLineOfText.contains("|")) {
+                // 将 Text 缓冲区里除了最后一行外的其他行先 flush
+                val textLines = currentTextBlock.toString().trimEnd().split("\n")
+                if (textLines.size > 1) {
+                    val remainingText = textLines.dropLast(1).joinToString("\n")
+                    blocks.add(MarkdownBlock.TextBlock(remainingText))
+                }
+                currentTextBlock.clear()
+                
+                tableHeaders = parseTableRow(lastLineOfText).toMutableList()
+                tableAlignments = parseTableAlignments(line).toMutableList()
+                tableRows.clear()
+                inTable = true
+                continue
+            }
         }
 
-        // 解析标题 (1-6 级)
+        // 5. 表格行收集逻辑
+        if (inTable) {
+            if (line.contains("|")) {
+                val rowCells = parseTableRow(line)
+                val paddedCells = if (rowCells.size < tableHeaders.size) {
+                    rowCells + List(tableHeaders.size - rowCells.size) { "" }
+                } else {
+                    rowCells.take(tableHeaders.size)
+                }
+                tableRows.add(paddedCells)
+                continue
+            } else {
+                flushTableBlock()
+            }
+        }
+
+        // 6. 解析标题 (1-6 级)
         if (trimmedLine.startsWith("#")) {
             val level = trimmedLine.takeWhile { it == '#' }.length
             if (level in 1..6 && trimmedLine.length > level && trimmedLine[level] == ' ') {
@@ -136,7 +208,7 @@ private fun parseMarkdown(text: String): List<MarkdownBlock> {
             }
         }
 
-        // 解析引用
+        // 7. 解析引用
         if (trimmedLine.startsWith(">")) {
             flushListBlock()
             flushTextBlock()
@@ -145,7 +217,7 @@ private fun parseMarkdown(text: String): List<MarkdownBlock> {
             continue
         }
 
-        // 解析分割线
+        // 8. 解析分割线
         if (trimmedLine == "---" || trimmedLine == "***") {
             flushListBlock()
             flushTextBlock()
@@ -153,7 +225,7 @@ private fun parseMarkdown(text: String): List<MarkdownBlock> {
             continue
         }
 
-        // 解析列表
+        // 9. 解析列表
         val isUnorderedList = trimmedLine.startsWith("- ") || trimmedLine.startsWith("* ") || trimmedLine.startsWith("• ")
         val orderedListMatch = Regex("^\\d+\\.\\s+(.*)").find(trimmedLine)
         val isOrderedList = orderedListMatch != null
@@ -174,11 +246,12 @@ private fun parseMarkdown(text: String): List<MarkdownBlock> {
             flushListBlock()
         }
 
-        // 普通文本段落
+        // 10. 普通文本段落
         currentTextBlock.append(line).append("\n")
     }
 
     // 清理缓冲区剩余内容
+    flushTableBlock()
     flushListBlock()
     flushTextBlock()
 
@@ -423,6 +496,163 @@ fun highlightCode(code: String, language: String): AnnotatedString {
         val multiLineCommentRegex = Regex("/\\*[\\s\\S]*?\\*/")
         multiLineCommentRegex.findAll(code).forEach { match ->
             addStyle(SpanStyle(color = Color(0xFF808080), fontStyle = FontStyle.Italic), match.range.first, match.range.last + 1)
+        }
+    }
+}
+
+// 表格相关的辅助对象与高颜值布局组件
+enum class TableAlignment {
+    LEFT, CENTER, RIGHT
+}
+
+private fun isTableSeparatorLine(line: String): Boolean {
+    val trimmed = line.trim()
+    if (!trimmed.contains('|')) return false
+    return trimmed.all { it == '|' || it == '-' || it == ':' || it.isWhitespace() }
+}
+
+private fun parseTableRow(line: String): List<String> {
+    val trimmed = line.trim()
+    val rawCells = trimmed.split("|")
+    val startIdx = if (trimmed.startsWith("|")) 1 else 0
+    val endIdx = if (trimmed.endsWith("|")) rawCells.size - 1 else rawCells.size
+    if (startIdx >= endIdx) return emptyList()
+    return rawCells.subList(startIdx, endIdx).map { it.trim() }
+}
+
+private fun parseTableAlignments(line: String): List<TableAlignment> {
+    val cells = parseTableRow(line)
+    return cells.map { cell ->
+        val trimmed = cell.trim()
+        val left = trimmed.startsWith(":")
+        val right = trimmed.endsWith(":")
+        when {
+            left && right -> TableAlignment.CENTER
+            right -> TableAlignment.RIGHT
+            else -> TableAlignment.LEFT
+        }
+    }
+}
+
+@Composable
+fun TableLayout(
+    headers: List<String>,
+    alignments: List<TableAlignment>,
+    rows: List<List<String>>,
+    color: Color
+) {
+    val scrollState = rememberScrollState()
+    val colCount = headers.size
+    
+    // 如果列数大于 3，才启用横向滚动，避免 scroll 容器内部测量 weight(1f) 导致异常
+    val containerModifier = if (colCount <= 3) {
+        Modifier.fillMaxWidth()
+    } else {
+        Modifier
+            .fillMaxWidth()
+            .horizontalScroll(scrollState)
+    }
+    
+    val columnModifier = if (colCount <= 3) {
+        Modifier.fillMaxWidth()
+    } else {
+        Modifier.wrapContentWidth()
+    }
+    
+    Box(
+        modifier = containerModifier.padding(vertical = 4.dp)
+    ) {
+        Column(
+            modifier = columnModifier
+                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surface)
+        ) {
+            // 1. 绘制表头
+            Row(
+                modifier = if (colCount <= 3) Modifier.fillMaxWidth() else Modifier.wrapContentWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                headers.forEachIndexed { index, header ->
+                    val alignment = alignments.getOrNull(index) ?: TableAlignment.LEFT
+                    val textAlign = when (alignment) {
+                        TableAlignment.LEFT -> Alignment.CenterStart
+                        TableAlignment.CENTER -> Alignment.Center
+                        TableAlignment.RIGHT -> Alignment.CenterEnd
+                    }
+                    val cellModifier = if (colCount <= 3) Modifier.weight(1f) else Modifier.width(120.dp)
+                    
+                    Box(
+                        modifier = cellModifier
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        contentAlignment = textAlign
+                    ) {
+                        Text(
+                            text = header,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    if (index < headers.size - 1) {
+                        Box(
+                            modifier = Modifier
+                                .width(1.dp)
+                                .height(38.dp)
+                                .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+                        )
+                    }
+                }
+            }
+            
+            // 横向分割线
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+
+            // 2. 绘制数据行
+            rows.forEachIndexed { rowIndex, row ->
+                val isEven = rowIndex % 2 == 0
+                val rowBg = if (isEven) Color.Transparent else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.02f)
+                val rowModifier = if (colCount <= 3) Modifier.fillMaxWidth() else Modifier.wrapContentWidth()
+                
+                Row(
+                    modifier = rowModifier.background(rowBg),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    row.forEachIndexed { colIndex, cell ->
+                        val alignment = alignments.getOrNull(colIndex) ?: TableAlignment.LEFT
+                        val textAlign = when (alignment) {
+                            TableAlignment.LEFT -> Alignment.CenterStart
+                            TableAlignment.CENTER -> Alignment.Center
+                            TableAlignment.RIGHT -> Alignment.CenterEnd
+                        }
+                        val cellModifier = if (colCount <= 3) Modifier.weight(1f) else Modifier.width(120.dp)
+                        
+                        Box(
+                            modifier = cellModifier
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            contentAlignment = textAlign
+                        ) {
+                            Text(
+                                text = renderInlineMarkdown(cell, color),
+                                fontSize = 13.sp,
+                                color = color
+                            )
+                        }
+                        if (colIndex < row.size - 1) {
+                            Box(
+                                modifier = Modifier
+                                    .width(1.dp)
+                                    .height(34.dp)
+                                    .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                            )
+                        }
+                    }
+                }
+                if (rowIndex < rows.size - 1) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                }
+            }
         }
     }
 }
