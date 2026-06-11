@@ -108,7 +108,7 @@ fun WelcomeScreen(
             Spacer(modifier = Modifier.height(16.dp))
             
             Text(
-                text = "Talk to Loyea. An AI assistant.",
+                text = "Talk to Loyea. Your personal assistant.",
                 fontSize = 16.sp,
                 textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),

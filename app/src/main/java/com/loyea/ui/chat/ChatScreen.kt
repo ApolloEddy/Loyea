@@ -77,6 +77,10 @@ fun ChatScreen(
     onMenuClick: () -> Unit,
     activeCharacterCard: CharacterCard,
     characterCardList: List<CharacterCard>,
+    currentSessionId: String,
+    getDraft: (String) -> String,
+    saveDraft: (String, String) -> Unit,
+    clearDraft: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -85,9 +89,21 @@ fun ChatScreen(
     val listState = rememberLazyListState()
 
     val isEn = appLanguage == "en"
+    val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
 
     var inputText by remember { mutableStateOf(TextFieldValue("")) }
     var showPersonaSelector by remember { mutableStateOf(false) }
+    var lastSessionId by remember { mutableStateOf(currentSessionId) }
+
+    // 切换会话时，自动保存和载入草稿
+    LaunchedEffect(currentSessionId) {
+        if (lastSessionId.isNotEmpty() && lastSessionId != currentSessionId) {
+            saveDraft(lastSessionId, inputText.text)
+        }
+        val loadedDraft = getDraft(currentSessionId)
+        inputText = TextFieldValue(loadedDraft)
+        lastSessionId = currentSessionId
+    }
 
     // 自动滚动到底部
     LaunchedEffect(messages.size, isThinking) {
@@ -155,7 +171,6 @@ fun ChatScreen(
                         Modifier
                     }
                 )
-                .imePadding() // 只保留 imePadding 来处理键盘上移
         ) {
             // 消息流
             LazyColumn(
@@ -197,12 +212,24 @@ fun ChatScreen(
             ChatInputBar(
                 value = inputText,
                 appLanguage = appLanguage,
-                onValueChange = { inputText = it },
+                characterName = activeCharacterCard.name,
+                onValueChange = { 
+                    // 过滤掉回车换行符，不允许输入回车
+                    val filteredText = it.text.replace("\n", "").replace("\r", "")
+                    inputText = it.copy(text = filteredText)
+                    if (currentSessionId.isNotEmpty()) {
+                        saveDraft(currentSessionId, filteredText)
+                    }
+                },
                 onSend = {
                     val trimmed = inputText.text.trim()
                     if (trimmed.isNotBlank()) {
                         onSendMessage(trimmed)
                         inputText = TextFieldValue("")
+                        if (currentSessionId.isNotEmpty()) {
+                            clearDraft(currentSessionId)
+                        }
+                        keyboardController?.hide() // 点击发送或键盘发送后收回输入法
                     }
                 },
                 onStop = onStopResponse,
@@ -548,10 +575,20 @@ fun MessageItem(
                 }
             }
             val bubbleTextColor = if (bubbleBgColor != null) {
-                MaterialTheme.colorScheme.onBackground
+                val r = bubbleBgColor.red
+                val g = bubbleBgColor.green
+                val b = bubbleBgColor.blue
+                val brightness = r * 0.299f + g * 0.587f + b * 0.114f
+                if (brightness > 0.6f) {
+                    Color(0xFF1A1A1A) // 浅色气泡背景配深色文字
+                } else {
+                    Color(0xFFFAFAFA) // 深色气泡背景配浅色文字
+                }
             } else {
                 MaterialTheme.colorScheme.onSecondaryContainer
             }
+
+            var showUserCopyIcon by remember { mutableStateOf(false) }
 
             Box(
                 modifier = Modifier
@@ -565,13 +602,44 @@ fun MessageItem(
                         )
                     )
                     .background(bubbleBgColor ?: MaterialTheme.colorScheme.secondaryContainer)
+                    .clickable { showUserCopyIcon = !showUserCopyIcon }
                     .padding(horizontal = 16.dp, vertical = 12.dp)
             ) {
-                Text(
-                    text = message.content,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = bubbleTextColor
-                )
+                androidx.compose.foundation.text.selection.SelectionContainer {
+                    Text(
+                        text = message.content,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = bubbleTextColor
+                    )
+                }
+            }
+
+            AnimatedVisibility(
+                visible = showUserCopyIcon,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.End,
+                    modifier = Modifier
+                        .fillMaxWidth(0.85f)
+                        .padding(top = 4.dp, end = 4.dp)
+                ) {
+                    IconButton(
+                        onClick = { 
+                            onCopy()
+                            showUserCopyIcon = false
+                        },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ContentCopy,
+                            contentDescription = "Copy",
+                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
             }
         } else if (message.isError) {
             // 错误气泡：柔和淡红背景，警告深红文字，类似警告通知卡片
@@ -641,10 +709,12 @@ fun MessageItem(
                     val processedContent = remember(message.content) {
                         message.content.replace(Regex("(?<!`)`(?!`)"), "\\\\`")
                     }
-                    MarkdownText(
-                        text = processedContent,
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
+                    androidx.compose.foundation.text.selection.SelectionContainer {
+                        MarkdownText(
+                            text = processedContent,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                    }
                 }
                 
                 Spacer(modifier = Modifier.height(8.dp))
@@ -705,7 +775,8 @@ fun ChatInputBar(
     onStop: () -> Unit,
     onAttach: () -> Unit,
     isThinking: Boolean = false,
-    isMcpRunning: Boolean = false
+    isMcpRunning: Boolean = false,
+    characterName: String = "Loyea"
 ) {
     val isTextEmpty = value.text.isBlank()
     val isEn = appLanguage == "en"
@@ -750,7 +821,7 @@ fun ChatInputBar(
             ) {
                 if (isTextEmpty) {
                     Text(
-                        text = if (isEn) "Talk to Loyea" else "与 Loyea 对话",
+                        text = if (isEn) "Talk to $characterName" else "与 $characterName 对话",
                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
                         style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Default)
                     )
@@ -916,7 +987,11 @@ fun ChatScreenPreview() {
             onNewChatClick = {},
             onMenuClick = {},
             activeCharacterCard = defaultChar,
-            characterCardList = listOf(defaultChar)
+            characterCardList = listOf(defaultChar),
+            currentSessionId = "session_id",
+            getDraft = { "" },
+            saveDraft = { _, _ -> },
+            clearDraft = {}
         )
     }
 }

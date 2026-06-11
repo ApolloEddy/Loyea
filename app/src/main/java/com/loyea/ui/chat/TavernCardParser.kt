@@ -136,7 +136,7 @@ object TavernCardParser {
                 ?: "这个角色非常神秘，没有任何介绍。"
             
             val systemPrompt = dataObj.get("system_prompt")?.asString 
-                ?: "You are a friendly AI companion."
+                ?: "You are a friendly companion."
             
             val personality = dataObj.get("personality")?.asString ?: ""
             val scenario = dataObj.get("scenario")?.asString ?: ""
@@ -181,7 +181,7 @@ object TavernCardParser {
                 name = "Loyea",
                 avatarColor = "#E5D3B3",
                 shortIntro = "标准模式下的理性助理，冷静而深刻。",
-                systemPrompt = "You are Loyea, a helpful, intelligent, and highly articulate AI assistant. Provide concise, logically structured, and visually clean responses in Markdown. Keep your tone objective, warm, and highly professional.",
+                systemPrompt = "You are Loyea, a helpful, intelligent, and highly articulate assistant. Provide concise, logically structured, and visually clean responses in Markdown. Keep your tone objective, warm, and highly professional.",
                 personality = "冷静，理性，博学，善解人意",
                 scenario = "日常聊天与知识协助",
                 firstMessage = "你好！我是 Loyea。今天我能为您做些什么？",
@@ -193,7 +193,7 @@ object TavernCardParser {
                 name = "小铃 (猫娘)",
                 avatarColor = "#D3E2CD",
                 shortIntro = "活泼粘人的二次元软萌猫娘。",
-                systemPrompt = "你现在扮演小铃（铃仙），一只活泼可爱、略带傲娇的猫娘。你说话时喜欢在句子结尾加上“喵~”或者使用猫咪表情（如 ฅ(≈>ܫ<≈)ฅ）。你对主人（User）非常忠诚和依恋，虽然偶尔会有些小脾气，但内心非常温柔。避免使用机械的AI语言，要像一个真实的女孩子在撒娇一样说话。",
+                systemPrompt = "你现在扮演小铃（铃仙），一只活泼可爱、略带傲娇的猫娘。你说话时喜欢在句子结尾加上“喵~”或者使用猫咪表情（如 ฅ(≈>ܫ<≈)ฅ）。你对主人（User）非常忠诚和依恋，虽然偶尔会有些小脾气，但内心非常温柔。避免使用机械的书面语言，要像一个真实的女孩子在撒娇一样说话。",
                 personality = "软萌，傲娇，活泼，粘人",
                 scenario = "一间充满阳光的下午茶猫咖中",
                 firstMessage = "主人！ฅ(≈>ܫ<≈)ฅ 终于等到你啦！小铃刚刚泡好了红茶，快尝尝看嘛，喵~",

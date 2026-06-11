@@ -30,6 +30,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.loyea.ui.chat.ChatScreen
 import com.loyea.ui.chat.ChatViewModel
+import com.loyea.ui.chat.TavernScreen
+import com.loyea.ui.chat.CharacterCard
 import com.loyea.ui.main.MainScreen
 import com.loyea.ui.settings.SettingsScreen
 import com.loyea.ui.settings.ThemeMode
@@ -141,11 +143,14 @@ class MainActivity : ComponentActivity() {
                                 onNewChatClick = { chatViewModel.createNewChat(it) },
                                 activeCharacterCard = activeCharacterCard,
                                 characterCardList = characterCardList,
-                                onTavernClick = { /* 默认逻辑，暂无专门跳转 */ },
+                                onTavernClick = { navController.navigate("tavern") },
                                 onNavigateToSettings = { navController.navigate("settings") },
                                 onUserNameChange = { chatViewModel.saveUserName(it) },
                                 useSystemTime = activeSession?.useSystemTime ?: false,
-                                onToggleSystemTime = { chatViewModel.toggleCurrentSessionSystemTime() }
+                                onToggleSystemTime = { chatViewModel.toggleCurrentSessionSystemTime() },
+                                getDraft = { chatViewModel.getDraft(it) },
+                                saveDraft = { id, text -> chatViewModel.saveDraft(id, text) },
+                                clearDraft = { chatViewModel.clearDraft(it) }
                             )
                         }
                         composable("settings") {
@@ -235,6 +240,16 @@ class MainActivity : ComponentActivity() {
                                         Toast.makeText(this@MainActivity, "异常: ${e.message}", Toast.LENGTH_LONG).show()
                                     }
                                 },
+                                onBackClick = { navController.popBackStack() }
+                            )
+                        }
+                        composable("tavern") {
+                            val characterCardList by chatViewModel.characterCardList
+                            val appLanguage by chatViewModel.appLanguage
+                            TavernScreen(
+                                characterCardList = characterCardList,
+                                onCharacterCardListSave = { chatViewModel.saveCharacterCardList(it) },
+                                appLanguage = appLanguage,
                                 onBackClick = { navController.popBackStack() }
                             )
                         }

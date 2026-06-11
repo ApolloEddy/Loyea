@@ -28,6 +28,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = context.getSharedPreferences("loyea_prefs", Context.MODE_PRIVATE)
     private val storageManager = ChatStorageManager(context)
     private val llmClient = LlmClient()
+    private val sessionDrafts = mutableMapOf<String, String>()
 
     private val mcpManager = McpManager(application)
     val mcpStates: StateFlow<Map<String, McpServerStatus>> = mcpManager.serverStates
@@ -129,6 +130,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         loadAllData()
+        mcpManager.registerWebSearchProvider { query ->
+            val activeConfig = activeApiConfig.value
+            if (activeConfig.useIndependentSearch && activeConfig.searchApiKey.isNotBlank()) {
+                llmClient.performIndependentWebSearch(activeConfig, query)
+            } else {
+                // 如果没有配置独立检索 Key，自动切换至备用免 Key 公共检索 (DuckDuckGo HTML 解析)
+                llmClient.performFreeWebSearch(query)
+            }
+        }
         mcpManager.start()
     }
 
@@ -200,7 +210,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 enableSearch = false,
                 enableReasoning = false
             )
-            list = listOf(deepseekPro, deepseekFlash)
+            val mimoPro = ApiConfig(
+                id = "mimo_v25_pro",
+                name = "MiMo 2.5 Pro",
+                provider = "MiMo",
+                apiUrl = "https://api.xiaomimimo.com/v1",
+                apiKey = "",
+                modelName = "mimo-v2.5-pro",
+                isEnabled = true,
+                enableSearch = true,
+                enableReasoning = true
+            )
+            list = listOf(deepseekPro, deepseekFlash, mimoPro)
             prefs.edit().putString("api_config_list", Gson().toJson(list)).apply()
         }
         apiConfigList.value = list.filter { !it.provider.equals("Anthropic", ignoreCase = true) }
@@ -235,6 +256,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 viewModelScope.launch(Dispatchers.IO) {
                     loadSessions()
                 }
+            }
+        }
+
+        // 加载 SharedPreferences 中所有草稿
+        prefs.all.forEach { (key, value) ->
+            if (key.startsWith("draft_") && value is String) {
+                val sessionId = key.substringAfter("draft_")
+                sessionDrafts[sessionId] = value
             }
         }
     }
@@ -565,7 +594,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 card = characterCard,
                 userName = userName.value,
                 useSystemTime = activeSession.value?.useSystemTime ?: false,
-                physicalContext = physicalContextData
+                physicalContext = physicalContextData,
+                enableSearch = apiConfig.enableSearch
             )
 
             // 构建初始会话上下文
@@ -577,7 +607,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 while (round < maxRounds) {
                     round++
                     var streamToolCalls = emptyList<LlmToolCall>()
-                    val availableMcpTools = mcpManager.getAggregateTools()
+                    val availableMcpTools = mcpManager.getAggregateTools().filter { tool ->
+                        if (tool.name.endsWith("web_search")) {
+                            activeApiConfig.value.enableSearch
+                        } else {
+                            true
+                        }
+                    }
 
                     // 执行流式调用
                     isThinking.value = true
@@ -589,7 +625,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         when (event) {
                             is StreamEvent.Thoughts -> {
                                 accumulatedThoughts += event.text
-                                currentList = currentList.map { msg ->
+                                currentList = messages.value.map { msg ->
                                     if (msg.id == aiMessageId) {
                                         msg.copy(
                                             thoughts = accumulatedThoughts,
@@ -607,7 +643,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                     val duration = ((System.currentTimeMillis() - startTime) / 1000).toInt()
                                     calculatedDuration = if (accumulatedThoughts.isNotEmpty()) duration else 0
                                 }
-                                currentList = currentList.map { msg ->
+                                currentList = messages.value.map { msg ->
                                     if (msg.id == aiMessageId) {
                                         msg.copy(
                                             content = accumulatedContent,
@@ -624,7 +660,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 streamToolCalls = event.calls
                             }
                             is StreamEvent.Error -> {
-                                currentList = currentList.map { msg ->
+                                currentList = messages.value.map { msg ->
                                     if (msg.id == aiMessageId) {
                                         msg.copy(
                                             content = event.message,
@@ -643,7 +679,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                     calculatedDuration = if (accumulatedThoughts.isNotEmpty()) duration else 0
                                 }
                                 // 完成后根据用户是否干预过，自动折叠 Thinking
-                                currentList = currentList.map { msg ->
+                                currentList = messages.value.map { msg ->
                                     if (msg.id == aiMessageId) {
                                         msg.copy(
                                             isStillThinking = streamToolCalls.isNotEmpty(),
@@ -677,10 +713,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         // 逐个执行工具
                         for (toolCall in streamToolCalls) {
                             val displayCallId = "${toolCall.id}_${System.currentTimeMillis()}"
+                            val parsedArgs = llmClient.parseArgumentsMap(toolCall.argumentsJson)
+                            val customActionText = if (toolCall.name.lowercase().contains("web_search")) {
+                                val query = parsedArgs?.get("query")?.toString() ?: ""
+                                if (query.isNotEmpty()) "搜索网页：$query" else "搜索网页"
+                            } else {
+                                translateToolName(toolCall.name)
+                            }
                             val runningCall = McpCall(
                                 id = displayCallId,
                                 toolName = toolCall.name,
-                                actionText = translateToolName(toolCall.name),
+                                actionText = customActionText,
                                 status = McpStatus.RUNNING,
                                 input = toolCall.argumentsJson
                             )
@@ -728,6 +771,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             )
                         }
 
+                        val executedToolsStr = streamToolCalls.joinToString("、") { 
+                            val parsedArgs = llmClient.parseArgumentsMap(it.argumentsJson)
+                            if (it.name.lowercase().contains("web_search")) {
+                                val query = parsedArgs?.get("query")?.toString() ?: ""
+                                if (query.isNotEmpty()) "搜索网页：$query" else "搜索网页"
+                            } else {
+                                translateToolName(it.name)
+                            }
+                        }
+                        accumulatedThoughts += "\n\n💡 *（已在此处调用接口感知状态：$executedToolsStr）*\n\n"
+                        currentList = messages.value.map { msg ->
+                            if (msg.id == aiMessageId) {
+                                msg.copy(thoughts = accumulatedThoughts)
+                            } else {
+                                msg
+                            }
+                        }
+                        messages.value = currentList
+
                         // 保存当前更新了 McpCalls 的消息到文件
                         saveMessagesAsync(sessionId, currentList)
 
@@ -774,15 +836,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private fun translateToolName(name: String): String {
         val lowName = name.lowercase()
         return when {
-            lowName.contains("get_location") || lowName.contains("current_location") -> "获取地理位置"
+            lowName.contains("get_location") || lowName.contains("current_location") -> "感知当前地理位置"
+            lowName.contains("get_weather_forecast") || lowName.contains("forecast") -> "获取未来天气预报"
+            lowName.contains("get_live_weather") || lowName.contains("weather") -> "获取当前气象状况"
+            lowName.contains("get_environment_light") || lowName.contains("light") -> "检测环境光照强度"
+            lowName.contains("get_battery_status") || lowName.contains("battery") -> "读取设备电池状态"
+            lowName.contains("get_bluetooth_status") || lowName.contains("bluetooth") -> "检测蓝牙设备连接"
+            lowName.contains("get_activity_state") || lowName.contains("activity") -> "识别系统运动状态"
+            lowName.contains("get_health_data") || lowName.contains("health") -> "读取健康中心数据"
             lowName.contains("heart_rate") -> "调取实时心率"
             lowName.contains("steps") -> "查询今日步数"
             lowName.contains("sleep") -> "分析睡眠质量"
             lowName.contains("blood_pressure") -> "调取血压记录"
             lowName.contains("time") -> "同步系统时间"
             lowName.contains("physical_perception") -> "感知身体与环境状态"
-            lowName.contains("weather") -> "获取天气预报"
-            lowName.contains("web_search") || lowName.contains("google_search") -> "搜索实时信息"
+            lowName.contains("web_search") || lowName.contains("google_search") -> "搜索实时互联网信息"
             else -> "执行操作: ${name.substringAfterLast(".")}"
         }
     }
@@ -911,6 +979,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun setMockLocation(location: String) {
         perceptionManager.locationProvider.setMockLocation(location)
         mockLocation.value = location
+    }
+
+    // --- 草稿箱记忆机制 ---
+    fun getDraft(sessionId: String): String {
+        return sessionDrafts[sessionId] ?: ""
+    }
+
+    fun saveDraft(sessionId: String, draft: String) {
+        if (draft.isEmpty()) {
+            clearDraft(sessionId)
+        } else {
+            sessionDrafts[sessionId] = draft
+            prefs.edit().putString("draft_$sessionId", draft).apply()
+        }
+    }
+
+    fun clearDraft(sessionId: String) {
+        sessionDrafts.remove(sessionId)
+        prefs.edit().remove("draft_$sessionId").apply()
     }
 
     override fun onCleared() {

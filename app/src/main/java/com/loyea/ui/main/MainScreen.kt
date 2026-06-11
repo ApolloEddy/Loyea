@@ -64,6 +64,9 @@ fun MainScreen(
     onUserNameChange: (String) -> Unit = {},
     useSystemTime: Boolean = false,
     onToggleSystemTime: () -> Unit = {},
+    getDraft: (String) -> String,
+    saveDraft: (String, String) -> Unit,
+    clearDraft: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -121,6 +124,10 @@ fun MainScreen(
                 onStopResponse = onStopResponse,
                 onToggleThoughts = onToggleThoughts,
                 onNewChatClick = onNewChatClick,
+                currentSessionId = currentSessionId,
+                getDraft = getDraft,
+                saveDraft = saveDraft,
+                clearDraft = clearDraft,
                 onMenuClick = {
                     val currentTime = System.currentTimeMillis()
                     if (currentTime - lastMenuClickTime > 800L) {
@@ -406,7 +413,7 @@ fun SidebarContent(
                         color = MaterialTheme.colorScheme.onBackground
                     )
                     Text(
-                        text = if (isEn) "Inject current system time" else "向AI注入系统真实时间",
+                        text = if (isEn) "Inject current system time" else "注入系统实时时间",
                         fontSize = 10.sp,
                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
                     )
@@ -444,13 +451,13 @@ fun SidebarContent(
                     modifier = Modifier.weight(1f)
                 ) {
                     Text(
-                        text = if (isEn) "Personas" else "角色酒馆",
+                        text = if (isEn) "Personas" else "人格舱",
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onBackground
                     )
                     Text(
-                        text = if (isEn) "Manage AI characters" else "管理您的AI角色与设定",
+                        text = if (isEn) "Manage characters" else "管理您的角色与设定",
                         fontSize = 10.sp,
                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
                     )
@@ -583,7 +590,10 @@ fun MainScreenPreview() {
             activeCharacterCard = defaultChar,
             characterCardList = listOf(defaultChar),
             onTavernClick = {},
-            onNavigateToSettings = {}
+            onNavigateToSettings = {},
+            getDraft = { "" },
+            saveDraft = { _, _ -> },
+            clearDraft = {}
         )
     }
 }

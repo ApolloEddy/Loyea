@@ -82,22 +82,24 @@ class LlmClient {
         }
 
         try {
+            val processedMessages = messages
+
             // 根据深度思考状态，对 DeepSeek 进行智能路由（仅在开启智能模型路由时生效）
             val targetModel = resolveTargetModel(config)
 
             val requestJson = JsonObject().apply {
                 addProperty("model", targetModel)
-                add("messages", toProviderMessages(messages))
+                add("messages", toProviderMessages(processedMessages))
                 addProperty("stream", true)
                 if (tools.isNotEmpty()) {
                     add("tools", toProviderTools(tools))
                     addProperty("tool_choice", "auto")
                 }
                 
-                // 开启联网搜索 (支持常见中转和平台如 SiliconFlow, Moonshot 兼容等字段)
-                if (config.enableSearch) {
+                // 开启联网搜索 (非独立搜索时才写入 web_search 参数，避免中转冲突；排除 MiMo 避免 401 鉴权问题)
+                if (config.enableSearch && !config.useIndependentSearch && !config.provider.equals("MiMo", ignoreCase = true)) {
                     addProperty("web_search", true)
-                    addProperty("enable_search", true) // 部分平台用这个
+                    addProperty("enable_search", true)
                 }
             }
 
@@ -340,7 +342,7 @@ class LlmClient {
             val requestJson = JsonObject().apply {
                 addProperty("model", targetModel)
                 add("messages", gson.toJsonTree(chatHistory))
-                if (config.enableSearch) {
+                if (config.enableSearch && !config.provider.equals("MiMo", ignoreCase = true)) {
                     addProperty("web_search", true)
                 }
             }
@@ -538,15 +540,17 @@ class LlmClient {
         }
 
         try {
+            val processedMessages = messages
+
             val requestJson = JsonObject().apply {
                 addProperty("model", resolveTargetModel(config))
-                add("messages", toProviderMessages(messages))
+                add("messages", toProviderMessages(processedMessages))
                 addProperty("stream", stream)
                 if (tools.isNotEmpty()) {
                     add("tools", toProviderTools(tools))
                     addProperty("tool_choice", "auto")
                 }
-                if (config.enableSearch) {
+                if (config.enableSearch && !config.useIndependentSearch && !config.provider.equals("MiMo", ignoreCase = true)) {
                     addProperty("web_search", true)
                     addProperty("enable_search", true)
                 }
@@ -655,6 +659,222 @@ class LlmClient {
             element.asString
         } else {
             gson.toJson(element)
+        }
+    }
+
+    suspend fun performIndependentWebSearch(config: com.loyea.ui.settings.ApiConfig, query: String): String = withContext(Dispatchers.IO) {
+        if (config.searchApiKey.isBlank()) return@withContext "\n\n[联网搜索失败: 未配置搜索 API Key]\n\n"
+        
+        val baseUrl = config.searchApiUrl.trim().removeSuffix("/")
+        val finalUrl = if (config.searchProvider.equals("Tavily", ignoreCase = true)) {
+            "$baseUrl/search"
+        } else {
+            baseUrl
+        }
+
+        val requestJson = JsonObject().apply {
+            addProperty("api_key", config.searchApiKey)
+            addProperty("query", query)
+            addProperty("search_depth", "basic")
+            addProperty("include_answer", false)
+        }
+
+        val requestBody = gson.toJson(requestJson).toRequestBody(mediaType)
+        val request = Request.Builder()
+            .url(finalUrl)
+            .post(requestBody)
+            .addHeader("Content-Type", "application/json")
+            .build()
+
+        try {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    return@withContext "\n\n[联网搜索失败: HTTP ${response.code}]\n\n"
+                }
+                val bodyStr = response.body?.string() ?: return@withContext "\n\n[联网搜索失败: 空内容]\n\n"
+                val json = gson.fromJson(bodyStr, JsonObject::class.java)
+                val results = json.getAsJsonArray("results")
+                if (results == null || results.size() == 0) {
+                    return@withContext "\n\n[联网搜索结束: 未找到相关实时网页结果]\n\n"
+                }
+
+                val sb = StringBuilder()
+                sb.append("\n\n=== [联网搜索实时参考资料] ===\n")
+                var count = 1
+                for (elem in results) {
+                    val obj = elem.asJsonObject
+                    val title = obj.get("title")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                    val url = obj.get("url")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                    val content = obj.get("content")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                    sb.append("${count}. 标题: $title\n   链接: $url\n   摘要: $content\n\n")
+                    count++
+                    if (count > 5) break
+                }
+                sb.append("请优先结合以上联网搜索到的最新实时信息，回答用户的提问。如果上述网页信息与用户提问无关，请忽略。\n=========================\n\n")
+                sb.toString()
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("LlmClient", "Independent web search error", e)
+            "\n\n[联网搜索网络错误: ${e.message}]\n\n"
+        }
+    }
+
+    suspend fun performFreeWebSearch(query: String): String = withContext(Dispatchers.IO) {
+        val client = okhttp3.OkHttpClient.Builder()
+            .connectTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+            
+        val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
+        val results = mutableListOf<String>()
+        var sourceUsed = ""
+
+        // 1. 第一尝试：Bing 搜索 (国内外检索质量最高且抗反爬极佳)
+        try {
+            val url = "https://cn.bing.com/search?q=$encodedQuery"
+            val request = okhttp3.Request.Builder()
+                .url(url)
+                .addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                .addHeader("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+                .build()
+                
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val html = response.body?.string() ?: ""
+                    val blockRegex = Regex("<li class=\"b_algo\">([\\s\\S]*?)</li>")
+                    val aRegex = Regex("<a[^>]*href=\"(http[s]?://.*?)\"[^>]*>([\\s\\S]*?)</a>")
+                    val pRegex = Regex("<p>([\\s\\S]*?)</p>")
+                    
+                    var count = 1
+                    blockRegex.findAll(html).forEach { match ->
+                        val block = match.groupValues[1]
+                        val aMatch = aRegex.find(block)
+                        val href = aMatch?.groupValues?.get(1) ?: ""
+                        
+                        // 排除 Bing 内部的搜索或者无关链接
+                        if (href.isNotEmpty() && !href.contains("bing.com/") && !href.contains("microsoft.com/")) {
+                            var title = aMatch?.groupValues?.get(2) ?: ""
+                            title = title.replace(Regex("<[^>]*>"), "").trim()
+                            
+                            var snippet = pRegex.find(block)?.groupValues?.get(1) ?: ""
+                            snippet = snippet.replace(Regex("<[^>]*>"), "").trim()
+                            
+                            if (snippet.isNotEmpty()) {
+                                results.add("${count}. 标题: ${title.ifBlank { "无标题" }}\n   链接: $href\n   摘要: $snippet")
+                                count++
+                            }
+                        }
+                        if (count > 5) return@forEach
+                    }
+                    if (results.size >= 2) {
+                        sourceUsed = "Bing"
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("LlmClient", "Bing search error", e)
+        }
+
+        // 2. 第二尝试：如果 Bing 结果不足，尝试 360 搜索 (国内直连备用，零门槛防爬)
+        if (results.size < 2) {
+            results.clear()
+            try {
+                val url = "https://www.so.com/s?q=$encodedQuery"
+                val request = okhttp3.Request.Builder()
+                    .url(url)
+                    .addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                    .build()
+                    
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val html = response.body?.string() ?: ""
+                        val blockRegex = Regex("<li class=\"res-list\">([\\s\\S]*?)</li>")
+                        val aRegex = Regex("<a[^>]*href=\"(http[s]?://.*?)\"[^>]*>([\\s\\S]*?)</a>")
+                        val descRegex = Regex("<p[^>]*class=\"[^\"]*(?:desc|rich-desc)[^\"]*\"[^>]*>([\\s\\S]*?)</p>")
+                        
+                        var count = 1
+                        blockRegex.findAll(html).forEach { match ->
+                            val block = match.groupValues[1]
+                            val aMatch = aRegex.find(block)
+                            val href = aMatch?.groupValues?.get(1) ?: ""
+                            
+                            if (href.isNotEmpty()) {
+                                var title = aMatch?.groupValues?.get(2) ?: ""
+                                title = title.replace(Regex("<[^>]*>"), "").trim()
+                                
+                                var snippet = descRegex.find(block)?.groupValues?.get(1) ?: ""
+                                snippet = snippet.replace(Regex("<[^>]*>"), "").trim()
+                                
+                                if (snippet.isNotEmpty()) {
+                                    results.add("${count}. 标题: ${title.ifBlank { "无标题" }}\n   链接: $href\n   摘要: $snippet")
+                                    count++
+                                }
+                            }
+                            if (count > 5) return@forEach
+                        }
+                        if (results.size >= 2) {
+                            sourceUsed = "360搜索"
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("LlmClient", "360 search error", e)
+            }
+        }
+
+        // 3. 第三尝试：回退到 DuckDuckGo HTML 搜索
+        if (results.size < 2) {
+            results.clear()
+            try {
+                val url = "https://html.duckduckgo.com/html/?q=$encodedQuery"
+                val request = okhttp3.Request.Builder()
+                    .url(url)
+                    .addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36")
+                    .build()
+                    
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val html = response.body?.string() ?: ""
+                        val blockRegex = Regex("<div class=\"result__body\">([\\s\\S]*?)</div>")
+                        val urlRegex = Regex("<a class=\"result__url\" href=\"(.*?)\"")
+                        val titleARegex = Regex("<a class=\"result__title-a\" href=\".*?\">(.*?)</a>")
+                        val snippetRegex = Regex("<a class=\"result__snippet\" href=\".*?\">([\\s\\S]*?)</a>")
+                        
+                        var count = 1
+                        blockRegex.findAll(html).forEach { match ->
+                            val block = match.groupValues[1]
+                            val href = urlRegex.find(block)?.groupValues?.get(1)?.let { java.net.URLDecoder.decode(it, "UTF-8") } ?: ""
+                            val realUrl = if (href.contains("uddg=")) href.substringAfter("uddg=").substringBefore("&") else href
+                            
+                            var title = titleARegex.find(block)?.groupValues?.get(1) ?: ""
+                            title = title.replace(Regex("<[^>]*>"), "").trim()
+                            
+                            var snippet = snippetRegex.find(block)?.groupValues?.get(1) ?: ""
+                            snippet = snippet.replace(Regex("<[^>]*>"), "").trim()
+                            
+                            if (realUrl.isNotEmpty() && snippet.isNotEmpty()) {
+                                results.add("${count}. 标题: ${title.ifBlank { "无标题" }}\n   链接: $realUrl\n   摘要: $snippet")
+                                count++
+                            }
+                            if (count > 5) return@forEach
+                        }
+                        if (results.size >= 2) {
+                            sourceUsed = "DuckDuckGo"
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("LlmClient", "DuckDuckGo search error", e)
+            }
+        }
+
+        // 最终拼装结果
+        if (results.isEmpty()) {
+            "\n\n[联网搜索结束: 未在任何公共检索源（Bing/360/DuckDuckGo）中提取到关于该关键词的实时参考网页，可能由于网络超时或被反爬拦截]\n\n"
+        } else {
+            "\n\n=== [联网搜索实时参考资料 (免 Key 公共检索 - 源自 $sourceUsed)] ===\n" + 
+            results.joinToString("\n\n") + 
+            "\n=========================\n\n"
         }
     }
 }

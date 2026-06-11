@@ -58,11 +58,19 @@ fun McpCallItem(
 
     val toolEmoji = when {
         mcpCall.toolName.contains("location") -> "📍"
+        mcpCall.toolName.contains("forecast") -> "📅"
+        mcpCall.toolName.contains("weather") -> "🌤️"
+        mcpCall.toolName.contains("light") -> "💡"
+        mcpCall.toolName.contains("battery") -> "🔋"
+        mcpCall.toolName.contains("bluetooth") -> "📡"
+        mcpCall.toolName.contains("activity") -> "🏃"
+        mcpCall.toolName.contains("health") -> "🏥"
         mcpCall.toolName.contains("heart") -> "❤️"
         mcpCall.toolName.contains("step") -> "👣"
         mcpCall.toolName.contains("sleep") -> "🌙"
+        mcpCall.toolName.contains("blood_pressure") -> "🩸"
         mcpCall.toolName.contains("time") -> "🕒"
-        mcpCall.toolName.contains("weather") -> "🌤️"
+        mcpCall.toolName.contains("web_search") || mcpCall.toolName.contains("google_search") -> "🔍"
         else -> "🛠️"
     }
 

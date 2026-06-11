@@ -8,6 +8,12 @@ class PhysicalContextManager(context: Context) {
     val watchProvider: WatchProvider = MockWatchProvider(context)
     private val timeProvider = TimeProvider()
     private val healthProvider = HealthProvider(context)
+    
+    // 新增多传感器和天气组件
+    private val environmentProvider = EnvironmentProvider(context)
+    private val bluetoothProvider = BluetoothProvider(context)
+    private val activityProvider = ActivityProvider(context)
+    private val weatherProvider = WeatherProvider(context)
 
     suspend fun buildPhysicalContextString(): String {
         Log.d("Perception", "Building physical context...")
@@ -20,7 +26,27 @@ class PhysicalContextManager(context: Context) {
         val loc = locationProvider.getCurrentLocation()
         sb.append("Location: $loc\n")
         
-        // 3. Health Context
+        // 3. Weather Context
+        val weather = weatherProvider.getLiveWeather(loc)
+        sb.append("Weather: $weather\n")
+
+        // 4. Activity State Context
+        val activity = activityProvider.getCurrentActivityState()
+        sb.append("Activity State: $activity\n")
+
+        // 5. Environment Light Context
+        val light = environmentProvider.getLightIntensity()
+        sb.append("Environment Light: $light\n")
+
+        // 6. Battery Status Context
+        val battery = environmentProvider.getBatteryStatus()
+        sb.append("Battery Status: $battery\n")
+
+        // 7. Bluetooth Devices Context
+        val bluetooth = bluetoothProvider.getBluetoothStatus()
+        sb.append("Bluetooth: $bluetooth\n")
+        
+        // 8. Health Context
         val hrStatus = healthProvider.getHeartRateStatus()
         
         // Logical Fallback: If real data is unavailable (Denied or No Data), check simulation

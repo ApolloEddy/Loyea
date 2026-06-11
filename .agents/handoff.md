@@ -1,24 +1,27 @@
-# Handoff Report
+# 项目进度快照 (.agents/HANDOFF.md)
 
-## Observation
-- 已在 `.agents/ORIGINAL_REQUEST.md` 中完整记录了用户的需求。
-- 已初始化 `.agents/BRIEFING.md` 并标记项目状态为 `in progress`。
-- 已成功拉起项目协调器（Orchestrator），Conversation ID: `b480e3f6-9f5e-4f57-a2f3-c3a7d0c63296`。
-- 已成功调度两个定时 Cron 任务：
-  - Cron 1: Progress Reporting (`*/8 * * * *`)，用于自动汇报进度。
-  - Cron 2: Liveness Check (`*/10 * * * *`)，用于监控协调器活性。
+## 已完成工作
+1.  **物理感知授权修复**：
+    *   在 `AndroidManifest.xml` 中添加了全面的 `Health Connect` 权限及 `HealthRationaleActivity` 注册，解决了 Android 16 系统级识别问题。
+    *   实现了 proactive 权限检查，确保地理位置权限在必要时主动弹出。
+2.  **交互体验精致化**：
+    *   实现了发送时自动 trim 输入文本。
+    *   在 ChatUI 中增加了 Markdown 反引号转义，防止颜文字导致渲染异常。
+    *   优化了输入法避让布局，解决了输入框遮挡问题。
+3.  **MCP 与 UI 交互升级**：
+    *   添加了 AI 回复打断功能（Stop 按钮）。
+    *   将硬核的工具函数名翻译为语义化标题（如“查询今日步数”）。
+    *   美化 MCP 工具执行结果，自动解析 JSON 为易读的纯文本格式。
+    *   引入了智能折叠逻辑：自动折叠已执行完毕的工具卡片和推理链。
 
-## Logic Chain
-- Sentinel 仅作为监控、记录和审核的守护者，不直接修改代码或做出技术性决策。
-- 所有具体实现将由项目协调器（Orchestrator）及其派发的 Worker 子代理完成。
-- 当 Orchestrator 宣布任务完成并向 Sentinel 申报胜利时，Sentinel 将会触发独立的 Victory Auditor 进行三阶段的合规性与功能审核，确认无误后才可正式标记为 `complete`。
+## 待完成工作
+1.  **多传感器能力拓展**：
+    *   接入 `EnvironmentProvider` (光感/电量)。
+    *   接入 `BluetoothProvider` (感知设备连接)。
+    *   接入 `ActivityProvider` (利用 Google Activity Recognition 识别步行/驾驶)。
+2.  **API 模板升级**：
+    *   在设置页 API 配置板块中新增 **MiMo API** 专用模板及其联网搜索功能开关。
+    *   集成联网搜索工具 (web_search) 的参数解析。
 
-## Caveats
-- Android 的物理感知及后台任务可能受 Android 系统本身 API 版本及权限限制影响（如 Location 权限），需要在具体代码中留好优雅的回退及 Mock 机制。
-- 所有的沟通及输出必须遵守中文规则。
-
-## Conclusion
-- 初始化成功，Orchestrator 已开始处理任务，监控 Cron 已就绪。
-
-## Verification Method
-- 通过检查监控 Cron 运行的 log 以及 `progress.md` 文件内容，可以确认 Orchestrator 的当前进度。
+## 下一步行动建议
+项目已处于高可维护性状态。建议 Antigravity Agent 接手后直接基于上述“待完成工作”进行模块化编写，无需再纠结权限适配问题。

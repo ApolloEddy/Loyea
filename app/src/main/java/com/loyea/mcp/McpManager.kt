@@ -283,6 +283,10 @@ class McpManager(private val context: Context) {
         return activeClients[serverId]?.discoveredTools?.value ?: emptyList()
     }
 
+    fun registerWebSearchProvider(provider: suspend (String) -> String) {
+        perceptionServer.webSearchProvider = provider
+    }
+
     internal fun registerClientForTest(id: String, client: McpClient) {
         activeClients[id] = client
     }

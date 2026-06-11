@@ -68,7 +68,11 @@ data class ApiConfig(
     val isEnabled: Boolean = true,
     val enableSearch: Boolean = false,
     val enableReasoning: Boolean = true,
-    val enableSmartRouting: Boolean = true
+    val enableSmartRouting: Boolean = true,
+    val useIndependentSearch: Boolean = false,
+    val searchProvider: String = "Tavily",
+    val searchApiUrl: String = "https://api.tavily.com",
+    val searchApiKey: String = ""
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -103,6 +107,11 @@ fun SettingsScreen(
     modifier: Modifier = Modifier
 ) {
     var subPage by remember { mutableStateOf(SettingsSubPage.MAIN) }
+
+    // 拦截系统物理/手势返回键：若处于二级页面则退回至设置主页；已处于主页则放行以退回会话页
+    androidx.activity.compose.BackHandler(enabled = subPage != SettingsSubPage.MAIN) {
+        subPage = SettingsSubPage.MAIN
+    }
 
     // 使用 AnimatedContent 实现极具滑移动画质感的左右推拉过场
     AnimatedContent(
@@ -792,18 +801,26 @@ fun AddOrEditSheet(
     var enableReasoning by remember { mutableStateOf(editingConfig?.enableReasoning ?: true) }
     var enableSmartRouting by remember { mutableStateOf(editingConfig?.enableSmartRouting ?: true) }
 
+    var useIndependentSearch by remember { mutableStateOf(editingConfig?.useIndependentSearch ?: false) }
+    var searchProvider by remember { mutableStateOf(editingConfig?.searchProvider ?: "Tavily") }
+    var searchApiUrlInput by remember { mutableStateOf(editingConfig?.searchApiUrl ?: "https://api.tavily.com") }
+    var searchApiKeyInput by remember { mutableStateOf(editingConfig?.searchApiKey ?: "") }
+    var searchProviderDropdownExpanded by remember { mutableStateOf(false) }
+    var showSearchApiKey by remember { mutableStateOf(false) }
+
     var showApiKey by remember { mutableStateOf(false) }
     var providerDropdownExpanded by remember { mutableStateOf(false) }
 
     val providersList = listOf(
         "DeepSeek", "OpenAI", 
-        "Kimi (Moonshot)", "Qwen (千问)", "MiniMax", "Ollama (Local)", "Groq", "Custom"
+        "MiMo", "Kimi (Moonshot)", "Qwen (千问)", "MiniMax", "Ollama (Local)", "Groq", "Custom"
     )
 
     val recommendedModels = remember(selectedProvider) {
         when (selectedProvider) {
             "OpenAI" -> listOf("gpt-4o", "gpt-4o-mini", "o1-mini", "o3-mini")
             "DeepSeek" -> listOf("deepseek-v4-pro", "deepseek-v4-flash")
+            "MiMo" -> listOf("mimo-v2.5-pro", "mimo-v2.5-pro-ultraspeed")
             "Kimi (Moonshot)" -> listOf("moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k")
             "Qwen (千问)" -> listOf("qwen-plus", "qwen-turbo", "qwen-max")
             "MiniMax" -> listOf("abab6.5g-alias", "abab7-chat")
@@ -919,6 +936,10 @@ fun AddOrEditSheet(
                                     "DeepSeek" -> {
                                         apiUrlInput = "https://api.deepseek.com/v1"
                                         modelInput = "deepseek-v4-pro"
+                                    }
+                                    "MiMo" -> {
+                                        apiUrlInput = "https://api.xiaomimimo.com/v1"
+                                        modelInput = "mimo-v2.5-pro"
                                     }
                                     "Kimi (Moonshot)" -> {
                                         apiUrlInput = "https://api.moonshot.cn/v1"
@@ -1093,6 +1114,161 @@ fun AddOrEditSheet(
             )
         }
 
+        // 独立联网搜索配置模块
+        androidx.compose.animation.AnimatedVisibility(
+            visible = enableSearch,
+            enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
+            exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkVertically()
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f))
+                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // 开关：使用独立搜索 API
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (isEn) "Use Independent Search API" else "使用独立搜索 API",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Text(
+                            text = if (isEn) "Fetch search results via custom search API before sending to LLM" else "在发送大模型前，先通过自定义搜索 API 检索信息",
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                        )
+                    }
+                    Switch(
+                        checked = useIndependentSearch,
+                        onCheckedChange = { useIndependentSearch = it },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = MaterialTheme.colorScheme.primary
+                        )
+                    )
+                }
+
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = useIndependentSearch,
+                    enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
+                    exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkVertically()
+                ) {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+
+                        // 搜索引擎 Provider 选择
+                        Column {
+                            Text(
+                                text = "SEARCH API PROVIDER",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                                modifier = Modifier.padding(bottom = 4.dp)
+                            )
+                            Box(modifier = Modifier.fillMaxWidth()) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(6.dp))
+                                        .clickable { searchProviderDropdownExpanded = true }
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(text = searchProvider, fontSize = 14.sp, color = MaterialTheme.colorScheme.onBackground)
+                                    Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, tint = MaterialTheme.colorScheme.onBackground)
+                                }
+
+                                DropdownMenu(
+                                    expanded = searchProviderDropdownExpanded,
+                                    onDismissRequest = { searchProviderDropdownExpanded = false },
+                                    modifier = Modifier.fillMaxWidth(0.8f).background(MaterialTheme.colorScheme.surface)
+                                ) {
+                                    listOf("Tavily", "Custom").forEach { prov ->
+                                        DropdownMenuItem(
+                                            text = { Text(prov, color = MaterialTheme.colorScheme.onBackground) },
+                                            onClick = {
+                                                searchProvider = prov
+                                                searchProviderDropdownExpanded = false
+                                                if (prov == "Tavily") {
+                                                    searchApiUrlInput = "https://api.tavily.com"
+                                                }
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Search API Base URL 输入框
+                        Column {
+                            Text(
+                                text = "SEARCH API BASE URL",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                                modifier = Modifier.padding(bottom = 4.dp)
+                            )
+                            OutlinedTextField(
+                                value = searchApiUrlInput,
+                                onValueChange = { searchApiUrlInput = it },
+                                singleLine = true,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                                ),
+                                textStyle = TextStyle(color = MaterialTheme.colorScheme.onBackground, fontSize = 14.sp),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+
+                        // Search API Key 输入框
+                        Column {
+                            Text(
+                                text = "SEARCH API KEY",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                                modifier = Modifier.padding(bottom = 4.dp)
+                            )
+                            OutlinedTextField(
+                                value = searchApiKeyInput,
+                                onValueChange = { searchApiKeyInput = it },
+                                singleLine = true,
+                                visualTransformation = if (showSearchApiKey) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                                trailingIcon = {
+                                    val image = if (showSearchApiKey) Icons.Default.Visibility else Icons.Default.VisibilityOff
+                                    IconButton(onClick = { showSearchApiKey = !showSearchApiKey }) {
+                                        Icon(imageVector = image, contentDescription = null, tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f))
+                                    }
+                                },
+                                placeholder = { Text(text = "Enter Search API Key", color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f), fontSize = 14.sp) },
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                                ),
+                                textStyle = TextStyle(color = MaterialTheme.colorScheme.onBackground, fontSize = 14.sp),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         // 深度思考开关
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1164,7 +1340,11 @@ fun AddOrEditSheet(
                     isEnabled = true,
                     enableSearch = enableSearch,
                     enableReasoning = enableReasoning,
-                    enableSmartRouting = enableSmartRouting
+                    enableSmartRouting = enableSmartRouting,
+                    useIndependentSearch = useIndependentSearch,
+                    searchProvider = searchProvider,
+                    searchApiUrl = searchApiUrlInput,
+                    searchApiKey = searchApiKeyInput
                 )
                 onSave(newConfig)
             },
@@ -1296,11 +1476,11 @@ fun ThemeSettingsLayout(
                         .background(MaterialTheme.colorScheme.surface)
                 ) {
                     val colorOptions = listOf(
-                        Triple("", if (isEn) "Default Container" else "系统默认气泡", Color.Transparent),
-                        Triple("#EADFD3", if (isEn) "Loyea Warm Amber" else "琥珀沙黄 (Loyea 风格)", Color(0xFFEADFD3)),
-                        Triple("#F0F0F2", if (isEn) "ChatGPT Gray" else "莫兰迪灰 (ChatGPT 风格)", Color(0xFFF0F0F2)),
+                        Triple("", if (isEn) "Default" else "系统默认气泡", Color.Transparent),
+                        Triple("#EADFD3", if (isEn) "Warm Amber" else "琥珀沙黄", Color(0xFFEADFD3)),
+                        Triple("#F0F0F2", if (isEn) "Morandi Gray" else "莫兰迪灰", Color(0xFFF0F0F2)),
                         Triple("#E2F1E8", if (isEn) "Emerald Green" else "微光浅绿", Color(0xFFE2F1E8)),
-                        Triple("#DCEAF5", if (isEn) "Loyea Blue" else "极简天蓝 (Loyea 风格)", Color(0xFFDCEAF5))
+                        Triple("#DCEAF5", if (isEn) "Minimal Blue" else "极简天蓝", Color(0xFFDCEAF5))
                     )
 
                     colorOptions.forEachIndexed { index, option ->
@@ -2008,7 +2188,7 @@ fun PhysicalSensorLayout(
                                     color = MaterialTheme.colorScheme.onBackground
                                 )
                                 Text(
-                                    text = if (isEn) "Sync from OPPO Health / OHealth" else "同步来自 OPPO健康 / 欢太健康的数据",
+                                    text = if (isEn) "Sync health data from other apps" else "同步来自其他健康应用的数据",
                                     fontSize = 11.sp,
                                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
                                 )
@@ -2023,7 +2203,7 @@ fun PhysicalSensorLayout(
                 }
                 
                 Text(
-                    text = if (isEn) "Tips: Ensure OPPO Health has enabled 'Health Connect' sync in its settings." else "提示：请确保“OPPO健康”或“欢太健康”App 内已开启“健康连接”同步选项。",
+                    text = if (isEn) "Tips: Ensure your health app has enabled 'Health Connect' write access." else "提示：请确保您的健康应用（如系统健康、运动应用等）已开启“健康连接”的写入权限与数据同步选项。",
                     fontSize = 10.sp,
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
                     modifier = Modifier.padding(horizontal = 4.dp)

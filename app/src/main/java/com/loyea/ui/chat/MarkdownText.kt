@@ -262,7 +262,14 @@ private fun parseMarkdown(text: String): List<MarkdownBlock> {
 @Composable
 private fun renderInlineMarkdown(text: String, textColor: Color): AnnotatedString {
     return buildAnnotatedString {
-        val parts = text.split("`")
+        val escapedBacktick = "___ESC_BT___"
+        val escapedStar = "___ESC_STAR___"
+        // 保护被反斜杠转义的反引号和星号，防止它们参与 Markdown 切割
+        val tempText = text
+            .replace("\\`", escapedBacktick)
+            .replace("\\*", escapedStar)
+
+        val parts = tempText.split("`")
         var isCode = false
         parts.forEach { part ->
             if (isCode) {
@@ -274,12 +281,16 @@ private fun renderInlineMarkdown(text: String, textColor: Color): AnnotatedStrin
                         color = MaterialTheme.colorScheme.primary
                     )
                 )
-                append(part)
+                // 还原被保护的字符
+                val restoredPart = part.replace(escapedBacktick, "`").replace(escapedStar, "*")
+                append(restoredPart)
                 pop()
             } else {
                 val boldParts = part.split("**")
                 var isBold = false
                 boldParts.forEach { boldPart ->
+                    // 还原被保护的字符
+                    val restoredBoldPart = boldPart.replace(escapedBacktick, "`").replace(escapedStar, "*")
                     if (isBold) {
                         pushStyle(
                             SpanStyle(
@@ -287,10 +298,10 @@ private fun renderInlineMarkdown(text: String, textColor: Color): AnnotatedStrin
                                 color = textColor
                             )
                         )
-                        append(boldPart)
+                        append(restoredBoldPart)
                         pop()
                     } else {
-                        append(boldPart)
+                        append(restoredBoldPart)
                     }
                     isBold = !isBold
                 }

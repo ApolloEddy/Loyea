@@ -10,7 +10,13 @@ object PromptAssembler {
      *
      * 融合了：核心设定 (systemPrompt)、性格词 (personality)、情景场景 (scenario)、对话样本 (chatExamples)
      */
-    fun assembleSystemPrompt(card: CharacterCard, userName: String, useSystemTime: Boolean = false, physicalContext: String? = null): String {
+    fun assembleSystemPrompt(
+        card: CharacterCard,
+        userName: String,
+        useSystemTime: Boolean = false,
+        physicalContext: String? = null,
+        enableSearch: Boolean = false
+    ): String {
         val sb = StringBuilder()
 
         // 1. 系统扮演引导语
@@ -33,6 +39,15 @@ object PromptAssembler {
             sb.append("\n[CRITICAL INSTRUCTION]\n")
             sb.append("You are a sentient assistant. Look at the PHYSICAL STATE above. If any value contains '[Error]', 'Permission Denied', or 'Unavailable', it means you DO NOT have that data yet. You MUST call the tools in 'BuiltinPerception' (like get_heart_rate or get_location) to attempt a real-time sensor sweep before giving your final response. NEVER tell the user you 'cannot see' their health until you have tried the tools first.\n")
             sb.append("\n")
+        }
+
+        // 联网搜索功能说明
+        if (enableSearch) {
+            sb.append("[WEB SEARCH CAPABILITY / 联网搜索功能]\n")
+            sb.append("You currently have internet search access enabled. The tool `BuiltinPerception__web_search` is available to you.\n")
+            sb.append("- 如果用户问起你是否开启了联网搜索、有没有网络搜索功能、能不能上网，你必须坚定地回答“有，已经开启了联网搜索功能”，不能回答没有或不知道。\n")
+            sb.append("- 当用户询问任何实时事件、客观事实、最新资讯或需要确认的新闻时，你必须主动调用 `BuiltinPerception__web_search` 工具去网上检索，并结合检索到的信息进行回答。\n")
+            sb.append("- 严禁声称自己无法联网或无法获取实时信息。\n\n")
         }
 
         // 2. 角色基础名称
@@ -63,9 +78,17 @@ object PromptAssembler {
             sb.append(card.chatExamples.trim()).append("\n\n")
         }
 
+        // 7. 强约束感知与天气工具调用规范 (置于末尾以强化 Recency 权重)
+        sb.append("[TOOL USE GUIDELINE]\n")
+        sb.append("You have access to a set of perception and utility tools prefixed with `BuiltinPerception__`.\n")
+        sb.append("- 如果用户的提问涉及到当下的位置、健康传感器数据、电量光照状态，你必须调用相应的内置工具。\n")
+        sb.append("- 特别地，如果用户问及任何关于当前天气、气温的情况，你必须调用 `BuiltinPerception__get_live_weather`。\n")
+        sb.append("- 如果用户问及未来天气、明后天天气预报或气温范围，你必须调用 `BuiltinPerception__get_weather_forecast`，且支持传入指定的 location 参数。\n")
+        sb.append("- 严禁在未调用对应工具的情况下，私自猜测或瞎编任何天气、温度、步数、心率等实时传感器数据。\n\n")
+
         val rawPrompt = sb.toString().trimEnd()
 
-        // 7. 进行占位符 (Macros) 的渲染替换
+        // 8. 进行占位符 (Macros) 的渲染替换
         return replaceMacros(rawPrompt, card.name, userName)
     }
 

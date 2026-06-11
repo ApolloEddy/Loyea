@@ -6,6 +6,9 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
 
     <queries>
         <package android:name="com.google.android.apps.healthdata" />
@@ -41,6 +44,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:windowSoftInputMode="adjustResize"
             android:theme="@android:style/Theme.Material.NoActionBar">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -69,6 +73,11 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <receiver
+            android:name=".perception.ActivityReceiver"
+            android:exported="true">
+        </receiver>
     </application>
 
 </manifest>
