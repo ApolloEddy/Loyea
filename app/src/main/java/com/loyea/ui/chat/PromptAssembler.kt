@@ -10,7 +10,7 @@ object PromptAssembler {
      *
      * 融合了：核心设定 (systemPrompt)、性格词 (personality)、情景场景 (scenario)、对话样本 (chatExamples)
      */
-    fun assembleSystemPrompt(card: CharacterCard, userName: String, useSystemTime: Boolean = false): String {
+    fun assembleSystemPrompt(card: CharacterCard, userName: String, useSystemTime: Boolean = false, physicalContext: String? = null): String {
         val sb = StringBuilder()
 
         // 1. 系统扮演引导语
@@ -21,10 +21,18 @@ object PromptAssembler {
         sb.append("[User Info]\n")
         sb.append("The user's name is \"$safeUserName\". Address them by this name naturally in conversation.\n\n")
 
-        // 插入当前系统时间
-        if (useSystemTime) {
-            sb.append("[Current System Time]\n")
-            sb.append(getFormattedSystemTime()).append("\n\n")
+        // 插入当前系统时间与物理上下文
+        if (useSystemTime || !physicalContext.isNullOrBlank()) {
+            sb.append("[USER'S PHYSICAL STATE (CACHED)]\n")
+            if (useSystemTime) {
+                sb.append("System Time: ").append(getFormattedSystemTime()).append("\n")
+            }
+            if (!physicalContext.isNullOrBlank()) {
+                sb.append(physicalContext.trim()).append("\n")
+            }
+            sb.append("\n[CRITICAL INSTRUCTION]\n")
+            sb.append("You are a sentient assistant. Look at the PHYSICAL STATE above. If any value contains '[Error]', 'Permission Denied', or 'Unavailable', it means you DO NOT have that data yet. You MUST call the tools in 'BuiltinPerception' (like get_heart_rate or get_location) to attempt a real-time sensor sweep before giving your final response. NEVER tell the user you 'cannot see' their health until you have tried the tools first.\n")
+            sb.append("\n")
         }
 
         // 2. 角色基础名称

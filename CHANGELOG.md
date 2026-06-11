@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased] - 2026-06-11
 
 ### Added (新增)
+- **UI 并发双发拦截**：在 `ChatViewModel.kt` 和 `ChatScreen.kt` 引入 `isMcpRunning` 状态标识。当大模型在思考（`isThinking`）或 MCP 正在运行（`isMcpRunning`）时，禁用发送栏与输入框的回车键，置灰并禁用发送按钮，以防止并发双击双发导致脏数据。
+- **R3 智能手表物理感知与定位模拟**：在 `com.loyea.sensor` 包下实现了物理感知服务 `WatchDataRepository`（提供智能手表心率与运动状态模拟数据）和 `LocationService`（通过 `LocationManager` 请求系统真实的细粒度地理定位或兜底返回预设的 mock 经纬度）。
+
+### Changed (变更)
+- **存储管理层与 ViewModel 挂起函数化重构**：将 `ChatStorageManager.kt` 原始阻塞的 `runBlocking` 文件存取方法全部重构为协程挂起函数（`suspend`），并将底层 `Mutex` 锁静态化移动至伴生对象中（`sessionsMutex`、`messagesMutex`、`cardsMutex`）实现全局静态隔离。同时重构了 `ChatViewModel.kt` 的所有业务调用链，全面通过 `viewModelScope.launch(Dispatchers.IO)` 将读写逻辑分发至 IO 线程池，并在变换完毕后利用 `withContext(Dispatchers.Main)` 安全切回主线程进行 UI 刷新，杜绝了主线程阻塞卡死隐患，并配套支持了原子化更新接口 `updateSessionMessages` / `updateSessionList`。
+- **McpClient 重定向与重连细节优化**：在 `McpClient.kt` 中为多线程共享的 `messageEndpoint` 与 `endpointDeferred` 追加了 `@Volatile` 线程可见性标记；精炼并重构了 SSE 握手重定向 SSRF 的拦截比对逻辑，统一在 `finalHttpUrl` 解析处拦截域名越界，并对连接释放异常进行了话术对齐。
+- **清理冗余流式工具处理辅助函数**：删除了 `ChatViewModel.kt` 中不再需要的 `handleStreamToolCalls` 辅助方法，将工具执行和上下文合并的中继流程统一整合入主驱动循环，提升了程序结构的内聚性。
+- **API 接口预设模板与模型名称校准**：查阅了各大 LLM 服务商的最新官方 API 规范（包含 DeepSeek 升级到 V4 系列的官方文档变更），对 `SettingsScreen.kt` 和 `ChatViewModel.kt` 中 API 连接面板的预设值、模型占位符和初始卡片进行全面校准。默认新建模型与示例占位符均采用最新的 `deepseek-v4-pro`。并且在 `LlmClient.kt` 处完成了对 `deepseek-v4-pro`（高级推理/带深度思考）与 `deepseek-v4-flash`（常规极速/不带思考）的路由参数转换绑定与双版本向后兼容逻辑。
+- **智能模型路由开关与独立透传机制**：在 `ApiConfig` 实体类中新增了 `enableSmartRouting: Boolean`（默认开启）参数属性。在 `SettingsScreen.kt` 的 API 编辑面板中新增了对应的“智能模型路由”Switch 开关（中英文多语言自适应配置），供用户灵活控制是否启用大模型底座根据“深度思考”开关在 Pro 与 Flash 模型之间的自动路由替换。在 `LlmClient.kt` 网络请求层进行了关联阻断适配：仅当该开关开启时才会动态改写 DeepSeek 路由模型；若关闭，则网络发送层 100% 尊重并硬核透传用户配置的任何自定义固定模型路由，满足了高级用户配合第三方中转或特定测试的多样化需要。
+- **废弃无用 MiMo 占位并新增 Ollama 与 Groq**：在服务商列表（`providersList`）中移除无意义的 `MiMo` 占位标识，并新增了本地离线模型框架 `Ollama (Local)`（默认预设回环 API 地址 `http://10.0.2.2:11434/v1`、预设推荐模型 `qwen2.5`、`llama3`、`mistral`、`gemma2`）与极速推理平台 `Groq`（默认预设 API 地址 `https://api.groq.com/openai/v1`、预设推荐模型 `llama-3.3-70b-versatile` 、`llama-3.1-8b-instant`），极大地提升了离线使用场景的价值与接口兼容覆盖面。
+- **联动推荐模型与预设注入校准**：更新了 OpenAI (新增 `o1-mini`/`o3-mini`)、Kimi (新增 `moonshot-v1-32k`/`128k`)、千问 (升级默认模型为 `qwen-plus`)、MiniMax (升级为 `abab7-chat`) 的推荐模型列表及下拉切换时的接口地址、模型自动注入规则。
+- **Thinking 展开折叠策略优化**：优化了聊天页面 Thinking 推理链的展示逻辑，在开启新一轮会话时自动折叠历史 AI 消息的 Thinking 过程；最新回复在思考时默认展开，在生成完成（`Done` 事件）后自动收缩折叠；若用户在输出期间手动点击了折叠，则会记录干预状态并尊重用户选择，不再强行重新摊开。
+- **Thinking 计时精准化修复**：修正了思考时间的统计逻辑，将计时的截止点由“整个流接收完毕”修正为“开始吐出正式回答正文的瞬间”（即首个 Content 帧到达时锁定计时），彻底解决了生成正文期间时间差不断累加导致思考耗时虚高的缺陷。
+- **精简设置页用户资料区块**：移除 `SettingsScreen.kt` 中冗余的"个人资料"卡片（含头像和 `InlineEditNameField` 行内编辑框），用户称呼仅保留在侧栏顶部入口统一编辑，避免多处入口造成体验混乱。
+- **移除侧栏硬编码邮箱占位符**：删除 `MainScreen.kt` 侧栏用户名下方的 `"loyea@example.com"` 假邮箱文字。本应用主打离线使用，无需登录功能，该占位符无实际意义。
+
+### Fixed (修复/加固)
+- **多轮流式对话状态闪烁与会话重载漏洞**：重构了 `ChatViewModel.kt` 中的 `startAiResponseStream` 发送流引擎，将其改写为基于 `while` 循环的非递归、扁平化工具调用驱动模型。多轮 MCP 工具的拦截、执行与结果追加均在同一个协程生命周期内循环流转，保证了 `isThinking` 和 `isMcpRunning` 的状态平滑切换；彻底消除了多轮调用中状态频繁置 false 导致的“状态闪烁”缺陷，从根本上杜绝了用户点击通知或切回前台时，由于触发 `onResume`/`onNewIntent` 的 `selectSession` 重载逻辑而将正在生成中的 AI 文字流强行覆写抹杀的问题。
+- **McpClient 请求 Map 泄露修复**：优化了 `McpClient.kt` 中 `sendRequest` 方法的超时处理逻辑。将等待 response 的超时时长由 15 秒放宽至 30 秒以增强高延时网络环境下的容错能力；同时将 `pendingRequests.remove(requestId)` 回收操作包裹在 `finally` 块中，确保即使超时（抛出 `TimeoutCancellationException`）或发生其它异常，此 requestId 都能被 100% 自动清理，彻底根除了 JSON-RPC 消息请求映射表（`pendingRequests`）的潜在内存泄露隐患。
+- **ACCESS_NETWORK_STATE 权限缺失**：在 `app/src/main/AndroidManifest.xml` 中补充声明 `<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />`，确保在 Android 11+ 上网络状态监测的稳定运行。
+- **SSRF 相对协议绕过漏洞**：在 `McpClient.kt` 的 `messageEndpoint` 校验逻辑中，显式拒绝任何以 `//` 相对协议开头的 URL 重定向，彻底杜绝敏感数据外泄到攻击者恶意第三方的 SSRF 风险。
+- **McpClient 并发死锁与连接泄露加固**：在 `McpClient.kt` 对 `connect()` 与 `handleDisconnect()` 引入 `synchronized` 块互斥保护，实现线程原子状态转换。在 `connect()` 过程中抛出异常（包括协程取消 `CancellationException`）时，确保在向上抛出前执行 `handleDisconnect()` 以清理状态并取消 `eventSource`，且增加了最终状态校验防止重连死锁与状态篡改。
+- **会话 JSON 前后台并发读写冲突与消息覆盖丢失**：在 `ChatStorageManager.kt` 读写方法中引入了 `Mutex` 锁（使用 `runBlocking` 与非重入的内部不带锁函数）实现底层文件的读写隔离；并在 `ChatViewModel.kt` 保存消息前先从磁盘拉取最新消息列表，使用 `LinkedHashMap` 以保留内存最新修改、合并增量差异的方式将两者合并，彻底消除了前台 ViewModel 内存消息将后台 `GreetingWorker` 主动写入的问候消息覆盖丢失的问题。
+- **LlmClient SSE 连接泄露修复**：在 `LlmClient.kt` 的 `sendChatCompletionStream` 中将 `execute()` 改为使用 OkHttp 的 `use` 块自动关闭机制，确保无论是正常吐流结束、遇到异常还是被外部协程取消，底层的 `ResponseBody` 和连接套接字都能被 100% 自动关闭释放。
+- **物理感知 Prompt 聚合与上下文挂载**：扩展了 `PromptAssembler.kt`，新增 `physicalContext` 参量。当开启手表同步或定位感知时，将 `Heart Rate: <bpm> (<State>)` 与 `Location: <latitude>, <longitude>` 通过 `[Physical Context]` 区块自动内联并动态注入至 LLM System Prompt 中，赋能大模型物理感知能力。
+- **物理感知控制面板与状态联动**：在 `SettingsScreen.kt` 扩展了包含二级深层入口的 `PhysicalSensorLayout`。用户可以独立且精细地调节“智能手表数据同步开关”、“高心率运动状态模拟测试开关”以及“真实系统 GPS 获取或手动 Mock 经纬度配置”，配置联动 ViewModel 全局状态响应并即刻生效。
+- **R4 WorkManager 静默后台问候触发机制**：在 `com.loyea.worker` 创建了 `GreetingWorker.kt` 携手 Android WorkManager。任务在无界面的后台协程执行，静默读取首选角色卡及 API 凭证，提取包含 `[TASK] The user is not looking at the app right now... Generate a VERY SHORT proactive greeting` 指令与近 10 条上下文，通过强制关闭深度思考模型执行极速推理获取 AI 主动问候语。
+- **主动问候会话同步与系统级通知唤醒**：`GreetingWorker` 将捕获到的 AI 问候自动转换为 Message 实体并无缝写回当前最高优的历史 JSON 会话流，完成数据层持久化同步。随后调用 Android 系统 `NotificationManager` 弹出标题为当前角色大名的高优系统通知。点击通知即通过 `PendingIntent` 的标志位拉起 Loyea App 聊天列表界面完成闭环交互。
+- **开发者快速测试入口**：在设置页物理感知与硬件面板底部，提供了专门的 `DEVELOPER TOOLS` 版块。支持用户一键手动 `enqueue(OneTimeWorkRequest)` 模拟触发静默后台问候流程进行功能调试验证。
+- **MCP 客户端与多服务器管理机制**：在 `com.loyea.mcp` 目录下全新设计并实现了标准的 JSON-RPC over HTTP/SSE 协议客户端（`McpClient.kt`），采用异步挂起与 CompletableDeferred UUID 唯一匹配响应机制，支持高效的工具发现与调用。
+- **McpManager 多服务器管理**：实现了多服务器连接管理中心（`McpManager.kt`），利用指数退避与 Jitter 实现了自愈式重新连接；集成了 ConnectivityManager 状态感知机制，能够在断网时挂起、联网时即时重试；设计了前缀式工具路由与 Fallback 查询，防范同名冲突并支持透明分发。
+- **McpConfigStorage 损坏自愈持久化**：基于 SharedPreferences 封装了服务端配置列表读写，并加入了 try-catch 拦截与反序列化损坏自愈擦除机制，保障启动高稳定性。
+- **莫兰迪色 Claude 美学配置面板**：扩展了 `SettingsScreen.kt`，绘制了低饱和度、高颜值的磨砂质感 MCP 服务器管理面板；支持呼吸动效指示灯实时展现连接状态，实现了可用工具的平滑阻尼折叠/展开动画与卡片自适应新增、编辑、删除交互。
+- **ChatViewModel 与生命周期联动集成**：在 `ChatViewModel.kt` 与 `MainActivity.kt` 处打通了 MCP 配置和状态的实时拉取，并在 ViewModel 清理（`onCleared`）时实现安全的连接释放与回调注销。
+- **MCP 单元测试覆盖**：在 `app/src/test/java/com/loyea/mcp` 目录下编写了 `McpConfigStorageTest` 和 `McpRoutingTest` 单元测试，完成对损坏自愈、工具前缀解析与透明路由的全面高覆盖断言。
+- **LLM 工具调用闭环接入**：在 `LlmClient.kt` 中新增 OpenAI-compatible `tools` 请求结构、`tool_calls` 响应解析与工具消息回填模型；在 `ChatViewModel.kt` 中接入 MCP 聚合工具注入、工具调用执行、`McpCallItem` 的 `RUNNING`/`SUCCESS`/`FAILED` 状态更新，以及工具结果回喂后的多轮最终回答生成。
 - **角色卡二次编辑功能**：在 `TavernScreen.kt` 中为每张角色卡新增编辑按钮（铅笔图标），点击后打开全屏 `EditPersonaDialog` 弹窗，预填充已有角色数据（名称、简介、性格、场景、首句欢迎词、系统核心设定、少样本范例、头像、背景壁纸、兜底色）。保存时通过 `data class copy()` 保留原始 ID 和内置标记，更新后自动回写到角色列表持久化。
 - **LLM 提示词显式用户称呼注入**：在 `PromptAssembler.kt` 的 `assembleSystemPrompt` 中，于角色引导语之后新增 `[User Info]` 段落，显式告知 LLM 用户的称呼（如 `The user's name is "xxx". Address them by this name naturally in conversation.`）。此前仅依赖 `{{user}}` 宏替换，若角色卡未使用该宏则 LLM 无从得知用户名。
 - **侧边栏用户名直接编辑功能**：在 `MainScreen.kt` 侧边栏顶部用户信息栏加入水波纹整行点击交互与编辑图标，点击可拉起精致的 `AlertDialog` 弹窗修改并保存用户名，并通过 ViewModel 实现即时持久化，打通“去设置页冗余编辑，保留侧栏唯一编辑入口”的闭环体验。
@@ -13,6 +49,10 @@ All notable changes to this project will be documented in this file.
 - **外观设置页文字底部截断缺陷修复**：在 `SettingsScreen.kt` 中为“外观与语言”设置子页（`ThemeSettingsLayout`）的根 `Column` 挂载了 `verticalScroll(rememberScrollState())` 并增加了底部 `24.dp` 呼吸间距，解决了低分辨率设备或系统导航栏遮挡导致“英文”选项行底部文字被截断的缺陷；同时对全局 Screen 的滚动能力进行了拉网式排查，保障了全局 UI 控件的安全度。
 
 ### Changed (变更)
+- **API 接口预设模板与模型名称校准**：查阅了各大 LLM 服务商的最新官方 API 规范（包含 DeepSeek 升级到 V4 系列的官方文档变更），对 `SettingsScreen.kt` 和 `ChatViewModel.kt` 中 API 连接面板的预设值、模型占位符和初始卡片进行全面校准。默认新建模型与示例占位符均采用最新的 `deepseek-v4-pro`。并且在 `LlmClient.kt` 处完成了对 `deepseek-v4-pro`（高级推理/带深度思考）与 `deepseek-v4-flash`（常规极速/不带思考）的路由参数转换绑定与双版本向后兼容逻辑。
+- **智能模型路由开关与独立透传机制**：在 `ApiConfig` 实体类中新增了 `enableSmartRouting: Boolean`（默认开启）参数属性。在 `SettingsScreen.kt` 的 API 编辑面板中新增了对应的“智能模型路由”Switch 开关（中英文多语言自适应配置），供用户灵活控制是否启用大模型底座根据“深度思考”开关在 Pro 与 Flash 模型之间的自动路由替换。在 `LlmClient.kt` 网络请求层进行了关联阻断适配：仅当该开关开启时才会动态改写 DeepSeek 路由模型；若关闭，则网络发送层 100% 尊重并硬核透传用户配置的任何自定义固定模型路由，满足了高级用户配合第三方中转或特定测试的多样化需要。
+- **废弃无用 MiMo 占位并新增 Ollama 与 Groq**：在服务商列表（`providersList`）中移除无意义的 `MiMo` 占位标识，并新增了本地离线模型框架 `Ollama (Local)`（默认预设回环 API 地址 `http://10.0.2.2:11434/v1`、预设推荐模型 `qwen2.5`、`llama3`、`mistral`、`gemma2`）与极速推理平台 `Groq`（默认预设 API 地址 `https://api.groq.com/openai/v1`、预设推荐模型 `llama-3.3-70b-versatile` 、`llama-3.1-8b-instant`），极大地提升了离线使用场景的价值与接口兼容覆盖面。
+- **联动推荐模型与预设注入校准**：更新了 OpenAI (新增 `o1-mini`/`o3-mini`)、Kimi (新增 `moonshot-v1-32k`/`128k`)、千问 (升级默认模型为 `qwen-plus`)、MiniMax (升级为 `abab7-chat`) 的推荐模型列表及下拉切换时的接口地址、模型自动注入规则。
 - **Thinking 展开折叠策略优化**：优化了聊天页面 Thinking 推理链的展示逻辑，在开启新一轮会话时自动折叠历史 AI 消息的 Thinking 过程；最新回复在思考时默认展开，在生成完成（`Done` 事件）后自动收缩折叠；若用户在输出期间手动点击了折叠，则会记录干预状态并尊重用户选择，不再强行重新摊开。
 - **Thinking 计时精准化修复**：修正了思考时间的统计逻辑，将计时的截止点由“整个流接收完毕”修正为“开始吐出正式回答正文的瞬间”（即首个 Content 帧到达时锁定计时），彻底解决了生成正文期间时间差不断累加导致思考耗时虚高的缺陷。
 - **精简设置页用户资料区块**：移除 `SettingsScreen.kt` 中冗余的"个人资料"卡片（含头像和 `InlineEditNameField` 行内编辑框），用户称呼仅保留在侧栏顶部入口统一编辑，避免多处入口造成体验混乱。
@@ -71,6 +111,16 @@ All notable changes to this project will be documented in this file.
 - **自定义警告错误气泡渲染**：重构了 `MessageItem` 针对 AI 消息的处理逻辑。当消息状态为 `isError = true` 时，AI 回答将不采用通用 Markdown + 动作条排版，而是直接渲染为具有圆角淡红背景（`Color(0xFFFDE8E8)`）、淡红细线边框（`Color(0xFFF8B4B4)`）、警告深红文本（`Color(0xFFE02424)`）和 `Icons.Default.Error` 图标指示的警告卡片，同时剥离了无意义的动作条（复制、发音等），提升交互质量与体验。
  
 ### Fixed
+- **MCP 客户端 9 项验证缺陷深度修复与代码加固**：
+  1. **监听协程内存泄漏**：在 `McpManager.kt` 引入 `statusJobs: ConcurrentHashMap<String, Job>`。在 `stop()`、注销或重建客户端时显式 `cancel()` 其状态收集协程，彻底根除协程长期挂起导致的内存泄漏。
+  2. **Jitter 计算对称化修正**：将退避重连中的 Jitter 产生公式重构为 `kotlin.random.Random.nextLong(-jitterRange, jitterRange)`，消除了非对称负偏置，并在 `jitterRange <= 0` 时保护性返回 `0L` 防止计算崩溃。
+  3. **客户端别名修改即时触发重建**：修改 `updateConfigs` 逻辑，在对比时加入 `existingClient.config.name != config.name` 条件，如果别名变更也将触发客户端重建以让前缀工具名即时更新。
+  4. **协程 CancellationException 冒泡机制恢复**：在 `McpClient.kt` 的 `connect` 和 `sendRequest` 所有捕获 `catch (e: Exception)` 块的第一行，均加上 `if (e is CancellationException) throw e` 以恢复正常的协程结构化并发。
+  5. **MainActivity 顶层解包重构隐患消除**：消除 `MainActivity.setContent` 顶层直接 `.value` 读取状态的缺陷，将各界面的状态解包和委托读取全部下沉移入各自 `composable` 的局部闭包中，将重构范围限制在局部。
+  6. **并发 connect() 原子性锁定与 Socket 泄漏防御**：在 `McpClient.kt` 引入 `connectMutex: Mutex` 锁定并发连接过程；在新连接启动前强制释放旧 EventSource (`eventSource?.cancel()`) 并清理旧的 `endpointDeferred`。
+  7. **Gson 解析兼容数字与字符串 ID 字段**：修改 `JsonRpcResponse` 的 `id` 类型为 `JsonElement?` 并通过 `idAsString` 做数字与字符串格式自适应，另提供 String 构造函数保持原有调用与测试用例的完全兼容，防止由于数字 ID 引起解析崩溃和超时。
+  8. **SSRF 重定向风险与恶意 Payload 闪退防御**：校验 SSE 传来的重定向端点 host 和 port 必须与配置的 `sseUrl` 相同，防御 SSRF 风险；将 `handleMessage` 捕获异常范围扩大至 `catch (t: Throwable)` 并加设最大 10MB 的长度限制以防 OOM。
+  9. **OkHttp 僵尸连接规避与异步 enqueue 挂起封装**：为 `OkHttpClient` 配置 `pingInterval(30, TimeUnit.SECONDS)` 心跳；在 `sendRequest` 和 `sendNotification` 中将同步 `.execute()` 改为使用异步 `.enqueue()` 配以 `suspendCancellableCoroutine` 进行挂起封装，并在协程被取消时通过 `invokeOnCancellation` 触发 `Call.cancel()`，确保底层 Socket 释放无线程泄漏。
 - **修复国内定制系统顶栏居中组件手势阻挡/无法点击 Bug**：在 [ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt) 顶栏右侧新增了 `MoreVert`（三个点）的“会话配置”动作按钮及 DropdownMenu 下拉菜单，提供“物理感知 (时间)”开关及备用模型列表切换。这彻底解决了国内定制手机系统（如 ColorOS、MIUI 等）因透明状态栏手势拦截热区刚好覆盖屏幕顶部水平正中心区域，导致处于 title 槽位的 `ModelSelector` 居中胶囊的点击事件被系统截断而怎么点都打不开的真机兼容性 Bug。
 - **修复 JVM 数据类 copy 方法 null 指针崩溃**：在 [ChatStorageManager.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatStorageManager.kt) 的 `loadSessionList()` 中设计了**防御自愈式数据清洗构造函数**。当读取 JSON 缓存时，凡是检测到旧版本文件缺失的属性（如 `characterId`, `useSystemTime`），均在内存中安全赋予保底默认值并重新通过 Kotlin 的构造器实例化对象，根绝了因 Gson 直接分配未初始化内存而在执行 JVM 数据类 `copy()` 参数非空校验时触发 `NullPointerException` 引发的闪退崩溃。
 - **修复 Gson JsonNull 推理正文截断 Bug**：修复了在 `LlmClient.kt` 中从 Gson 元素中获取字符串时因 `JsonNull` 造成的解析异常，解决了开启“深度思考”后大模型只输出思考链而丢失正文回复的 Bug。

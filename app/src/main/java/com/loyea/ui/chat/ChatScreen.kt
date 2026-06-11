@@ -38,6 +38,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.loyea.ui.theme.LoyeaTheme
 import com.loyea.ui.settings.ApiConfig
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.ui.text.input.ImeAction
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.ImageBitmap
@@ -48,6 +56,7 @@ import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.draw.paint
 import androidx.compose.ui.layout.ContentScale
 import com.loyea.ui.chat.PromptAssembler
+import androidx.compose.foundation.layout.consumeWindowInsets
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -60,7 +69,9 @@ fun ChatScreen(
     userBubbleColor: String,
     messages: List<Message>,
     isThinking: Boolean,
+    isMcpRunning: Boolean,
     onSendMessage: (String) -> Unit,
+    onStopResponse: () -> Unit,
     onToggleThoughts: (String) -> Unit,
     onNewChatClick: (CharacterCard) -> Unit,
     onMenuClick: () -> Unit,
@@ -131,7 +142,8 @@ fun ChatScreen(
         Column(
             modifier = modifier
                 .fillMaxSize()
-                .padding(paddingValues)
+                .padding(paddingValues) // Scaffold 自动处理了状态栏和导航栏
+                .consumeWindowInsets(paddingValues) // 消耗掉已经应用的 insets
                 .then(
                     if (backgroundBitmap != null) {
                         Modifier.paint(
@@ -143,8 +155,7 @@ fun ChatScreen(
                         Modifier
                     }
                 )
-                .navigationBarsPadding()
-                .imePadding()
+                .imePadding() // 只保留 imePadding 来处理键盘上移
         ) {
             // 消息流
             LazyColumn(
@@ -188,14 +199,18 @@ fun ChatScreen(
                 appLanguage = appLanguage,
                 onValueChange = { inputText = it },
                 onSend = {
-                    if (inputText.text.isNotBlank()) {
-                        onSendMessage(inputText.text)
+                    val trimmed = inputText.text.trim()
+                    if (trimmed.isNotBlank()) {
+                        onSendMessage(trimmed)
                         inputText = TextFieldValue("")
                     }
                 },
+                onStop = onStopResponse,
                 onAttach = {
                     Toast.makeText(context, "Attachment clicked", Toast.LENGTH_SHORT).show()
-                }
+                },
+                isThinking = isThinking,
+                isMcpRunning = isMcpRunning
             )
         }
 
@@ -622,8 +637,12 @@ fun MessageItem(
 
                 // 3. 渲染主回答正文 (当正文不为空时)
                 if (message.content.isNotBlank()) {
+                    // 对内容进行预处理，防止颜文字中的反引号破坏 Markdown 渲染
+                    val processedContent = remember(message.content) {
+                        message.content.replace(Regex("(?<!`)`(?!`)"), "\\\\`")
+                    }
                     MarkdownText(
-                        text = message.content,
+                        text = processedContent,
                         color = MaterialTheme.colorScheme.onBackground
                     )
                 }
@@ -683,10 +702,14 @@ fun ChatInputBar(
     appLanguage: String,
     onValueChange: (TextFieldValue) -> Unit,
     onSend: () -> Unit,
-    onAttach: () -> Unit
+    onStop: () -> Unit,
+    onAttach: () -> Unit,
+    isThinking: Boolean = false,
+    isMcpRunning: Boolean = false
 ) {
     val isTextEmpty = value.text.isBlank()
     val isEn = appLanguage == "en"
+    val isActive = isThinking || isMcpRunning
 
     Row(
         modifier = Modifier
@@ -719,7 +742,7 @@ fun ChatInputBar(
                 )
             }
 
-            // 自定义 BasicTextField，实现无边框和完美居中对齐
+            // 自定义 BasicTextField
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -742,16 +765,44 @@ fun ChatInputBar(
                     ),
                     cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                     maxLines = 6,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onPreviewKeyEvent { keyEvent ->
+                            if (keyEvent.key == Key.Enter) {
+                                if (isActive) {
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
+                        },
+                    keyboardOptions = KeyboardOptions(
+                        imeAction = ImeAction.Send
+                    ),
+                    keyboardActions = KeyboardActions(
+                        onSend = {
+                            if (!isTextEmpty && !isActive) {
+                                onSend()
+                            }
+                        }
+                    )
                 )
             }
         }
 
         Spacer(modifier = Modifier.width(8.dp))
 
-        // 发送或语音录音按钮 (高级 Scale Fade 动画切换)
+        // 发送或停止按钮
         val buttonColor by animateColorAsState(
-            targetValue = if (isTextEmpty) Color.Transparent else MaterialTheme.colorScheme.primary,
+            targetValue = if (isActive) {
+                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.8f)
+            } else if (isTextEmpty) {
+                Color.Transparent
+            } else {
+                MaterialTheme.colorScheme.primary
+            },
             animationSpec = tween(300),
             label = "ButtonColor"
         )
@@ -761,26 +812,33 @@ fun ChatInputBar(
                 .size(48.dp)
                 .clip(CircleShape)
                 .background(buttonColor)
-                .clickable(enabled = !isTextEmpty) { onSend() },
+                .clickable(enabled = isActive || !isTextEmpty) { 
+                    if (isActive) onStop() else onSend() 
+                },
             contentAlignment = Alignment.Center
         ) {
             AnimatedContent(
-                targetState = isTextEmpty,
+                targetState = if (isActive) "stop" else if (isTextEmpty) "mic" else "send",
                 transitionSpec = {
-                    (scaleIn(initialScale = 0.8f) + fadeIn(animationSpec = tween(220, delayMillis = 90)))
+                    (scaleIn(initialScale = 0.8f) + fadeIn(animationSpec = tween(220)))
                         .togetherWith(scaleOut(targetScale = 0.8f) + fadeOut(animationSpec = tween(90)))
                 },
-                label = "SendButtonTransition"
-            ) { isEmpty ->
-                if (isEmpty) {
-                    Icon(
+                label = "InputButtonTransition"
+            ) { target ->
+                when (target) {
+                    "stop" -> Icon(
+                        imageVector = Icons.Default.Stop,
+                        contentDescription = "Stop",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    "mic" -> Icon(
                         imageVector = Icons.Outlined.Mic,
                         contentDescription = "Record",
                         tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                         modifier = Modifier.size(24.dp)
                     )
-                } else {
-                    Icon(
+                    else -> Icon(
                         imageVector = Icons.Default.ArrowUpward,
                         contentDescription = "Send",
                         tint = Color.White,
@@ -851,7 +909,9 @@ fun ChatScreenPreview() {
             userBubbleColor = "",
             messages = emptyList(),
             isThinking = false,
+            isMcpRunning = false,
             onSendMessage = {},
+            onStopResponse = {},
             onToggleThoughts = {},
             onNewChatClick = {},
             onMenuClick = {},

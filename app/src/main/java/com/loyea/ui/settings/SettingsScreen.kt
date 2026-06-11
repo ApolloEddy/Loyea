@@ -2,6 +2,9 @@ package com.loyea.ui.settings
 
 import android.widget.Toast
 import androidx.compose.animation.*
+import com.loyea.mcp.McpServerConfig
+import com.loyea.mcp.McpServerStatus
+import com.loyea.mcp.McpTool
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -51,7 +54,7 @@ enum class ThemeMode {
 
 // 二级页面枚举
 enum class SettingsSubPage {
-    MAIN, API_CONFIG, THEME_SETTINGS
+    MAIN, API_CONFIG, THEME_SETTINGS, MCP_CONFIG, PHYSICAL_SENSOR
 }
 
 // API 配置数据模型
@@ -64,7 +67,8 @@ data class ApiConfig(
     val modelName: String = "claude-3-5-sonnet",
     val isEnabled: Boolean = true,
     val enableSearch: Boolean = false,
-    val enableReasoning: Boolean = true
+    val enableReasoning: Boolean = true,
+    val enableSmartRouting: Boolean = true
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -82,6 +86,19 @@ fun SettingsScreen(
     onAppLanguageChange: (String) -> Unit,
     userBubbleColor: String,
     onUserBubbleColorChange: (String) -> Unit,
+    mcpConfigs: List<McpServerConfig>,
+    mcpStates: Map<String, McpServerStatus>,
+    onMcpConfigsSave: (List<McpServerConfig>) -> Unit,
+    getMcpToolsForServer: (String) -> List<McpTool>,
+    isWatchConnected: Boolean,
+    onWatchConnectedChange: (Boolean) -> Unit,
+    isWatchMoving: Boolean,
+    onWatchMovingChange: (Boolean) -> Unit,
+    useRealLocation: Boolean,
+    onUseRealLocationChange: (Boolean) -> Unit,
+    mockLocation: String,
+    onMockLocationSave: (String) -> Unit,
+    onHealthConnectClick: () -> Unit,
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -112,8 +129,12 @@ fun SettingsScreen(
                     activeConfigId = activeConfigId,
                     appLanguage = appLanguage,
                     userBubbleColor = userBubbleColor,
+                    mcpConfigs = mcpConfigs,
+                    mcpStates = mcpStates,
                     onNavigateToApi = { subPage = SettingsSubPage.API_CONFIG },
                     onNavigateToTheme = { subPage = SettingsSubPage.THEME_SETTINGS },
+                    onNavigateToMcp = { subPage = SettingsSubPage.MCP_CONFIG },
+                    onNavigateToSensor = { subPage = SettingsSubPage.PHYSICAL_SENSOR },
                     onBackClick = onBackClick
                 )
             }
@@ -138,6 +159,31 @@ fun SettingsScreen(
                     onBackClick = { subPage = SettingsSubPage.MAIN }
                 )
             }
+            SettingsSubPage.MCP_CONFIG -> {
+                McpConfigLayout(
+                    mcpConfigs = mcpConfigs,
+                    mcpStates = mcpStates,
+                    onMcpConfigsSave = onMcpConfigsSave,
+                    getMcpToolsForServer = getMcpToolsForServer,
+                    appLanguage = appLanguage,
+                    onBackClick = { subPage = SettingsSubPage.MAIN }
+                )
+            }
+            SettingsSubPage.PHYSICAL_SENSOR -> {
+                PhysicalSensorLayout(
+                    isWatchConnected = isWatchConnected,
+                    onWatchConnectedChange = onWatchConnectedChange,
+                    isWatchMoving = isWatchMoving,
+                    onWatchMovingChange = onWatchMovingChange,
+                    useRealLocation = useRealLocation,
+                    onUseRealLocationChange = onUseRealLocationChange,
+                    mockLocation = mockLocation,
+                    onMockLocationSave = onMockLocationSave,
+                    appLanguage = appLanguage,
+                    onHealthConnectClick = onHealthConnectClick,
+                    onBackClick = { subPage = SettingsSubPage.MAIN }
+                )
+            }
         }
     }
 }
@@ -153,8 +199,12 @@ fun SettingsMainLayout(
     activeConfigId: String,
     appLanguage: String,
     userBubbleColor: String,
+    mcpConfigs: List<McpServerConfig>,
+    mcpStates: Map<String, McpServerStatus>,
     onNavigateToApi: () -> Unit,
     onNavigateToTheme: () -> Unit,
+    onNavigateToMcp: () -> Unit,
+    onNavigateToSensor: () -> Unit,
     onBackClick: () -> Unit
 ) {
     val isEn = appLanguage == "en"
@@ -287,6 +337,93 @@ fun SettingsMainLayout(
                             val langName = if (isEn) "English" else "简体中文"
                             Text(
                                 text = "$themeModeName ($bubbleColorName, $langName)",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                            )
+                        }
+                    }
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+
+                // MCP 配置二级页面入口
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onNavigateToMcp() }
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Extension,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = if (isEn) "MCP Cyber Plugins" else "MCP 赛博插件管理",
+                                fontSize = 15.sp,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            val connectedCount = mcpConfigs.count { mcpStates[it.id] == McpServerStatus.CONNECTED }
+                            Text(
+                                text = if (isEn) "Active: $connectedCount / ${mcpConfigs.size}" else "已连接：$connectedCount / ${mcpConfigs.size}",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                            )
+                        }
+                    }
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+
+                // 物理感知二级页面入口
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onNavigateToSensor() }
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Watch,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = if (isEn) "Physical Sensor & Hardware" else "物理感知与外设集成",
+                                fontSize = 15.sp,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Text(
+                                text = if (isEn) "Smartwatch mock, Heart Rate, Location" else "智能手表模拟，心率，GPS定位",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
                             )
@@ -653,23 +790,25 @@ fun AddOrEditSheet(
     
     var enableSearch by remember { mutableStateOf(editingConfig?.enableSearch ?: false) }
     var enableReasoning by remember { mutableStateOf(editingConfig?.enableReasoning ?: true) }
+    var enableSmartRouting by remember { mutableStateOf(editingConfig?.enableSmartRouting ?: true) }
 
     var showApiKey by remember { mutableStateOf(false) }
     var providerDropdownExpanded by remember { mutableStateOf(false) }
 
     val providersList = listOf(
         "DeepSeek", "OpenAI", 
-        "Kimi (Moonshot)", "Qwen (千问)", "MiniMax", "MiMo", "Custom"
+        "Kimi (Moonshot)", "Qwen (千问)", "MiniMax", "Ollama (Local)", "Groq", "Custom"
     )
 
     val recommendedModels = remember(selectedProvider) {
         when (selectedProvider) {
-            "OpenAI" -> listOf("gpt-4o", "gpt-4o-mini")
+            "OpenAI" -> listOf("gpt-4o", "gpt-4o-mini", "o1-mini", "o3-mini")
             "DeepSeek" -> listOf("deepseek-v4-pro", "deepseek-v4-flash")
-            "Kimi (Moonshot)" -> listOf("moonshot-v1-8k")
-            "Qwen (千问)" -> listOf("qwen-turbo", "qwen-max")
-            "MiniMax" -> listOf("abab6.5-chat")
-            "MiMo" -> listOf("mimo-v1")
+            "Kimi (Moonshot)" -> listOf("moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k")
+            "Qwen (千问)" -> listOf("qwen-plus", "qwen-turbo", "qwen-max")
+            "MiniMax" -> listOf("abab6.5g-alias", "abab7-chat")
+            "Ollama (Local)" -> listOf("qwen2.5", "llama3", "mistral", "gemma2")
+            "Groq" -> listOf("llama-3.3-70b-versatile", "llama-3.1-8b-instant")
             else -> emptyList()
         }
     }
@@ -775,7 +914,7 @@ fun AddOrEditSheet(
                                 when (provider) {
                                     "OpenAI" -> {
                                         apiUrlInput = "https://api.openai.com/v1"
-                                        modelInput = "gpt-4o"
+                                        modelInput = "gpt-4o-mini"
                                     }
                                     "DeepSeek" -> {
                                         apiUrlInput = "https://api.deepseek.com/v1"
@@ -787,15 +926,19 @@ fun AddOrEditSheet(
                                     }
                                     "Qwen (千问)" -> {
                                         apiUrlInput = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-                                        modelInput = "qwen-turbo"
+                                        modelInput = "qwen-plus"
                                     }
                                     "MiniMax" -> {
                                         apiUrlInput = "https://api.minimax.chat/v1"
-                                        modelInput = "abab6.5-chat"
+                                        modelInput = "abab7-chat"
                                     }
-                                    "MiMo" -> {
-                                        apiUrlInput = "https://api.mimo.com/v1"
-                                        modelInput = "mimo-v1"
+                                    "Ollama (Local)" -> {
+                                        apiUrlInput = "http://10.0.2.2:11434/v1"
+                                        modelInput = "qwen2.5"
+                                    }
+                                    "Groq" -> {
+                                        apiUrlInput = "https://api.groq.com/openai/v1"
+                                        modelInput = "llama-3.3-70b-versatile"
                                     }
                                     "Custom" -> {
                                         apiUrlInput = ""
@@ -979,6 +1122,35 @@ fun AddOrEditSheet(
             )
         }
 
+        // 智能模型路由开关
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = if (isEn) "Smart Model Routing" else "智能模型路由",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Text(
+                    text = if (isEn) "Auto route between Pro/Flash models based on Deep Thinking" else "根据深度思考开关自动在 Pro/Flash 模型之间切换",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                )
+            }
+            Switch(
+                checked = enableSmartRouting,
+                onCheckedChange = { enableSmartRouting = it },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = MaterialTheme.colorScheme.primary
+                )
+            )
+        }
+
         Button(
             onClick = {
                 val finalName = if (nameInput.isBlank()) "${selectedProvider} Model" else nameInput
@@ -991,7 +1163,8 @@ fun AddOrEditSheet(
                     modelName = modelInput,
                     isEnabled = true,
                     enableSearch = enableSearch,
-                    enableReasoning = enableReasoning
+                    enableReasoning = enableReasoning,
+                    enableSmartRouting = enableSmartRouting
                 )
                 onSave(newConfig)
             },
@@ -1258,9 +1431,801 @@ fun SettingsScreenPreview() {
             onAppLanguageChange = { appLanguage = it },
             userBubbleColor = userBubbleColor,
             onUserBubbleColorChange = { userBubbleColor = it },
+            mcpConfigs = emptyList(),
+            mcpStates = emptyMap(),
+            onMcpConfigsSave = {},
+            getMcpToolsForServer = { emptyList() },
+            isWatchConnected = false,
+            onWatchConnectedChange = {},
+            isWatchMoving = false,
+            onWatchMovingChange = {},
+            useRealLocation = false,
+            onUseRealLocationChange = {},
+            mockLocation = "",
+            onMockLocationSave = {},
+            onHealthConnectClick = {},
             onBackClick = {}
         )
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun McpConfigLayout(
+    mcpConfigs: List<McpServerConfig>,
+    mcpStates: Map<String, McpServerStatus>,
+    onMcpConfigsSave: (List<McpServerConfig>) -> Unit,
+    getMcpToolsForServer: (String) -> List<McpTool>,
+    appLanguage: String,
+    onBackClick: () -> Unit
+) {
+    val context = LocalContext.current
+    val isEn = appLanguage == "en"
 
+    var showSheet by remember { mutableStateOf(false) }
+    var editingConfig by remember { mutableStateOf<McpServerConfig?>(null) }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(if (isEn) "MCP Cyber Plugins" else "MCP 赛博插件管理", fontSize = 18.sp, fontWeight = FontWeight.Bold) },
+                navigationIcon = {
+                    IconButton(onClick = onBackClick) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowBack,
+                            contentDescription = "Back",
+                            tint = MaterialTheme.colorScheme.onBackground
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(onClick = {
+                        editingConfig = null
+                        showSheet = true
+                    }) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "Add Server",
+                            tint = MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
+            )
+        },
+        containerColor = MaterialTheme.colorScheme.background
+    ) { paddingValues ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+        ) {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                if (mcpConfigs.isEmpty()) {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 60.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = if (isEn) "No MCP servers saved.\nClick '+' on top right to add." else "暂无 MCP 插件，\n请点击右上角 '+' 按钮添加。",
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                                fontSize = 14.sp,
+                                modifier = Modifier.padding(16.dp)
+                            )
+                        }
+                    }
+                } else {
+                    items(mcpConfigs) { config ->
+                        val status = mcpStates[config.id] ?: McpServerStatus.DISCONNECTED
+                        McpServerCardItem(
+                            config = config,
+                            status = status,
+                            tools = getMcpToolsForServer(config.id),
+                            appLanguage = appLanguage,
+                            onToggle = { isEnabled ->
+                                val updated = mcpConfigs.map {
+                                    if (it.id == config.id) it.copy(isEnabled = isEnabled) else it
+                                }
+                                onMcpConfigsSave(updated)
+                            },
+                            onEdit = {
+                                editingConfig = config
+                                showSheet = true
+                            },
+                            onDelete = {
+                                val updated = mcpConfigs.filter { it.id != config.id }
+                                onMcpConfigsSave(updated)
+                                Toast.makeText(context, if (isEn) "Deleted" else "已删除服务器", Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                    }
+                }
+            }
+
+            AnimatedVisibility(
+                visible = showSheet,
+                enter = fadeIn(),
+                exit = fadeOut()
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.4f))
+                        .clickable { showSheet = false }
+                )
+            }
+
+            AnimatedVisibility(
+                visible = showSheet,
+                enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+                modifier = Modifier.align(Alignment.BottomCenter)
+            ) {
+                AddOrEditMcpServerSheet(
+                    editingConfig = editingConfig,
+                    appLanguage = appLanguage,
+                    onSave = { newOrUpdated ->
+                        val updatedList = if (editingConfig == null) {
+                            mcpConfigs + newOrUpdated
+                        } else {
+                            mcpConfigs.map { if (it.id == newOrUpdated.id) newOrUpdated else it }
+                        }
+                        onMcpConfigsSave(updatedList)
+                        showSheet = false
+                    },
+                    onDismiss = { showSheet = false }
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun McpServerCardItem(
+    config: McpServerConfig,
+    status: McpServerStatus,
+    tools: List<McpTool>,
+    appLanguage: String,
+    onToggle: (Boolean) -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val isEn = appLanguage == "en"
+    var isExpanded by remember { mutableStateOf(false) }
+
+    // Breathing effect for CONNECTING state
+    val infiniteTransition = rememberInfiniteTransition(label = "breathing")
+    val breathingAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "breathingAlpha"
+    )
+
+    val statusColor = when (status) {
+        McpServerStatus.CONNECTED -> Color(0xFF84A98C)  // Morandi Green
+        McpServerStatus.CONNECTING -> Color(0xFFEADFD3) // Morandi Yellow / Amber
+        McpServerStatus.DISCONNECTED -> Color(0xFF9E998F) // Morandi Gray
+    }
+
+    val statusText = when (status) {
+        McpServerStatus.CONNECTED -> if (isEn) "Connected" else "已连接"
+        McpServerStatus.CONNECTING -> if (isEn) "Connecting" else "连接中"
+        McpServerStatus.DISCONNECTED -> if (isEn) "Disconnected" else "已断开"
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .border(
+                1.dp,
+                if (config.isEnabled) MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
+                else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                RoundedCornerShape(12.dp)
+            )
+            .background(MaterialTheme.colorScheme.surface)
+            .clickable { isExpanded = !isExpanded }
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                // Status breathing light
+                Box(
+                    modifier = Modifier
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(
+                            statusColor.copy(
+                                alpha = if (status == McpServerStatus.CONNECTING) breathingAlpha else 1f
+                            )
+                        )
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Column {
+                    Text(
+                        text = config.name,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Text(
+                        text = config.sseUrl,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                        maxLines = 1
+                    )
+                }
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = statusText,
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(end = 8.dp)
+                )
+                Switch(
+                    checked = config.isEnabled,
+                    onCheckedChange = onToggle,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = MaterialTheme.colorScheme.primary
+                    )
+                )
+            }
+        }
+
+        AnimatedVisibility(
+            visible = isExpanded,
+            enter = expandVertically(animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy)) + fadeIn(),
+            exit = shrinkVertically() + fadeOut()
+        ) {
+            Column(
+                modifier = Modifier.padding(top = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+
+                // Tools Display
+                if (status == McpServerStatus.CONNECTED) {
+                    Text(
+                        text = if (isEn) "Available Tools" else "可用工具列表",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
+                    )
+                    if (tools.isEmpty()) {
+                        Text(
+                            text = if (isEn) "No tools declared by server" else "服务未声明可用工具",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                        )
+                    } else {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            tools.forEach { tool ->
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Column {
+                                        Text(
+                                            text = tool.name,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        if (!tool.description.isNullOrBlank()) {
+                                            Text(
+                                                text = tool.description,
+                                                fontSize = 10.sp,
+                                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Text(
+                        text = if (isEn) "Connect to see available tools" else "建立连接后即可查看可用工具列表",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    OutlinedButton(
+                        onClick = onEdit,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.height(36.dp)
+                    ) {
+                        Text(if (isEn) "Edit" else "编辑")
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = onDelete,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC97A7A)),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.height(36.dp)
+                    ) {
+                        Text(if (isEn) "Delete" else "删除", color = Color.White)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AddOrEditMcpServerSheet(
+    editingConfig: McpServerConfig?,
+    appLanguage: String,
+    onSave: (McpServerConfig) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val isEn = appLanguage == "en"
+
+    var nameInput by remember { mutableStateOf(editingConfig?.name ?: "") }
+    var urlInput by remember { mutableStateOf(editingConfig?.sseUrl ?: "") }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(
+                1.dp,
+                MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+            )
+            .padding(20.dp)
+            .imePadding()
+            .navigationBarsPadding(),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterHorizontally)
+                .size(width = 36.dp, height = 4.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.15f))
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = if (editingConfig == null) {
+                    if (isEn) "Add MCP Server" else "添加 MCP 服务端"
+                } else {
+                    if (isEn) "Edit MCP Server" else "编辑 MCP 服务端"
+                },
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            IconButton(onClick = onDismiss) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Close",
+                    tint = MaterialTheme.colorScheme.onBackground
+                )
+            }
+        }
+
+        Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+
+        Column {
+            Text(
+                text = if (isEn) "SERVER ALIAS" else "服务端别名",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+            OutlinedTextField(
+                value = nameInput,
+                onValueChange = { nameInput = it },
+                singleLine = true,
+                placeholder = { Text("e.g. Local Workspace", color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f)) },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                ),
+                textStyle = TextStyle(color = MaterialTheme.colorScheme.onBackground),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        Column {
+            Text(
+                text = if (isEn) "SSE CONNECTION URL" else "SSE 连接 URL",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+            OutlinedTextField(
+                value = urlInput,
+                onValueChange = { urlInput = it },
+                singleLine = true,
+                placeholder = { Text("e.g. http://10.0.2.2:3000/sse", color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f)) },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                ),
+                textStyle = TextStyle(color = MaterialTheme.colorScheme.onBackground),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        Button(
+            onClick = {
+                if (urlInput.isNotBlank()) {
+                    val finalName = if (nameInput.isBlank()) "MCP Server" else nameInput
+                    val newConfig = McpServerConfig(
+                        id = editingConfig?.id ?: System.currentTimeMillis().toString(),
+                        name = finalName,
+                        sseUrl = urlInput,
+                        isEnabled = editingConfig?.isEnabled ?: true
+                    )
+                    onSave(newConfig)
+                }
+            },
+            shape = RoundedCornerShape(24.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .padding(top = 10.dp)
+        ) {
+            Icon(imageVector = Icons.Default.Save, contentDescription = null, tint = Color.White)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                if (isEn) "Save Server" else "保存服务端设置",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PhysicalSensorLayout(
+    isWatchConnected: Boolean,
+    onWatchConnectedChange: (Boolean) -> Unit,
+    isWatchMoving: Boolean,
+    onWatchMovingChange: (Boolean) -> Unit,
+    useRealLocation: Boolean,
+    onUseRealLocationChange: (Boolean) -> Unit,
+    mockLocation: String,
+    onMockLocationSave: (String) -> Unit,
+    appLanguage: String,
+    onHealthConnectClick: () -> Unit,
+    onBackClick: () -> Unit
+) {
+    val isEn = appLanguage == "en"
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(if (isEn) "Physical Perception" else "物理感知与外设集成", fontSize = 18.sp, fontWeight = FontWeight.Bold) },
+                navigationIcon = {
+                    IconButton(onClick = onBackClick) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowBack,
+                            contentDescription = "Back",
+                            tint = MaterialTheme.colorScheme.onBackground
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
+            )
+        },
+        containerColor = MaterialTheme.colorScheme.background
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp)
+        ) {
+            // Health Connect Integration
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = if (isEn) "HEALTH DATA INTEGRATION" else "健康数据集成",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                )
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surface)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onHealthConnectClick() }
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Icon(
+                                imageVector = Icons.Default.Favorite,
+                                contentDescription = null,
+                                tint = Color(0xFFC97A7A),
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text(
+                                    text = if (isEn) "Connect Health Hub" else "连接安卓“健康连接”",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onBackground
+                                )
+                                Text(
+                                    text = if (isEn) "Sync from OPPO Health / OHealth" else "同步来自 OPPO健康 / 欢太健康的数据",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                                )
+                            }
+                        }
+                        Icon(
+                            imageVector = Icons.Default.ChevronRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f)
+                        )
+                    }
+                }
+                
+                Text(
+                    text = if (isEn) "Tips: Ensure OPPO Health has enabled 'Health Connect' sync in its settings." else "提示：请确保“OPPO健康”或“欢太健康”App 内已开启“健康连接”同步选项。",
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
+            }
+
+            // Watch sync
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = if (isEn) "HARDWARE SIMULATION" else "硬件数据模拟 (开发调试用)",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                )
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surface)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (isEn) "Enable Simulation Sync" else "启用模拟同步",
+                                fontSize = 15.sp,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Text(
+                                text = if (isEn) "Fallback to mock data if real sensor is unavailable" else "当真实传感器不可用时，回退至模拟数据",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                            )
+                        }
+                        Switch(
+                            checked = isWatchConnected,
+                            onCheckedChange = onWatchConnectedChange,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = MaterialTheme.colorScheme.primary
+                            )
+                        )
+                    }
+
+                    if (isWatchConnected) {
+                        Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = if (isEn) "Simulate Moving State" else "模拟运动状态",
+                                    fontSize = 15.sp,
+                                    color = MaterialTheme.colorScheme.onBackground
+                                )
+                                Text(
+                                    text = if (isEn) "Heart rate will increase" else "心率会升高 (100-140 bpm)",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                                )
+                            }
+                            Switch(
+                                checked = isWatchMoving,
+                                onCheckedChange = onWatchMovingChange,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = MaterialTheme.colorScheme.primary
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Location Settings
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = if (isEn) "LOCATION SETTINGS" else "GPS 定位设置",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                )
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surface)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (isEn) "Use Real Location" else "获取真实物理定位",
+                                fontSize = 15.sp,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Text(
+                                text = if (isEn) "Requires location permission" else "需要系统定位权限，否则回退到模拟位置",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                            )
+                        }
+                        Switch(
+                            checked = useRealLocation,
+                            onCheckedChange = onUseRealLocationChange,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = MaterialTheme.colorScheme.primary
+                            )
+                        )
+                    }
+
+                    if (!useRealLocation) {
+                        Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp)
+                        ) {
+                            Text(
+                                text = if (isEn) "Mock Location" else "当前模拟位置 (经纬度)",
+                                fontSize = 15.sp,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            InlineEditNameField(
+                                initialName = mockLocation,
+                                onSave = onMockLocationSave
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Developer Tools
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = if (isEn) "DEVELOPER TOOLS" else "开发者调试",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                )
+
+                val context = androidx.compose.ui.platform.LocalContext.current
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surface)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                val workRequest = androidx.work.OneTimeWorkRequestBuilder<com.loyea.worker.GreetingWorker>().build()
+                                androidx.work.WorkManager.getInstance(context).enqueue(workRequest)
+                                android.widget.Toast.makeText(context, if (isEn) "Background task scheduled" else "后台问候任务已加入队列", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (isEn) "Test Background Greeting" else "测试后台主动问候 (WorkManager)",
+                                fontSize = 15.sp,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Text(
+                                text = if (isEn) "Enqueues a one-time background greeting task" else "触发一次静默后台推送请求，完成后发送系统通知",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.Default.Send,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}

@@ -38,91 +38,108 @@ fun McpCallItem(
         }
     }
     
-    // 运行状态时的齿轮无限旋转动画
+    // 运行状态时的旋转动画
     val infiniteTransition = rememberInfiniteTransition(label = "GearRotation")
     val rotation by infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = 360f,
         animationSpec = infiniteRepeatable(
-            animation = tween(1800, easing = LinearEasing),
+            animation = tween(2000, easing = LinearEasing),
             repeatMode = RepeatMode.Restart
         ),
         label = "Rotation"
     )
 
+    val iconColor = when (mcpCall.status) {
+        McpStatus.RUNNING -> MaterialTheme.colorScheme.primary
+        McpStatus.SUCCESS -> Color(0xFF4CAF50)
+        McpStatus.FAILED -> Color(0xFFE53935)
+    }
+
+    val toolEmoji = when {
+        mcpCall.toolName.contains("location") -> "📍"
+        mcpCall.toolName.contains("heart") -> "❤️"
+        mcpCall.toolName.contains("step") -> "👣"
+        mcpCall.toolName.contains("sleep") -> "🌙"
+        mcpCall.toolName.contains("time") -> "🕒"
+        mcpCall.toolName.contains("weather") -> "🌤️"
+        else -> "🛠️"
+    }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f), RoundedCornerShape(10.dp))
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.04f))
             .clickable { 
                 hasUserInteracted = true
                 isExpanded = !isExpanded 
             }
-            .animateContentSize(animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy))
+            .animateContentSize(animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy))
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.weight(1f)
+            // 状态图标
+            Box(
+                modifier = Modifier.size(20.dp),
+                contentAlignment = Alignment.Center
             ) {
-                // 根据状态展示不同的图标与动效
                 when (mcpCall.status) {
                     McpStatus.RUNNING -> {
                         Icon(
-                            imageVector = Icons.Default.Settings, // 用齿轮表示工具
-                            contentDescription = "Running Tool",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .size(16.dp)
-                                .rotate(rotation) // 无限旋转
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Running",
+                            tint = iconColor.copy(alpha = 0.7f),
+                            modifier = Modifier.size(16.dp).rotate(rotation)
                         )
                     }
                     McpStatus.SUCCESS -> {
                         Icon(
                             imageVector = Icons.Default.CheckCircle,
-                            contentDescription = "Tool Success",
-                            tint = Color(0xFF4CAF50), // 绿色对勾
+                            contentDescription = "Success",
+                            tint = iconColor,
                             modifier = Modifier.size(16.dp)
                         )
                     }
                     McpStatus.FAILED -> {
                         Icon(
-                            imageVector = Icons.Default.Error,
-                            contentDescription = "Tool Failed",
-                            tint = MaterialTheme.colorScheme.error,
+                            imageVector = Icons.Default.Close, // 使用红叉
+                            contentDescription = "Failed",
+                            tint = iconColor,
                             modifier = Modifier.size(16.dp)
                         )
                     }
                 }
-                
-                Spacer(modifier = Modifier.width(10.dp))
-                
-                Text(
-                    text = mcpCall.actionText,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f)
-                )
             }
             
-            // 展开小三角
+            Spacer(modifier = Modifier.width(8.dp))
+            
+            Text(
+                text = toolEmoji,
+                fontSize = 14.sp,
+                modifier = Modifier.padding(end = 4.dp)
+            )
+
+            Text(
+                text = mcpCall.actionText,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                modifier = Modifier.weight(1f)
+            )
+            
             Icon(
                 imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
-                modifier = Modifier.size(16.dp)
+                tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
+                modifier = Modifier.size(18.dp)
             )
         }
         
-        // 展开展示参数和输出结果
         AnimatedVisibility(
             visible = isExpanded,
             enter = expandVertically() + fadeIn(),
@@ -131,44 +148,92 @@ fun McpCallItem(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.03f))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                    .padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                if (mcpCall.input.isNotBlank()) {
+                if (mcpCall.input.isNotBlank() && mcpCall.input != "{}") {
                     Column {
                         Text(
-                            text = "PARAMETERS",
+                            text = "参数详情",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
                         )
-                        Text(
-                            text = mcpCall.input,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
+                        Surface(
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.05f),
+                            shape = RoundedCornerShape(4.dp),
+                            modifier = Modifier.fillMaxWidth().padding(top = 2.dp)
+                        ) {
+                            Text(
+                                text = mcpCall.input,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+                                modifier = Modifier.padding(6.dp)
+                            )
+                        }
                     }
                 }
+                
                 if (mcpCall.output.isNotBlank()) {
                     Column {
                         Text(
-                            text = "RESULT",
+                            text = "执行结果",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
                         )
+                        val beautifiedResult = remember(mcpCall.output) {
+                            beautifyMcpResult(mcpCall.output)
+                        }
                         Text(
-                            text = mcpCall.output,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.9f)
+                            text = beautifiedResult,
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.SansSerif,
+                            lineHeight = 18.sp,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.9f),
+                            modifier = Modifier.padding(top = 2.dp)
                         )
                     }
                 }
             }
         }
+    }
+}
+
+/**
+ * 美化处理 MCP 返回的 JSON 字符串，提取核心文本内容
+ */
+fun beautifyMcpResult(rawJson: String): String {
+    if (rawJson.startsWith("[MCP")) return rawJson // 已经是错误提示
+    try {
+        val gson = com.google.gson.Gson()
+        val map = gson.fromJson<Map<String, Any>>(rawJson, object : com.google.gson.reflect.TypeToken<Map<String, Any>>() {}.type)
+        
+        // 尝试解析标准的 MCP content 数组
+        val content = map["content"] as? List<*>
+        if (content != null) {
+            val sb = StringBuilder()
+            content.forEach { item ->
+                if (item is Map<*, *>) {
+                    val text = item["text"] as? String
+                    if (text != null) {
+                        if (sb.isNotEmpty()) sb.append("\n")
+                        sb.append(text)
+                    }
+                }
+            }
+            if (sb.isNotEmpty()) return sb.toString()
+        }
+        
+        // 尝试解析 result 字段
+        val result = map["result"] as? String
+        if (result != null) return result
+        
+        // 如果都不是，尝试扁平化展示 Map
+        return rawJson
+    } catch (e: Exception) {
+        return rawJson
     }
 }
 

@@ -1,76 +1,129 @@
 package com.loyea
 
 import android.content.Context
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.activity.result.ActivityResultLauncher
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.runtime.*
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.PermissionController
+import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.records.BloodPressureRecord
+import androidx.health.connect.client.records.HeartRateRecord
+import androidx.health.connect.client.records.SleepSessionRecord
+import androidx.health.connect.client.records.StepsRecord
+import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.loyea.ui.chat.ChatScreen
+import com.loyea.ui.chat.ChatViewModel
 import com.loyea.ui.main.MainScreen
-import com.loyea.ui.settings.ApiConfig
 import com.loyea.ui.settings.SettingsScreen
 import com.loyea.ui.settings.ThemeMode
 import com.loyea.ui.theme.LoyeaTheme
-import com.loyea.ui.chat.ChatStorageManager
-import com.loyea.ui.chat.ChatSession
-import com.loyea.ui.chat.Message
-import com.loyea.ui.chat.Sender
-import com.loyea.ui.chat.CharacterCard
-import com.loyea.ui.chat.TavernCardParser
-import com.loyea.ui.chat.TavernScreen
-import com.loyea.ui.chat.PromptAssembler
-import com.loyea.ui.chat.ChatViewModel
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+
+    private lateinit var chatViewModel: ChatViewModel
+
+    // Health Connect permissions request launcher
+    private val requestPermissionLauncher = registerForActivityResult(
+        PermissionController.createRequestPermissionResultContract()
+    ) { granted ->
+        if (granted.isNotEmpty()) {
+            Toast.makeText(this, "健康授权已更新", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private val HEALTH_PERMISSIONS = setOf(
+        HealthPermission.getReadPermission(HeartRateRecord::class),
+        HealthPermission.getReadPermission(StepsRecord::class),
+        HealthPermission.getReadPermission(SleepSessionRecord::class),
+        HealthPermission.getReadPermission(BloodPressureRecord::class)
+    )
+
+    override fun onResume() {
+        super.onResume()
+        if (::chatViewModel.isInitialized) {
+            if (!chatViewModel.isThinking.value && !chatViewModel.isMcpRunning.value) {
+                val currId = chatViewModel.currentSessionId.value
+                if (currId.isNotEmpty()) {
+                    chatViewModel.selectSession(currId)
+                }
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
+        // 统一权限请求逻辑
+        val permissionsToRequest = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                permissionsToRequest.add(android.Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+        val prefs = getSharedPreferences("loyea_prefs", Context.MODE_PRIVATE)
+        if (prefs.getBoolean("use_real_location", false)) {
+            if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_FINE_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                permissionsToRequest.add(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                permissionsToRequest.add(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+            }
+        }
+        if (permissionsToRequest.isNotEmpty()) {
+            ActivityCompat.requestPermissions(this, permissionsToRequest.toTypedArray(), 1000)
+        }
+
+        chatViewModel = androidx.lifecycle.ViewModelProvider(this)[ChatViewModel::class.java]
+        
         setContent {
-            val chatViewModel: ChatViewModel = viewModel()
-
-            // 从 ViewModel 获取状态（可保证重建时能够读取到ViewModel的最新数据，不丢状态）
-            val currentTheme = chatViewModel.themeMode.value
-            val userName = chatViewModel.userName.value
-            val apiConfigList = chatViewModel.apiConfigList.value
-            val activeConfigId = chatViewModel.activeConfigId.value
-            val apiConfig = chatViewModel.activeApiConfig.value
-            val appLanguage = chatViewModel.appLanguage.value
-            val userBubbleColor = chatViewModel.userBubbleColor.value
-            val sessions = chatViewModel.sessions.value
-            val currentSessionId = chatViewModel.currentSessionId.value
-            val messages = chatViewModel.messages.value
-            val characterCardList = chatViewModel.characterCardList.value
-            val activeCharacterCard = chatViewModel.activeCharacterCard.value
-            val isThinking = chatViewModel.isThinking.value
-
+            val navController = rememberNavController()
+            val currentTheme by chatViewModel.themeMode
             val darkTheme = when (currentTheme) {
                 ThemeMode.LIGHT -> false
                 ThemeMode.DARK -> true
-                ThemeMode.SYSTEM -> isSystemInDarkTheme()
+                ThemeMode.SYSTEM -> androidx.compose.foundation.isSystemInDarkTheme()
             }
 
             LoyeaTheme(darkTheme = darkTheme) {
                 Surface(
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
                 ) {
-                    val navController = rememberNavController()
+                    NavHost(navController = navController, startDestination = "chat") {
+                        composable("chat") {
+                            val userName by chatViewModel.userName
+                            val activeApiConfig by chatViewModel.activeApiConfig
+                            val apiConfigList by chatViewModel.apiConfigList
+                            val appLanguage by chatViewModel.appLanguage
+                            val userBubbleColor by chatViewModel.userBubbleColor
+                            val messages by chatViewModel.messages
+                            val isThinking by chatViewModel.isThinking
+                            val isMcpRunning by chatViewModel.isMcpRunning
+                            val activeCharacterCard by chatViewModel.activeCharacterCard
+                            val characterCardList by chatViewModel.characterCardList
+                            val sessions by chatViewModel.sessions
+                            val currentSessionId by chatViewModel.currentSessionId
+                            val activeSession = chatViewModel.activeSession.value
 
-                    NavHost(navController = navController, startDestination = "main") {
-                        composable("main") {
                             MainScreen(
                                 userName = userName,
-                                apiConfig = apiConfig,
+                                apiConfig = activeApiConfig,
                                 apiConfigList = apiConfigList,
                                 onActiveConfigChange = { chatViewModel.selectActiveConfig(it) },
                                 appLanguage = appLanguage,
@@ -79,39 +132,35 @@ class MainActivity : ComponentActivity() {
                                 currentSessionId = currentSessionId,
                                 messages = messages,
                                 isThinking = isThinking,
+                                isMcpRunning = isMcpRunning,
                                 onSendMessage = { chatViewModel.sendMessage(it) },
+                                onStopResponse = { chatViewModel.stopResponse() },
                                 onToggleThoughts = { chatViewModel.toggleThoughtsExpanded(it) },
                                 onSessionSelect = { chatViewModel.selectSession(it) },
                                 onSessionDelete = { chatViewModel.deleteSession(it) },
                                 onNewChatClick = { chatViewModel.createNewChat(it) },
                                 activeCharacterCard = activeCharacterCard,
                                 characterCardList = characterCardList,
-                                useSystemTime = chatViewModel.activeSession.value?.useSystemTime ?: false,
-                                onToggleSystemTime = { chatViewModel.toggleCurrentSessionSystemTime() },
-                                onTavernClick = {
-                                    navController.navigate("tavern")
-                                },
-                                onNavigateToSettings = {
-                                    navController.navigate("settings")
-                                },
-                                onUserNameChange = { chatViewModel.saveUserName(it) }
+                                onTavernClick = { /* 默认逻辑，暂无专门跳转 */ },
+                                onNavigateToSettings = { navController.navigate("settings") },
+                                onUserNameChange = { chatViewModel.saveUserName(it) },
+                                useSystemTime = activeSession?.useSystemTime ?: false,
+                                onToggleSystemTime = { chatViewModel.toggleCurrentSessionSystemTime() }
                             )
                         }
-
-                        // 人格管理页面
-                        composable("tavern") {
-                            TavernScreen(
-                                characterCardList = characterCardList,
-                                onCharacterCardListSave = { chatViewModel.saveCharacterCardList(it) },
-                                appLanguage = appLanguage,
-                                onBackClick = {
-                                    navController.popBackStack()
-                                }
-                            )
-                        }
-                        
-                        // 设置管理页面
                         composable("settings") {
+                            val apiConfigList by chatViewModel.apiConfigList
+                            val activeConfigId by chatViewModel.activeConfigId
+                            val userName by chatViewModel.userName
+                            val appLanguage by chatViewModel.appLanguage
+                            val userBubbleColor by chatViewModel.userBubbleColor
+                            val mcpConfigs by chatViewModel.mcpConfigList
+                            val mcpStates by chatViewModel.mcpStates.collectAsState()
+                            val isWatchConnected by chatViewModel.isWatchConnected
+                            val isWatchMoving by chatViewModel.isWatchMoving
+                            val useRealLocation by chatViewModel.useRealLocation
+                            val mockLocation by chatViewModel.mockLocation
+
                             SettingsScreen(
                                 currentTheme = currentTheme,
                                 onThemeChange = { chatViewModel.changeTheme(it) },
@@ -125,9 +174,68 @@ class MainActivity : ComponentActivity() {
                                 onAppLanguageChange = { chatViewModel.changeAppLanguage(it) },
                                 userBubbleColor = userBubbleColor,
                                 onUserBubbleColorChange = { chatViewModel.changeUserBubbleColor(it) },
-                                onBackClick = {
-                                    navController.popBackStack()
-                                }
+                                mcpConfigs = mcpConfigs,
+                                mcpStates = mcpStates,
+                                onMcpConfigsSave = { chatViewModel.saveMcpConfigs(it) },
+                                getMcpToolsForServer = { chatViewModel.getMcpToolsForServer(it) },
+                                isWatchConnected = isWatchConnected,
+                                onWatchConnectedChange = { chatViewModel.setWatchConnected(it) },
+                                isWatchMoving = isWatchMoving,
+                                onWatchMovingChange = { chatViewModel.setWatchMoving(it) },
+                                useRealLocation = useRealLocation,
+                                onUseRealLocationChange = {
+                                    chatViewModel.setUseRealLocation(it)
+                                    if (it) {
+                                        ActivityCompat.requestPermissions(
+                                            this@MainActivity,
+                                            arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_COARSE_LOCATION),
+                                            1002
+                                        )
+                                    }
+                                },
+                                mockLocation = mockLocation,
+                                onMockLocationSave = { chatViewModel.setMockLocation(it) },
+                                onHealthConnectClick = {
+                                    Log.d("MainActivity", "Health Connect Button Clicked")
+                                    try {
+                                        val sdkStatus = HealthConnectClient.getSdkStatus(this@MainActivity)
+                                        Log.d("MainActivity", "Health Connect SDK Status: $sdkStatus")
+                                        
+                                        if (sdkStatus == HealthConnectClient.SDK_UNAVAILABLE) {
+                                            Toast.makeText(this@MainActivity, "您的设备未安装或不支持健康连接", Toast.LENGTH_LONG).show()
+                                            try {
+                                                val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("market://details?id=com.google.android.apps.healthdata"))
+                                                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                startActivity(intent)
+                                            } catch (e: Exception) {
+                                                val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://play.google.com/store/apps/details?id=com.google.android.apps.healthdata"))
+                                                startActivity(intent)
+                                            }
+                                        } else if (sdkStatus == HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED) {
+                                            Toast.makeText(this@MainActivity, "健康连接需要更新", Toast.LENGTH_LONG).show()
+                                            try {
+                                                val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("market://details?id=com.google.android.apps.healthdata"))
+                                                startActivity(intent)
+                                            } catch (e: Exception) {}
+                                        } else {
+                                            // 直接在主线程调用 launch
+                                            try {
+                                                requestPermissionLauncher.launch(HEALTH_PERMISSIONS)
+                                            } catch (e: Exception) {
+                                                Log.e("MainActivity", "Launch permission failed", e)
+                                                try {
+                                                    startActivity(Intent("android.settings.HEALTH_CONNECT_SETTINGS"))
+                                                } catch (e2: Exception) {
+                                                    Toast.makeText(this@MainActivity, "无法打开授权界面，请手动设置", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        }
+                                    } catch (e: Exception) {
+                                        Log.e("MainActivity", "onHealthConnectClick Error", e)
+                                        Toast.makeText(this@MainActivity, "异常: ${e.message}", Toast.LENGTH_LONG).show()
+                                    }
+                                },
+                                onBackClick = { navController.popBackStack() }
                             )
                         }
                     }
