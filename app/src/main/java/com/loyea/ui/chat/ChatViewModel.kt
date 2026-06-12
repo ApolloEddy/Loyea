@@ -16,6 +16,7 @@ import com.loyea.mcp.McpServerStatus
 import com.loyea.mcp.McpConfigStorage
 import com.loyea.mcp.McpManager
 import com.loyea.mcp.McpTool
+import com.loyea.perception.HapticManager
 import com.loyea.perception.PhysicalContextManager
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.Dispatchers
@@ -33,6 +34,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val mcpManager = McpManager(application)
     val mcpStates: StateFlow<Map<String, McpServerStatus>> = mcpManager.serverStates
 
+    private val hapticManager = HapticManager(application)
     val perceptionManager = PhysicalContextManager(context)
 
     var mcpConfigList = mutableStateOf<List<McpServerConfig>>(emptyList())
@@ -126,6 +128,24 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     var useRealLocation = mutableStateOf(false)
         private set
     var mockLocation = mutableStateOf("")
+        private set
+
+    // 11. Tool Authorization States
+    var toolAuthLocation = mutableStateOf(true)
+        private set
+    var toolAuthWeather = mutableStateOf(true)
+        private set
+    var toolAuthEnvironment = mutableStateOf(true)
+        private set
+    var toolAuthDevice = mutableStateOf(true)
+        private set
+    var toolAuthBluetoothActivity = mutableStateOf(true)
+        private set
+    var toolAuthHealth = mutableStateOf(true)
+        private set
+    var toolAuthHaptic = mutableStateOf(true)
+        private set
+    var enableBackgroundGreeting = mutableStateOf(true)
         private set
 
     init {
@@ -658,17 +678,24 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                         accumulatedContent = accumulatedContent.removeRange(hapticMatch.range)
                                         hapticMatch = hapticRegex.find(accumulatedContent)
                                     }
-                                    // 过滤半截 [haptic: 占位符
-                                    val lastOpen = accumulatedContent.lastIndexOf('[')
-                                    if (lastOpen != -1 && lastOpen > accumulatedContent.lastIndexOf(']')) {
-                                        val tail = accumulatedContent.substring(lastOpen)
-                                        if ("[haptic:".startsWith(tail) || tail.startsWith("[haptic:")) {
-                                            accumulatedContent = accumulatedContent.substring(0, lastOpen)
-                                        }
-                                    }
                                 } catch (e: Exception) {
                                     Log.e("ChatViewModel", "Haptic parse error: ${e.message}", e)
                                 }
+                                
+                                // 临时对准备渲染展示的内容进行半截过滤，不影响 accumulatedContent 的流拼接
+                                var displayContent = accumulatedContent
+                                try {
+                                    val lastOpen = displayContent.lastIndexOf('[')
+                                    if (lastOpen != -1 && lastOpen > displayContent.lastIndexOf(']')) {
+                                        val tail = displayContent.substring(lastOpen)
+                                        if ("[haptic:".startsWith(tail) || tail.startsWith("[haptic:")) {
+                                            displayContent = displayContent.substring(0, lastOpen)
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    // ignore
+                                }
+
                                 if (calculatedDuration == null) {
                                     val duration = ((System.currentTimeMillis() - startTime) / 1000).toInt()
                                     calculatedDuration = if (accumulatedThoughts.isNotEmpty()) duration else 0
@@ -676,7 +703,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 currentList = messages.value.map { msg ->
                                     if (msg.id == aiMessageId) {
                                         msg.copy(
-                                            content = accumulatedContent,
+                                            content = displayContent,
                                             isStillThinking = false,
                                             thoughtDurationSeconds = calculatedDuration ?: 0
                                         )
@@ -877,6 +904,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             lowName.contains("get_bluetooth_status") || lowName.contains("bluetooth") -> "检测蓝牙设备连接"
             lowName.contains("get_activity_state") || lowName.contains("activity") -> "识别系统运动状态"
             lowName.contains("get_health_data") || lowName.contains("health") -> "读取健康中心数据"
+            lowName.contains("get_wifi_status") || lowName.contains("wifi") -> "检测 Wi-Fi 网络连接"
+            lowName.contains("get_noise_level") || lowName.contains("noise") -> "测量环境噪音分贝"
             lowName.contains("heart_rate") -> "调取实时心率"
             lowName.contains("steps") -> "查询今日步数"
             lowName.contains("sleep") -> "分析睡眠质量"
@@ -1158,8 +1187,43 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun updateBackgroundGreeting(enabled: Boolean) {
+        enableBackgroundGreeting.value = enabled
+        prefs.edit().putBoolean("enable_background_greeting", enabled).apply()
+    }
+
+    fun updateToolAuth(key: String, enabled: Boolean) {
+        when (key) {
+            "tool_auth_location" -> toolAuthLocation.value = enabled
+            "tool_auth_weather" -> toolAuthWeather.value = enabled
+            "tool_auth_environment" -> toolAuthEnvironment.value = enabled
+            "tool_auth_device" -> toolAuthDevice.value = enabled
+            "tool_auth_bluetooth_activity" -> toolAuthBluetoothActivity.value = enabled
+            "tool_auth_health" -> toolAuthHealth.value = enabled
+            "tool_auth_haptic" -> toolAuthHaptic.value = enabled
+        }
+        prefs.edit().putBoolean(key, enabled).apply()
+    }
+
+    fun startPerceptionSensors() {
+        try {
+            perceptionManager.activityProvider.startLocalSensorListening()
+        } catch (e: Exception) {
+            Log.e("ChatViewModel", "Failed to start perception sensors", e)
+        }
+    }
+
+    fun stopPerceptionSensors() {
+        try {
+            perceptionManager.activityProvider.stopLocalSensorListening()
+        } catch (e: Exception) {
+            Log.e("ChatViewModel", "Failed to stop perception sensors", e)
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
         mcpManager.stop()
+        stopPerceptionSensors()
     }
 }

@@ -33,8 +33,7 @@ class ActivityProvider(private val context: Context) : SensorEventListener {
     private var lastStepTime: Long = 0
 
     init {
-        // 1. 初始化本地传感器监听
-        startLocalSensorListening()
+        // 本地传感器监听已移交 MainActivity 的 onStart/onStop 生命周期管理，防止后台空转高功耗
         
         // 2. 尝试启动 Google Play Services Activity Recognition
         try {
@@ -46,7 +45,7 @@ class ActivityProvider(private val context: Context) : SensorEventListener {
         }
     }
 
-    private fun startLocalSensorListening() {
+    fun startLocalSensorListening() {
         try {
             sensorManager?.let { manager ->
                 accelerometer?.let {

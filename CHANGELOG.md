@@ -33,6 +33,16 @@ All notable changes to this project will be documented in this file.
 - **修复 Wi-Fi 与蓝牙感知导致的 SecurityException 闪退**：
   - 在 [WifiProvider.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/perception/WifiProvider.kt) 获取当前 Wi-Fi SSID 处，使用 `try-catch` 包裹 `wifiManager.connectionInfo` 调用，彻底拦截并降级防护由于 Android 10+ 定位/WIFI 权限未授权而产生的 `SecurityException` 崩溃，确保顺利降级返回默认 `"Wi-Fi Network"`。
   - 在 [BluetoothProvider.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/perception/BluetoothProvider.kt) 的 `getBluetoothStatus()` 主函数中全面引入 `try-catch` 保护，重点防护在无蓝牙权限访问 `bluetoothAdapter.isEnabled` 时产生的安全崩溃隐患。
+- **丰富 Wi-Fi 连接和环境噪音分贝数据与物理底噪修正**：
+  - 重写 [WifiProvider.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/perception/WifiProvider.kt)，引入网络信号强度（dBm）、信号等级（0~4级）、连接速率（Mbps）和频段（MHz）的抓取，使获取的 Wi-Fi 连接上下文更具信息维度，即便无法获得 SSID 也能提供有价值的网络状况。
+  - 重构 [NoiseProvider.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/perception/NoiseProvider.kt) 的分贝计算逻辑，引入 `30dB` 的物理声学底噪保护与归一化平滑，消除因为系统底噪阻尼或微弱静音导致计算出不合常理的 `2dB` 极小值现象，使返回的分贝数与人耳实际听感契合。
+- **修复打字机半截震动占位符过滤导致的流拼接中断与震感失灵 Bug**：
+  - 修复了 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中打字机流式解析 `[haptic:类型]` 的破坏性截断 Bug。此前在遇到半截占位符时直接破坏性地修改了 `accumulatedContent`，导致下一批流文本进来后由于标志残缺而无法完成拼接，进而导致震感失灵且界面残留 `:poke]` 等脏字符。现已将半截字符过滤移至仅用于 UI 渲染更新的临时变量 `displayContent` 中，原汁原味地保留流式拼接字符，彻底治愈震动反馈失灵的问题。
+- **解决 App 后台常驻传感器高功耗与强杀问题**：
+  - 重构 [ActivityProvider.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/perception/ActivityProvider.kt) 类的初始化逻辑，移除在 `init` 阶段默认注册本地加速度计与步数计数器的逻辑，改为由页面前台生命周期动态激活。
+  - 在 [MainActivity.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/MainActivity.kt) 中挂接 `onStart()` 与 `onStop()` 生命周期回调，使本地感知传感器只在应用前台运行时工作，切入后台时即刻完全释放传感器资源，彻底切断了后台空转带来的高电池消耗与被系统清理强杀（LMK）的风险。
+- **补齐新增工具的会话界面汉化翻译**：
+  - 在 `ChatViewModel.kt` 的 `translateToolName` 中新增对 `get_wifi_status`/`wifi` -> `"检测 Wi-Fi 网络连接"` 以及 `get_noise_level`/`noise` -> `"测量环境噪音分贝"` 的中文描述汉化翻译。
 - **修复打字机震动标记替换引起的崩溃/卡死**：
   - 修复了在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中解析 AI 回复的 `[haptic:类型]` 占位符时的崩溃隐患。此前使用 `replaceFirst(match.value, "")` 导致 JVM 在将 `match.value`（例如 `[haptic:poke]`）当作正则表达式解析时，因中括号元字符未转义导致 `PatternSyntaxException` 抛出闪退，或死循环卡死。现已重构为基于字符位置区间的安全移除方法 `removeRange(match.range)`，并对整个打字机文本解析块增加了 `try-catch` 异常防护。
 - **修复 GreetingWorker 中 Log 引用未解析**：

@@ -10,7 +10,7 @@ import android.os.Build
 class WifiProvider(private val context: Context) {
 
     /**
-     * 获取当前连接的网络场景描述（Wi-Fi SSID 或蜂窝网络）
+     * 获取当前连接的网络场景描述并返回丰富的连接参数
      */
     @SuppressLint("MissingPermission")
     fun getNetworkSsid(): String {
@@ -23,21 +23,45 @@ class WifiProvider(private val context: Context) {
 
         return when {
             capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> {
-                // 如果是 Wi-Fi，尝试获取具体的 SSID
                 try {
                     val wifiManager = appContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
                     val info = wifiManager?.connectionInfo
-                    val rawSsid = info?.ssid
-                    
-                    if (rawSsid != null && rawSsid != "<unknown ssid>" && rawSsid.isNotBlank() && rawSsid != "0x") {
-                        rawSsid.replace("\"", "") // 去除 SSID 包含的双引号
+                    if (info != null) {
+                        val rawSsid = info.ssid
+                        val ssid = if (rawSsid != null && rawSsid != "<unknown ssid>" && rawSsid.isNotBlank() && rawSsid != "0x") {
+                            rawSsid.replace("\"", "")
+                        } else {
+                            null
+                        }
+
+                        val rssi = info.rssi
+                        val signalLevel = WifiManager.calculateSignalLevel(rssi, 5) // 0-4级
+                        val speed = info.linkSpeed
+                        val freq = info.frequency
+
+                        val sb = java.lang.StringBuilder()
+                        sb.append("Wi-Fi Network")
+                        if (ssid != null) {
+                            sb.append(" (SSID: $ssid")
+                        } else {
+                            sb.append(" (SSID: Hidden/No Location Permission")
+                        }
+                        sb.append(", Signal: $rssi dBm [Level $signalLevel/4]")
+                        if (speed > 0) {
+                            sb.append(", Speed: ${speed}Mbps")
+                        }
+                        if (freq > 0) {
+                            sb.append(", Freq: ${freq}MHz")
+                        }
+                        sb.append(")")
+                        sb.toString()
                     } else {
-                        "Wi-Fi Network" // 权限不足或 GPS 关闭时的通用返回
+                        "Wi-Fi Network (Connected)"
                     }
                 } catch (e: SecurityException) {
-                    "Wi-Fi Network"
+                    "Wi-Fi Network (Connected, Access Restricted)"
                 } catch (t: Throwable) {
-                    "Wi-Fi Network"
+                    "Wi-Fi Network (Connected)"
                 }
             }
             capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> {

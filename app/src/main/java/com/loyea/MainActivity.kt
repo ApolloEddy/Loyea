@@ -58,6 +58,13 @@ class MainActivity : ComponentActivity() {
         HealthPermission.getReadPermission(BloodPressureRecord::class)
     )
 
+    override fun onStart() {
+        super.onStart()
+        if (::chatViewModel.isInitialized) {
+            chatViewModel.startPerceptionSensors()
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         if (::chatViewModel.isInitialized) {
@@ -80,6 +87,19 @@ class MainActivity : ComponentActivity() {
                 permissionsToRequest.add(android.Manifest.permission.POST_NOTIFICATIONS)
             }
         }
+        // 动态添加蓝牙运行时权限申请 (Android 12+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.BLUETOOTH_CONNECT) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                permissionsToRequest.add(android.Manifest.permission.BLUETOOTH_CONNECT)
+            }
+            if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.BLUETOOTH_SCAN) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                permissionsToRequest.add(android.Manifest.permission.BLUETOOTH_SCAN)
+            }
+        }
+        // 动态添加录音权限申请 (环境噪音感应需要)
+        if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            permissionsToRequest.add(android.Manifest.permission.RECORD_AUDIO)
+        }
         val prefs = getSharedPreferences("loyea_prefs", Context.MODE_PRIVATE)
         if (prefs.getBoolean("use_real_location", false)) {
             if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_FINE_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
@@ -92,7 +112,23 @@ class MainActivity : ComponentActivity() {
         }
 
         chatViewModel = androidx.lifecycle.ViewModelProvider(this)[ChatViewModel::class.java]
-        
+
+        // 启动自愈注册：检查是否开启了后台问候，如果开启则用 KEEP 策略启动初始延时的 GreetingWorker
+        val enableBgGreeting = prefs.getBoolean("enable_background_greeting", true)
+        if (enableBgGreeting) {
+            val randomDelayMinutes = kotlin.random.Random.nextInt(60, 180).toLong()
+            val workRequest = androidx.work.OneTimeWorkRequestBuilder<com.loyea.worker.GreetingWorker>()
+                .setInitialDelay(randomDelayMinutes, java.util.concurrent.TimeUnit.MINUTES)
+                .addTag("loyea_bg_greeting")
+                .build()
+            androidx.work.WorkManager.getInstance(this).enqueueUniqueWork(
+                "loyea_bg_greeting_work",
+                androidx.work.ExistingWorkPolicy.KEEP, // KEEP 保证已存在的任务不会被重置，保留其原有的倒计时
+                workRequest
+            )
+            Log.d("MainActivity", "Background greeting self-healing check: Active, scheduled initial delay $randomDelayMinutes mins with KEEP policy.")
+        }
+
         setContent {
             val navController = rememberNavController()
             val currentTheme by chatViewModel.themeMode
@@ -193,6 +229,7 @@ class MainActivity : ComponentActivity() {
                                 getMcpToolsForServer = { chatViewModel.getMcpToolsForServer(it) },
                                 isWatchConnected = isWatchConnected,
                                 onWatchConnectedChange = { chatViewModel.setWatchConnected(it) },
+                                onWatchReconnect = { chatViewModel.reconnectWatch() },
                                 isWatchMoving = isWatchMoving,
                                 onWatchMovingChange = { chatViewModel.setWatchMoving(it) },
                                 useRealLocation = useRealLocation,
@@ -248,7 +285,8 @@ class MainActivity : ComponentActivity() {
                                         Toast.makeText(this@MainActivity, "异常: ${e.message}", Toast.LENGTH_LONG).show()
                                     }
                                 },
-                                onBackClick = { navController.popBackStack() }
+                                onBackClick = { navController.popBackStack() },
+                                viewModel = chatViewModel
                             )
                         }
                         composable("tavern") {
@@ -271,6 +309,7 @@ class MainActivity : ComponentActivity() {
         super.onStop()
         if (::chatViewModel.isInitialized) {
             chatViewModel.stopResponse()
+            chatViewModel.stopPerceptionSensors()
         }
     }
 }
