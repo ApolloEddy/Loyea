@@ -112,7 +112,25 @@ class ChatStorageManager(private val context: Context) {
             }
             val json = cardsFile.readText()
             val type = object : TypeToken<List<CharacterCard>>() {}.type
-            gson.fromJson<List<CharacterCard>>(json, type) ?: emptyList()
+            val rawList = gson.fromJson<List<CharacterCard>>(json, type) ?: emptyList()
+            // 进行自愈式清洗
+            rawList.map { raw ->
+                CharacterCard(
+                    id = raw.id ?: System.currentTimeMillis().toString(),
+                    name = raw.name ?: "Unknown",
+                    avatarUri = raw.avatarUri,
+                    avatarColor = raw.avatarColor ?: "#E5D3B3",
+                    shortIntro = raw.shortIntro ?: "",
+                    systemPrompt = raw.systemPrompt ?: "",
+                    personality = raw.personality ?: "",
+                    scenario = raw.scenario ?: "",
+                    firstMessage = raw.firstMessage ?: "",
+                    chatExamples = raw.chatExamples ?: "",
+                    isBuiltIn = raw.isBuiltIn,
+                    creatorName = raw.creatorName,
+                    backgroundUri = raw.backgroundUri
+                )
+            }
         } catch (e: Exception) {
             e.printStackTrace()
             emptyList()

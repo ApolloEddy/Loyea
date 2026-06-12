@@ -225,7 +225,7 @@ class LlmClient {
                                     }
 
                                     // 3. 工具调用流
-                                    val toolCallsJson = delta.getAsJsonArray("tool_calls")
+                                    val toolCallsJson = delta.get("tool_calls")?.takeIf { it.isJsonArray }?.asJsonArray
                                     if (toolCallsJson != null && toolCallsJson.size() > 0) {
                                         toolCallsJson.forEach { element ->
                                             val tcObj = element.asJsonObject

@@ -16,6 +16,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -61,7 +62,6 @@ import androidx.compose.foundation.layout.consumeWindowInsets
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
-    userName: String,
     apiConfig: com.loyea.ui.settings.ApiConfig,
     apiConfigList: List<com.loyea.ui.settings.ApiConfig>,
     onActiveConfigChange: (String) -> Unit,
@@ -81,11 +81,11 @@ fun ChatScreen(
     getDraft: (String) -> String,
     saveDraft: (String, String) -> Unit,
     clearDraft: (String) -> Unit,
+    onEditMessage: (String, String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
-    val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
     val isEn = appLanguage == "en"
@@ -194,6 +194,9 @@ fun ChatScreen(
                         },
                         onToggleThoughts = {
                             onToggleThoughts(message.id)
+                        },
+                        onEdit = { newText ->
+                            onEditMessage(message.id, newText)
                         }
                     )
                 }
@@ -529,7 +532,8 @@ fun MessageItem(
     message: Message,
     userBubbleColor: String,
     onCopy: () -> Unit,
-    onToggleThoughts: () -> Unit
+    onToggleThoughts: () -> Unit,
+    onEdit: (String) -> Unit
 ) {
     val isUser = message.sender == Sender.USER
 
@@ -588,43 +592,123 @@ fun MessageItem(
                 MaterialTheme.colorScheme.onSecondaryContainer
             }
 
+            var isEditing by remember { mutableStateOf(false) }
+            var editInputText by remember(message.content) { mutableStateOf(TextFieldValue(message.content)) }
             var showUserCopyIcon by remember { mutableStateOf(false) }
 
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth(0.85f)
-                    .clip(
-                        RoundedCornerShape(
-                            topStart = 16.dp,
-                            topEnd = 16.dp,
-                            bottomStart = 16.dp,
-                            bottomEnd = 4.dp
+            if (isEditing) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth(0.85f)
+                        .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 4.dp))
+                        .background(bubbleBgColor ?: MaterialTheme.colorScheme.secondaryContainer)
+                        .padding(12.dp)
+                ) {
+                    androidx.compose.foundation.text.BasicTextField(
+                        value = editInputText,
+                        onValueChange = { editInputText = it },
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = bubbleTextColor),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color.Black.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                            .padding(8.dp),
+                        cursorBrush = androidx.compose.ui.graphics.SolidColor(bubbleTextColor)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(
+                            onClick = { 
+                                isEditing = false 
+                                editInputText = TextFieldValue(message.content)
+                            },
+                            colors = ButtonDefaults.textButtonColors(contentColor = bubbleTextColor.copy(alpha = 0.7f))
+                        ) {
+                            Text("取消", fontSize = 13.sp)
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = {
+                                val trimmed = editInputText.text.trim()
+                                if (trimmed.isNotBlank()) {
+                                    onEdit(trimmed)
+                                    isEditing = false
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                            modifier = Modifier.height(32.dp)
+                        ) {
+                            Text("保存并回溯", fontSize = 13.sp)
+                        }
+                    }
+                }
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.85f)
+                        .clip(
+                            RoundedCornerShape(
+                                topStart = 16.dp,
+                                topEnd = 16.dp,
+                                bottomStart = 16.dp,
+                                bottomEnd = 4.dp
+                            )
                         )
-                    )
-                    .background(bubbleBgColor ?: MaterialTheme.colorScheme.secondaryContainer)
-                    .clickable { showUserCopyIcon = !showUserCopyIcon }
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
-            ) {
-                androidx.compose.foundation.text.selection.SelectionContainer {
-                    Text(
-                        text = message.content,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = bubbleTextColor
-                    )
+                        .background(bubbleBgColor ?: MaterialTheme.colorScheme.secondaryContainer)
+                        .clickable { showUserCopyIcon = !showUserCopyIcon }
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                ) {
+                    androidx.compose.foundation.text.selection.SelectionContainer {
+                        Text(
+                            text = message.content,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = bubbleTextColor
+                        )
+                    }
                 }
             }
 
             AnimatedVisibility(
-                visible = showUserCopyIcon,
+                visible = showUserCopyIcon && !isEditing,
                 enter = expandVertically() + fadeIn(),
                 exit = shrinkVertically() + fadeOut()
             ) {
                 Row(
                     horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .fillMaxWidth(0.85f)
                         .padding(top = 4.dp, end = 4.dp)
                 ) {
+                    Text(
+                        text = formatTime(message.timestamp),
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    IconButton(
+                        onClick = { 
+                            isEditing = true
+                            showUserCopyIcon = false
+                        },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = "Edit",
+                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
                     IconButton(
                         onClick = { 
                             onCopy()
@@ -737,7 +821,7 @@ fun MessageItem(
                     }
                     IconButton(onClick = { /* TODO: Speak */ }, modifier = Modifier.size(28.dp)) {
                         Icon(
-                            imageVector = Icons.Default.VolumeUp,
+                            imageVector = Icons.AutoMirrored.Filled.VolumeUp,
                             contentDescription = "Speak",
                             tint = iconColor,
                             modifier = Modifier.size(16.dp)
@@ -759,6 +843,12 @@ fun MessageItem(
                             modifier = Modifier.size(15.dp)
                         )
                     }
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = formatTime(message.timestamp),
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f)
+                    )
                 }
             }
         }
@@ -972,7 +1062,6 @@ fun ChatScreenPreview() {
     LoyeaTheme {
         val defaultChar = TavernCardParser.getBuiltInCards().first()
         ChatScreen(
-            userName = "Loyea Developer",
             apiConfig = ApiConfig(),
             apiConfigList = listOf(ApiConfig()),
             onActiveConfigChange = {},
@@ -991,7 +1080,13 @@ fun ChatScreenPreview() {
             currentSessionId = "session_id",
             getDraft = { "" },
             saveDraft = { _, _ -> },
-            clearDraft = {}
+            clearDraft = {},
+            onEditMessage = { _, _ -> }
         )
     }
+}
+
+private fun formatTime(timestamp: Long): String {
+    val sdf = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+    return sdf.format(java.util.Date(timestamp))
 }

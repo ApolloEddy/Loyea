@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased] - 2026-06-12
 
 ### Added (新增)
+- **UI 对话气泡时间显示及回溯编辑与历史截断回溯机制**：
+  - 在 [ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt) 的用户消息气泡中，点击即可折叠/展开当前对话的精确发送时间戳（HH:mm 格式），同时合成了“编辑”与“复制”按钮。当用户点击“编辑”按钮时，对话气泡转换为包含“取消”与“保存并回溯”功能的安全编辑输入框。
+  - 在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中实现了 `editMessage(messageId, newContent)` 函数。当用户修改消息并提交时，自动停止当前的流式 AI 回答，从本地磁盘和内存中截断并删除该被编辑消息之后的所有对话，将该消息更新为新内容并刷新时间戳，接着自动向大模型重新发起流式提问。
+  - 在 [MainScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/main/MainScreen.kt) 与 [MainActivity.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/MainActivity.kt) 中透传并绑定了编辑回调，彻底打通了从 UI 编辑到 ViewModel 核心截断重发流程。
 - **后台主动问候启动自愈注册**：
   - 在 [MainActivity.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/MainActivity.kt) 的 `onCreate` 初始化阶段，检测用户后台主动联系的授权状态（`enable_background_greeting`）。若已授权，则通过 `WorkManager` 以 `ExistingWorkPolicy.KEEP` 策略队列化注册带有 60~180 分钟初始随机延时的 [GreetingWorker.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/worker/GreetingWorker.kt) 任务。此设计既保证了系统因强杀、重启、冷启动导致链条中断时能够有效自愈，又完全保留了原有队列等待的倒计时不被重置。
 - **物理震动交互机制与打字机流式同步**：
@@ -30,6 +34,11 @@ All notable changes to this project will be documented in this file.
 - **手表物理上下文感知升级为真实蓝牙源**：在 [PhysicalContextManager.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/perception/PhysicalContextManager.kt#L8) 中将原本的 `MockWatchProvider` 升级重构为 [BluetoothWatchProvider.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/perception/BluetoothWatchProvider.kt)。使得整个感知框架（包括 AI 会话、RAG 记忆、MCP 工具等接口）能够直连真实的蓝牙手表源以采集真实的物理状态，并且在蓝牙未连接时仍然具备自动降级至本地模拟测试数据的双工保障。并且在 [AndroidManifest.xml](file:///D:/CodingProjects/Android/Loyea/app/src/main/AndroidManifest.xml#L9) 中补齐了 Android 12+ 上连接和发现手表所需的 `BLUETOOTH_ADMIN`、`BLUETOOTH_SCAN` 和 `BLUETOOTH_ADVERTISE` 全套蓝牙动态权限。
 
 ### Fixed (修复)
+- **消除 Kotlin 编译器警告并优化 Compose 代码**：
+  - 移除了 [ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt) 和 [MainScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/main/MainScreen.kt) 中未使用的 `userName` 参数及未使用的协程作用域。
+  - 升级了 [ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt) 中已废弃的 `Icons.Default.VolumeUp` 为 `Icons.AutoMirrored.Filled.VolumeUp`。
+  - 升级了 [MainScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/main/MainScreen.kt) 中已废弃的 `Divider` 组件为 Material 3 标准 of `HorizontalDivider`。
+  - 消除了 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中多处对非空 `parsedArgs` 进行 `Unnecessary safe call` 的警告。
 - **隔离非 Loyea 角色卡的物理感知上下文与工具访问，防止跨会话泄露**：
   - 在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中引入角色卡类型拦截机制。通过 `characterCard.id == "char_loyea_default"` 进行前置识别，如果不是内置的 Loyea 角色卡（如“小玲喵”），则不在其 System Prompt 里注入物理感知环境数据，并在可用工具列表中强行过滤剔除所有 `BuiltinPerception` 物理传感/外设类工具，实现彻底的角色隔离与隐私脱敏。
 - **引入真实时间戳差值装饰机制，赋予 AI 时效遗忘与时间感知能力**：

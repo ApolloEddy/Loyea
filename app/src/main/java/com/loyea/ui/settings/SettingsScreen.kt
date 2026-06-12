@@ -6,6 +6,7 @@ import com.loyea.mcp.McpServerConfig
 import com.loyea.mcp.McpServerStatus
 import com.loyea.mcp.McpTool
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -47,6 +48,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.loyea.ui.theme.LoyeaTheme
+import com.loyea.bluetooth.WatchBluetoothClient
 
 enum class ThemeMode {
     LIGHT, DARK, SYSTEM
@@ -54,7 +56,7 @@ enum class ThemeMode {
 
 // 二级页面枚举
 enum class SettingsSubPage {
-    MAIN, API_CONFIG, THEME_SETTINGS, MCP_CONFIG, PHYSICAL_SENSOR, MEMORY_SETTINGS
+    MAIN, API_CONFIG, THEME_SETTINGS, MCP_CONFIG, PHYSICAL_SENSOR, MEMORY_SETTINGS, TOOL_AUTHORIZATION
 }
 
 // API 配置数据模型
@@ -96,6 +98,7 @@ fun SettingsScreen(
     getMcpToolsForServer: (String) -> List<McpTool>,
     isWatchConnected: Boolean,
     onWatchConnectedChange: (Boolean) -> Unit,
+    onWatchReconnect: () -> Unit,
     isWatchMoving: Boolean,
     onWatchMovingChange: (Boolean) -> Unit,
     useRealLocation: Boolean,
@@ -104,6 +107,7 @@ fun SettingsScreen(
     onMockLocationSave: (String) -> Unit,
     onHealthConnectClick: () -> Unit,
     onBackClick: () -> Unit,
+    viewModel: com.loyea.ui.chat.ChatViewModel? = null,
     modifier: Modifier = Modifier
 ) {
     var subPage by remember { mutableStateOf(SettingsSubPage.MAIN) }
@@ -145,6 +149,7 @@ fun SettingsScreen(
                     onNavigateToMcp = { subPage = SettingsSubPage.MCP_CONFIG },
                     onNavigateToSensor = { subPage = SettingsSubPage.PHYSICAL_SENSOR },
                     onNavigateToMemory = { subPage = SettingsSubPage.MEMORY_SETTINGS },
+                    onNavigateToToolAuth = { subPage = SettingsSubPage.TOOL_AUTHORIZATION },
                     onBackClick = onBackClick
                 )
             }
@@ -191,6 +196,7 @@ fun SettingsScreen(
                 PhysicalSensorLayout(
                     isWatchConnected = isWatchConnected,
                     onWatchConnectedChange = onWatchConnectedChange,
+                    onWatchReconnect = onWatchReconnect,
                     isWatchMoving = isWatchMoving,
                     onWatchMovingChange = onWatchMovingChange,
                     useRealLocation = useRealLocation,
@@ -199,6 +205,13 @@ fun SettingsScreen(
                     onMockLocationSave = onMockLocationSave,
                     appLanguage = appLanguage,
                     onHealthConnectClick = onHealthConnectClick,
+                    onBackClick = { subPage = SettingsSubPage.MAIN }
+                )
+            }
+            SettingsSubPage.TOOL_AUTHORIZATION -> {
+                ToolAuthorizationLayout(
+                    viewModel = viewModel,
+                    appLanguage = appLanguage,
                     onBackClick = { subPage = SettingsSubPage.MAIN }
                 )
             }
@@ -224,6 +237,7 @@ fun SettingsMainLayout(
     onNavigateToMcp: () -> Unit,
     onNavigateToSensor: () -> Unit,
     onNavigateToMemory: () -> Unit,
+    onNavigateToToolAuth: () -> Unit,
     onBackClick: () -> Unit
 ) {
     val isEn = appLanguage == "en"
@@ -486,6 +500,49 @@ fun SettingsMainLayout(
                             )
                             Text(
                                 text = if (isEn) "Configure trigger counts & memory model" else "配置自动总结触发阈值、提取专用模型等",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                            )
+                        }
+                    }
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+
+                // 外部工具授权二级页面入口
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onNavigateToToolAuth() }
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Lock,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = if (isEn) "Tool Authorization & Privacy" else "外部工具授权与隐私",
+                                fontSize = 15.sp,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Text(
+                                text = if (isEn) "Control which tools the AI can access & trigger" else "自主控制 AI 能调用或触发哪些物理工具及震动",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
                             )
@@ -1670,6 +1727,7 @@ fun SettingsScreenPreview() {
             getMcpToolsForServer = { emptyList() },
             isWatchConnected = false,
             onWatchConnectedChange = {},
+            onWatchReconnect = {},
             isWatchMoving = false,
             onWatchMovingChange = {},
             useRealLocation = false,
@@ -2163,6 +2221,7 @@ fun AddOrEditMcpServerSheet(
 fun PhysicalSensorLayout(
     isWatchConnected: Boolean,
     onWatchConnectedChange: (Boolean) -> Unit,
+    onWatchReconnect: () -> Unit,
     isWatchMoving: Boolean,
     onWatchMovingChange: (Boolean) -> Unit,
     useRealLocation: Boolean,
@@ -2263,40 +2322,65 @@ fun PhysicalSensorLayout(
                 )
             }
 
-            // Watch sync
+            // Watch sync & Bluetooth Integration (Claude Premium Aesthetics)
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                val btState by WatchBluetoothClient.connectionState.collectAsState()
+
                 Text(
-                    text = if (isEn) "HARDWARE SIMULATION" else "硬件数据模拟 (开发调试用)",
+                    text = if (isEn) "SMARTWATCH BLUETOOTH SYNC" else "智能手表蓝牙同步",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
                 )
 
+                // Glassmorphism Card Container
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.surface)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f), RoundedCornerShape(16.dp))
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
+                    // Title and Switch row
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
+                        modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = if (isEn) "Enable Simulation Sync" else "启用模拟同步",
-                                fontSize = 15.sp,
-                                color = MaterialTheme.colorScheme.onBackground
-                            )
-                            Text(
-                                text = if (isEn) "Fallback to mock data if real sensor is unavailable" else "当真实传感器不可用时，回退至模拟数据",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
-                            )
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Watch,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Column {
+                                Text(
+                                    text = if (isEn) "Enable Watch Sync" else "启用手表连接与同步",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onBackground
+                                )
+                                Text(
+                                    text = if (isEn) "Sync real heart rate and steps via classic Bluetooth" else "与真实 Loyea 手表同步健康数据",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                                )
+                            }
                         }
                         Switch(
                             checked = isWatchConnected,
@@ -2309,22 +2393,150 @@ fun PhysicalSensorLayout(
                     }
 
                     if (isWatchConnected) {
-                        Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+                        Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
+                        
+                        // Connection Status Pill and Reconnect block
+                        val (btStatusText, btStatusColor, btStatusBg) = when (btState) {
+                            WatchBluetoothClient.ConnectionState.CONNECTED -> Triple(
+                                if (isEn) "Connected" else "蓝牙已连接 🟢", 
+                                Color(0xFF00FF66), 
+                                Color(0xFF00FF66).copy(alpha = 0.08f)
+                            )
+                            WatchBluetoothClient.ConnectionState.CONNECTING -> Triple(
+                                if (isEn) "Connecting..." else "正在连接 🔄", 
+                                Color(0xFFFFD54F), 
+                                Color(0xFFFFD54F).copy(alpha = 0.08f)
+                            )
+                            WatchBluetoothClient.ConnectionState.DISCONNECTED -> Triple(
+                                if (isEn) "Disconnected" else "蓝牙未连接 ❌", 
+                                Color(0xFFFF5252), 
+                                Color(0xFFFF5252).copy(alpha = 0.08f)
+                            )
+                        }
+
                         Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = if (isEn) "Bluetooth Link" else "外设链路状态",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                // Pill Badge
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(100.dp))
+                                        .background(btStatusBg)
+                                        .border(1.dp, btStatusColor.copy(alpha = 0.25f), RoundedCornerShape(100.dp))
+                                        .padding(horizontal = 10.dp, vertical = 2.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = btStatusText,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = btStatusColor
+                                    )
+                                }
+                            }
+
+                            // Outlined reconnect button placed elegantly on the right
+                            if (btState != WatchBluetoothClient.ConnectionState.CONNECTED) {
+                                OutlinedButton(
+                                    onClick = onWatchReconnect,
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.03f),
+                                        contentColor = MaterialTheme.colorScheme.primary
+                                    ),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Refresh,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Text(
+                                            text = if (isEn) "Reconnect" else "手动连接",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Guidance Info Box with clean background
+                        Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(16.dp),
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.02f))
+                                .padding(12.dp)
+                        ) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.Top
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Info,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
+                                    modifier = Modifier.size(16.dp).padding(top = 1.dp)
+                                )
+                                Text(
+                                    text = if (isEn) "Note: Please ensure the watch app is open and bonded in your phone's system Bluetooth settings." 
+                                           else "重要提示：请确保您的手表端已运行 Loyea Watch 且已在“系统蓝牙设置”中与该手机完成“配对”连接。若未连上，蓝牙模块将在后台自动尝试静默重连，您亦可点击手动连接强制唤醒。",
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                                    lineHeight = 14.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Mock Data configuration card (only shown when sync is enabled)
+            if (isWatchConnected) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = if (isEn) "HARDWARE SIMULATION" else "模拟传感器调试 (无手表时使用)",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                    )
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surface)
+                            .padding(16.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = if (isEn) "Simulate Moving State" else "模拟运动状态",
+                                    text = if (isEn) "Simulate Moving State" else "模拟手表运动状态",
                                     fontSize = 15.sp,
                                     color = MaterialTheme.colorScheme.onBackground
                                 )
                                 Text(
-                                    text = if (isEn) "Heart rate will increase" else "心率会升高 (100-140 bpm)",
+                                    text = if (isEn) "Heart rate will increase" else "心率会升高至 100-140 bpm 以进行逻辑测试",
                                     fontSize = 11.sp,
                                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
                                 )
@@ -2700,3 +2912,271 @@ fun MemorySettingsLayout(
         }
     }
 }
+
+// =================== 外部工具授权二级页面布局 ===================
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ToolAuthorizationLayout(
+    viewModel: com.loyea.ui.chat.ChatViewModel?,
+    appLanguage: String,
+    onBackClick: () -> Unit
+) {
+    val isEn = appLanguage == "en"
+
+    var authLocation by remember { mutableStateOf(viewModel?.toolAuthLocation?.value ?: true) }
+    var authWeather by remember { mutableStateOf(viewModel?.toolAuthWeather?.value ?: true) }
+    var authEnvironment by remember { mutableStateOf(viewModel?.toolAuthEnvironment?.value ?: true) }
+    var authDevice by remember { mutableStateOf(viewModel?.toolAuthDevice?.value ?: true) }
+    var authBluetoothActivity by remember { mutableStateOf(viewModel?.toolAuthBluetoothActivity?.value ?: true) }
+    var authHealth by remember { mutableStateOf(viewModel?.toolAuthHealth?.value ?: true) }
+    var authHaptic by remember { mutableStateOf(viewModel?.toolAuthHaptic?.value ?: true) }
+    var enableBgGreeting by remember { mutableStateOf(viewModel?.enableBackgroundGreeting?.value ?: true) }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(if (isEn) "Tool Authorization" else "外部工具授权", fontSize = 18.sp, fontWeight = FontWeight.Bold) },
+                navigationIcon = {
+                    IconButton(onClick = onBackClick) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowBack,
+                            contentDescription = "Back"
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background
+                )
+            )
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .background(MaterialTheme.colorScheme.background)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.03f))
+                    .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f), RoundedCornerShape(16.dp))
+                    .padding(16.dp)
+            ) {
+                Text(
+                    text = if (isEn) {
+                        "Loyea integrates various physical perception modules. Below you can authorize or restrict AI access to specific sensors or physical effects for your privacy and preference."
+                    } else {
+                        "Loyea 深度整合了多项物理感知模块。您可以在下方自主授权或限制 AI 伴侣对特定传感器及物理马达的使用，以保护个人隐私并实现个性化的交互体验。"
+                    },
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                    lineHeight = 18.sp
+                )
+            }
+
+            // AI 后台主动问候专属卡片
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.05f))
+                    .border(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), RoundedCornerShape(16.dp))
+                    .padding(horizontal = 16.dp, vertical = 16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ChatBubble,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (isEn) "Proactive BG Greeting" else "允许 AI 后台主动联系我",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = if (isEn) {
+                                "AI will randomly contact you with custom messages (every 2-8 hrs) based on your live physical context."
+                            } else {
+                                "开启后，AI 伴侣会根据您的实时物理环境在后台不定时（2~8小时）主动联系您并推送问候语。"
+                            },
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                            lineHeight = 16.sp
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(16.dp))
+                Switch(
+                    checked = enableBgGreeting,
+                    onCheckedChange = {
+                        enableBgGreeting = it
+                        viewModel?.updateBackgroundGreeting(it)
+                    },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                        checkedTrackColor = MaterialTheme.colorScheme.primary,
+                        uncheckedThumbColor = MaterialTheme.colorScheme.outline,
+                        uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                )
+            }
+
+            val items = listOf(
+                ToolAuthItemData(
+                    key = "tool_auth_location",
+                    title = if (isEn) "GPS Location" else "物理定位服务",
+                    desc = if (isEn) "Allows AI to query your current coordinates (latitude/longitude)" else "允许 AI 伴侣调取您当前的经纬度位置信息",
+                    icon = Icons.Default.LocationOn,
+                    isChecked = authLocation,
+                    onCheckedChange = {
+                        authLocation = it
+                        viewModel?.updateToolAuth("tool_auth_location", it)
+                    }
+                ),
+                ToolAuthItemData(
+                    key = "tool_auth_weather",
+                    title = if (isEn) "Weather & Forecast" else "实时气象与预报",
+                    desc = if (isEn) "Allows AI to query current weather and 3-day forecast" else "允许 AI 伴侣调取当前天气状况与未来 3 天气温预报",
+                    icon = Icons.Default.Cloud,
+                    isChecked = authWeather,
+                    onCheckedChange = {
+                        authWeather = it
+                        viewModel?.updateToolAuth("tool_auth_weather", it)
+                    }
+                ),
+                ToolAuthItemData(
+                    key = "tool_auth_environment",
+                    title = if (isEn) "Ambient Light & Noise" else "环境照度与噪音",
+                    desc = if (isEn) "Allows AI to measure ambient lux (light) and microphone decibel (dB) levels" else "允许 AI 伴侣读取环境亮度 (Lux) 与麦克风分贝噪音等级 (dB)",
+                    icon = Icons.Default.Hearing,
+                    isChecked = authEnvironment,
+                    onCheckedChange = {
+                        authEnvironment = it
+                        viewModel?.updateToolAuth("tool_auth_environment", it)
+                    }
+                ),
+                ToolAuthItemData(
+                    key = "tool_auth_device",
+                    title = if (isEn) "Device Power & Network" else "设备电量与网络",
+                    desc = if (isEn) "Allows AI to read battery level, charging status, and Wi-Fi SSID" else "允许 AI 伴侣读取电池电量、充电状态与连接的 Wi-Fi 名称",
+                    icon = Icons.Default.SettingsCell,
+                    isChecked = authDevice,
+                    onCheckedChange = {
+                        authDevice = it
+                        viewModel?.updateToolAuth("tool_auth_device", it)
+                    }
+                ),
+                ToolAuthItemData(
+                    key = "tool_auth_bluetooth_activity",
+                    title = if (isEn) "Bluetooth & Movement State" else "外设蓝牙与运动状态",
+                    desc = if (isEn) "Allows AI to scan nearby wearable battery levels and detect motion (walking/still)" else "允许 AI 伴侣扫描附近蓝牙耳机电量及检测运动状态 (如步行/静止)",
+                    icon = Icons.Default.DirectionsRun,
+                    isChecked = authBluetoothActivity,
+                    onCheckedChange = {
+                        authBluetoothActivity = it
+                        viewModel?.updateToolAuth("tool_auth_bluetooth_activity", it)
+                    }
+                ),
+                ToolAuthItemData(
+                    key = "tool_auth_health",
+                    title = if (isEn) "Health Connect Data" else "身体健康中心数据",
+                    desc = if (isEn) "Allows AI to read smartwatch steps, real-time heart rate, sleep and BP" else "允许 AI 伴侣读取手环/手表上的步数、实时心率、血压与睡眠监测",
+                    icon = Icons.Default.Favorite,
+                    isChecked = authHealth,
+                    onCheckedChange = {
+                        authHealth = it
+                        viewModel?.updateToolAuth("tool_auth_health", it)
+                    }
+                ),
+                ToolAuthItemData(
+                    key = "tool_auth_haptic",
+                    title = if (isEn) "Physical Haptic Sync" else "物理震动反馈机制",
+                    desc = if (isEn) "Allows AI to trigger phone vibrations synchronously during emotional action words (heartbeat, poke, whisper)" else "允许 AI 伴侣在表达情感动作（如心跳、轻戳、低语）时同步触发手机物理震动",
+                    icon = Icons.Default.Vibration,
+                    isChecked = authHaptic,
+                    onCheckedChange = {
+                        authHaptic = it
+                        viewModel?.updateToolAuth("tool_auth_haptic", it)
+                    }
+                )
+            )
+
+            items.forEach { item ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.02f))
+                        .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f), RoundedCornerShape(12.dp))
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = item.icon,
+                            contentDescription = null,
+                            tint = if (item.isChecked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = item.title,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = item.desc,
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                                lineHeight = 16.sp
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Switch(
+                        checked = item.isChecked,
+                        onCheckedChange = item.onCheckedChange,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                            checkedTrackColor = MaterialTheme.colorScheme.primary,
+                            uncheckedThumbColor = MaterialTheme.colorScheme.outline,
+                            uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
+                        )
+                    )
+                }
+            }
+        }
+    }
+}
+
+data class ToolAuthItemData(
+    val key: String,
+    val title: String,
+    val desc: String,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    val isChecked: Boolean,
+    val onCheckedChange: (Boolean) -> Unit
+)

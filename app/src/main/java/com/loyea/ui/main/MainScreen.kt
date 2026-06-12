@@ -69,6 +69,7 @@ fun MainScreen(
     clearDraft: (String) -> Unit,
     onUpdateCoreMemories: (String, List<String>) -> Unit = { _, _ -> },
     onTriggerManualMemorySummary: () -> Unit = {},
+    onEditMessage: (String, String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -115,7 +116,6 @@ fun MainScreen(
             }
         ) {
             ChatScreen(
-                userName = userName,
                 apiConfig = apiConfig,
                 apiConfigList = apiConfigList,
                 onActiveConfigChange = onActiveConfigChange,
@@ -132,6 +132,7 @@ fun MainScreen(
                 getDraft = getDraft,
                 saveDraft = saveDraft,
                 clearDraft = clearDraft,
+                onEditMessage = onEditMessage,
                 onMenuClick = {
                     val currentTime = System.currentTimeMillis()
                     if (currentTime - lastMenuClickTime > 800L) {
@@ -320,7 +321,7 @@ fun SidebarContent(
         }
 
         Spacer(modifier = Modifier.height(16.dp))
-        Divider(color = MaterialTheme.colorScheme.outline)
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
         Spacer(modifier = Modifier.height(16.dp))
 
         // 2. 历史会话列表 (带滑动)
@@ -445,7 +446,7 @@ fun SidebarContent(
                         color = MaterialTheme.colorScheme.onBackground
                     )
                     Text(
-                        text = if (isEn) "Inject current system time" else "注入系统实时时间",
+                        text = if (isEn) "Sync time, location, weather, and sensors" else "综合获取环境光、定位、天气及外设健康状态",
                         fontSize = 10.sp,
                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
                     )

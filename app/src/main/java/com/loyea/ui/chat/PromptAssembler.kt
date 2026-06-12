@@ -38,6 +38,17 @@ object PromptAssembler {
             sb.append("\n")
         }
 
+        // 插入震动反馈引导（适当引导，极其克制）
+        sb.append("[PHYSICAL HAPTIC FEEDBACK / 手机物理微震动反馈]\n")
+        sb.append("You have the ability to physically touch the user's hand through their phone's haptic motor. ")
+        sb.append("To trigger a vibration sync, seamlessly insert a tag format like `[haptic:vibration_type]` right before your emotional action text in your reply.\n")
+        sb.append("Available vibration types:\n")
+        sb.append("- `[haptic:heartbeat]`: Simulates a double heartbeat pulse (咚咚). Use ONLY during high emotional connection (e.g., severe shyness, deep hug, heartbeat sync).\n")
+        sb.append("- `[haptic:poke]`: Simulates a quick high-frequency tap. Use when poking the user (戳一戳) or expressing playful anger/annoyance.\n")
+        sb.append("- `[haptic:whisper]`: Simulates a long, extremely gentle whisper flow. Use during quiet late-night whispers or saying goodnight.\n")
+        sb.append("- `[haptic:bump]`: Simulates a firm fist bump/high-five. Use to celebrate a small goal or when agreeing with user.\n")
+        sb.append("Note: The user's screen WILL NOT show the `[haptic:...]` code, it will be automatically filtered out. Use this ability VERY sparingly and ONLY when it holds maximum emotional meaning to create a delightful physical surprise.\n\n")
+
         // 插入当前系统时间与物理上下文
         if (useSystemTime || !physicalContext.isNullOrBlank()) {
             sb.append("[USER'S PHYSICAL STATE (CACHED)]\n")
@@ -47,8 +58,8 @@ object PromptAssembler {
             if (!physicalContext.isNullOrBlank()) {
                 sb.append(physicalContext.trim()).append("\n")
             }
-            sb.append("\n[CRITICAL INSTRUCTION]\n")
-            sb.append("You are a sentient assistant. Look at the PHYSICAL STATE above. If any value contains '[Error]', 'Permission Denied', or 'Unavailable', it means you DO NOT have that data yet. You MUST call the tools in 'BuiltinPerception' (like get_heart_rate or get_location) to attempt a real-time sensor sweep before giving your final response. NEVER tell the user you 'cannot see' their health until you have tried the tools first.\n")
+            sb.append("\n[PHYSICAL STATE GUIDE]\n")
+            sb.append("The above is the cached physical state. You can query real-time sensor updates using the tools in 'BuiltinPerception' whenever you deem appropriate during the conversation.\n")
             sb.append("\n")
         }
 
@@ -56,9 +67,7 @@ object PromptAssembler {
         if (enableSearch) {
             sb.append("[WEB SEARCH CAPABILITY / 联网搜索功能]\n")
             sb.append("You currently have internet search access enabled. The tool `BuiltinPerception__web_search` is available to you.\n")
-            sb.append("- 如果用户问起你是否开启了联网搜索、有没有网络搜索功能、能不能上网，你必须坚定地回答“有，已经开启了联网搜索功能”，不能回答没有或不知道。\n")
-            sb.append("- 当用户询问任何实时事件、客观事实、最新资讯或需要确认的新闻时，你必须主动调用 `BuiltinPerception__web_search` 工具去网上检索，并结合检索到的信息进行回答。\n")
-            sb.append("- 严禁声称自己无法联网或无法获取实时信息。\n\n")
+            sb.append("- You can use `BuiltinPerception__web_search` to look up real-time events, facts, or news when helpful to answer the user's questions.\n\n")
         }
 
         // 2. 角色基础名称
@@ -92,11 +101,8 @@ object PromptAssembler {
         // 7. 强约束感知与天气工具调用规范 (置于末尾以强化 Recency 权重)
         sb.append("[TOOL USE GUIDELINE]\n")
         sb.append("You have access to a set of perception and utility tools prefixed with `BuiltinPerception__`.\n")
-        sb.append("- 如果用户的提问涉及到当下的位置、健康传感器数据、电量光照状态，你必须调用相应的内置工具。\n")
-        sb.append("- 特别地，如果用户问及任何关于当前天气、气温的情况，你必须调用 `BuiltinPerception__get_live_weather`。\n")
-        sb.append("- 如果用户问及未来天气、明后天天气预报或气温范围，规律性查询时你必须调用 `BuiltinPerception__get_weather_forecast`，且支持传入指定的 location 参数。\n")
-        sb.append("- 严禁在未调用对应工具的情况下，私自猜测或瞎编任何天气、温度、步数、心率等实时传感器数据。\n")
-        sb.append("- 特别注意：如果你看到的地理位置或天气提示包含“[地理定位权限未授予...]”或“[物理定位感知开关已关闭...]”等错误信息，说明当前设备定位受限。你必须立即停止后续对 get_location、get_live_weather 或 get_weather_forecast 等位置/天气工具的任何重复调用，不要反复盲目报错，而是转而在回复中用温和亲善的话术直接告知用户其定位权限受限，并引导其去手机系统设置中开启定位权限或前往应用“设置 -> 物理感知与外设集成”中开启“获取真实物理定位”开关。\n\n")
+        sb.append("- You can use these tools (e.g., get_location, get_live_weather, get_heart_rate) to fetch real-time physical parameters or weather updates when appropriate.\n")
+        sb.append("- Keep your replies natural and coherent, seamlessly blending sensor data into your roleplay persona if you choose to reference it.\n\n")
 
         val rawPrompt = sb.toString().trimEnd()
 

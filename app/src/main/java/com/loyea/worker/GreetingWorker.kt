@@ -6,6 +6,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
@@ -34,6 +35,29 @@ class GreetingWorker(
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
             val prefs = context.getSharedPreferences("loyea_prefs", Context.MODE_PRIVATE)
+            
+            // 0. 前置判断：检查用户是否开启了后台主动问候
+            val enableBgGreeting = prefs.getBoolean("enable_background_greeting", true)
+            if (!enableBgGreeting) {
+                Log.d("GreetingWorker", "Background greeting is disabled by user.")
+                return@withContext Result.success()
+            }
+
+            // 0.1 深夜免打扰判断：凌晨 0 点到 7 点之间不进行推送，顺延到早晨 8 点以后
+            val calendar = java.util.Calendar.getInstance()
+            val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
+            if (hour >= 0 && hour < 7) {
+                val targetCalendar = java.util.Calendar.getInstance().apply {
+                    set(java.util.Calendar.HOUR_OF_DAY, 8)
+                    set(java.util.Calendar.MINUTE, 0)
+                    set(java.util.Calendar.SECOND, 0)
+                }
+                val delayMinutes = ((targetCalendar.timeInMillis - calendar.timeInMillis) / (1000 * 60)).coerceAtLeast(60)
+                scheduleNextGreeting(delayMinutes)
+                Log.d("GreetingWorker", "Quiet hours active (00:00-07:00). Postponing next greeting to 08:00 ($delayMinutes mins delay).")
+                return@withContext Result.success()
+            }
+
             val storageManager = ChatStorageManager(context)
             val llmClient = LlmClient()
 
@@ -129,11 +153,28 @@ class GreetingWorker(
             // 5. Send Notification
             sendNotification(activeCard.name, generatedText.trim())
 
+            // 6. 链式预定下一次随机延迟的主动问候（2 到 8 小时随机）
+            val randomDelayMinutes = kotlin.random.Random.nextInt(120, 480).toLong()
+            scheduleNextGreeting(randomDelayMinutes)
+            Log.d("GreetingWorker", "Proactive greeting sent successfully. Next greeting scheduled in $randomDelayMinutes mins.")
+
             Result.success()
         } catch (e: Exception) {
             e.printStackTrace()
             Result.failure()
         }
+    }
+
+    private fun scheduleNextGreeting(delayMinutes: Long) {
+        val workRequest = androidx.work.OneTimeWorkRequestBuilder<GreetingWorker>()
+            .setInitialDelay(delayMinutes, java.util.concurrent.TimeUnit.MINUTES)
+            .addTag("loyea_bg_greeting")
+            .build()
+        androidx.work.WorkManager.getInstance(context).enqueueUniqueWork(
+            "loyea_bg_greeting_work",
+            androidx.work.ExistingWorkPolicy.REPLACE, // REPLACE 替换原有，保证队列唯一性
+            workRequest
+        )
     }
 
     private fun sendNotification(title: String, content: String) {

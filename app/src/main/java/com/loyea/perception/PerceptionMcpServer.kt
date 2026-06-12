@@ -81,8 +81,18 @@ class PerceptionMcpServer(private val context: Context) {
                 inputSchema = mapOf("type" to "object", "properties" to emptyMap<String, Any>())
             ),
             McpTool(
+                name = "get_wifi_status",
+                description = "获取当前手机连接的网络类型与 Wi-Fi SSID 名称（网络名称）。",
+                inputSchema = mapOf("type" to "object", "properties" to emptyMap<String, Any>())
+            ),
+            McpTool(
+                name = "get_noise_level",
+                description = "获取瞬时环境的噪音分贝等级值 (dB)。",
+                inputSchema = mapOf("type" to "object", "properties" to emptyMap<String, Any>())
+            ),
+            McpTool(
                 name = "web_search",
-                description = "在互联网上检索最新的实时信息，当需要确认客观事实、新闻、实时资讯或解答没有把握的知识性问题时使用。",
+                description = "在互联网上检索最新的实时信息，当需要确认客观事实、新闻、实时资讯或解答没有把握的位置性问题时使用。",
                 inputSchema = mapOf(
                     "type" to "object",
                     "properties" to mapOf(
@@ -127,23 +137,53 @@ class PerceptionMcpServer(private val context: Context) {
                 }
                 "get_health_data" -> {
                     val sb = StringBuilder()
+                    val isRealWatchConnected = com.loyea.bluetooth.WatchBluetoothClient.connectionState.value == com.loyea.bluetooth.WatchBluetoothClient.ConnectionState.CONNECTED
                     
-                    val hrStatus = healthProvider.getHeartRateStatus()
-                    if ((hrStatus == "Permission Denied" || hrStatus == "No Data (Check OHealth Sync)" || hrStatus == "Service Unavailable" || hrStatus == "No Sample Data") 
-                        && perceptionManager.watchProvider.isWatchConnected()) {
-                        val mockHR = perceptionManager.watchProvider.getHeartRateBpm()
+                    // --- 心率获取 ---
+                    if (isRealWatchConnected) {
+                        val realHR = com.loyea.bluetooth.WatchBluetoothClient.heartRate.value
                         val state = perceptionManager.watchProvider.getMovementState()
-                        if (mockHR > 0) {
-                            sb.append("Heart Rate: $mockHR bpm ($state) [Simulated]\n")
+                        if (realHR > 0) {
+                            sb.append("Heart Rate: $realHR bpm ($state) [Smartwatch Bluetooth]\n")
+                        } else {
+                            sb.append("Heart Rate: Waiting for sensor... [Smartwatch Bluetooth]\n")
+                        }
+                    } else {
+                        val hrStatus = healthProvider.getHeartRateStatus()
+                        if ((hrStatus == "Permission Denied" || hrStatus == "No Data (Check OHealth Sync)" || hrStatus == "Service Unavailable" || hrStatus == "No Sample Data") 
+                            && perceptionManager.watchProvider.isWatchConnected()) {
+                            val mockHR = perceptionManager.watchProvider.getHeartRateBpm()
+                            val state = perceptionManager.watchProvider.getMovementState()
+                            if (mockHR > 0) {
+                                sb.append("Heart Rate: $mockHR bpm ($state) [Simulated]\n")
+                            } else {
+                                sb.append("Heart Rate: $hrStatus\n")
+                            }
                         } else {
                             sb.append("Heart Rate: $hrStatus\n")
                         }
-                    } else {
-                        sb.append("Heart Rate: $hrStatus\n")
                     }
                     
-                    val steps = healthProvider.getStepsStatus()
-                    sb.append("Today's Steps: $steps\n")
+                    // --- 步数获取 ---
+                    if (isRealWatchConnected) {
+                        val realSteps = com.loyea.bluetooth.WatchBluetoothClient.steps.value
+                        sb.append("Today's Steps: $realSteps [Smartwatch Bluetooth]\n")
+                    } else {
+                        val stepsStatus = healthProvider.getStepsStatus()
+                        if (stepsStatus != "Permission Denied" && stepsStatus != "Service Unavailable") {
+                            val mockSteps = com.loyea.bluetooth.WatchBluetoothClient.steps.value
+                            if ((stepsStatus == "No Data" || stepsStatus == "0") && perceptionManager.watchProvider.isWatchConnected() && mockSteps > 0) {
+                                sb.append("Today's Steps: $mockSteps [Simulated]\n")
+                            } else {
+                                sb.append("Today's Steps: $stepsStatus\n")
+                            }
+                        } else if (perceptionManager.watchProvider.isWatchConnected()) {
+                            val mockSteps = com.loyea.bluetooth.WatchBluetoothClient.steps.value
+                            sb.append("Today's Steps: $mockSteps [Simulated]\n")
+                        } else {
+                            sb.append("Today's Steps: $stepsStatus\n")
+                        }
+                    }
                     
                     val bp = healthProvider.getBloodPressureStatus()
                     sb.append("Blood Pressure: $bp\n")
@@ -152,6 +192,14 @@ class PerceptionMcpServer(private val context: Context) {
                     sb.append("Last Sleep: $sleep\n")
                     
                     sb.toString().trim()
+                }
+                "get_wifi_status" -> {
+                    "Network: ${perceptionManager.wifiProvider.getNetworkSsid()}"
+                }
+                "get_noise_level" -> {
+                    val db = perceptionManager.noiseProvider.getAmbientNoiseDb()
+                    val dbText = if (db >= 0) "$db dB" else "Permission Denied"
+                    "Ambient Noise: $dbText"
                 }
                 "web_search" -> {
                     val query = arguments?.get("query")?.toString() ?: ""

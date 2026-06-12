@@ -192,6 +192,7 @@ class MainActivity : ComponentActivity() {
                                 onToggleSystemTime = { chatViewModel.toggleCurrentSessionSystemTime() },
                                 onUpdateCoreMemories = { sid, memories -> chatViewModel.updateCoreMemories(sid, memories) },
                                 onTriggerManualMemorySummary = { chatViewModel.triggerManualMemorySummary() },
+                                onEditMessage = { id, text -> chatViewModel.editMessage(id, text) },
                                 getDraft = { chatViewModel.getDraft(it) },
                                 saveDraft = { id, text -> chatViewModel.saveDraft(id, text) },
                                 clearDraft = { chatViewModel.clearDraft(it) }

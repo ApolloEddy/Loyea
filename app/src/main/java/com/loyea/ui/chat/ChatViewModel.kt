@@ -783,7 +783,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             val displayCallId = "${toolCall.id}_${System.currentTimeMillis()}"
                             val parsedArgs = llmClient.parseArgumentsMap(toolCall.argumentsJson)
                             val customActionText = if (toolCall.name.lowercase().contains("web_search")) {
-                                val query = parsedArgs?.get("query")?.toString() ?: ""
+                                val query = parsedArgs.get("query")?.toString() ?: ""
                                 if (query.isNotEmpty()) "搜索网页：$query" else "搜索网页"
                             } else {
                                 translateToolName(toolCall.name)
@@ -842,7 +842,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         val executedToolsStr = streamToolCalls.joinToString("、") { 
                             val parsedArgs = llmClient.parseArgumentsMap(it.argumentsJson)
                             if (it.name.lowercase().contains("web_search")) {
-                                val query = parsedArgs?.get("query")?.toString() ?: ""
+                                val query = parsedArgs.get("query")?.toString() ?: ""
                                 if (query.isNotEmpty()) "搜索网页：$query" else "搜索网页"
                             } else {
                                 translateToolName(it.name)
@@ -1225,6 +1225,43 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             "tool_auth_haptic" -> toolAuthHaptic.value = enabled
         }
         prefs.edit().putBoolean(key, enabled).apply()
+    }
+
+    fun editMessage(messageId: String, newContent: String) {
+        val sessionId = currentSessionId.value
+        if (sessionId.isBlank()) return
+
+        stopResponse()
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val diskMsgs = storageManager.loadSessionMessages(sessionId)
+            val index = diskMsgs.indexOfFirst { it.id == messageId }
+            if (index == -1) return@launch
+
+            val targetMsg = diskMsgs[index]
+            if (targetMsg.content.trim() == newContent.trim()) return@launch
+
+            // 截断 index 之后的消息，只保留当前被编辑消息及之前的消息，并更新当前消息内容
+            val truncatedMsgs = diskMsgs.subList(0, index + 1).mapIndexed { idx, msg ->
+                if (idx == index) {
+                    msg.copy(
+                        content = newContent,
+                        timestamp = System.currentTimeMillis()
+                    )
+                } else {
+                    msg
+                }
+            }
+
+            storageManager.updateSessionMessages(sessionId) {
+                truncatedMsgs
+            }
+
+            withContext(Dispatchers.Main) {
+                messages.value = truncatedMsgs
+                startAiResponseStream(sessionId, truncatedMsgs, activeCharacterCard.value)
+            }
+        }
     }
 
     fun startPerceptionSensors() {
