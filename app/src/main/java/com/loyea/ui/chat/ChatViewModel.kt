@@ -607,14 +607,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             // 获取 API 配置和 MCP 工具列表
             val apiConfig = activeApiConfig.value
 
+            // 判定当前角色是否是 Loyea 核心角色（仅 Loyea 支持物理感知和设备数据读取，隔离跨角色隐私泄露）
+            val isLoyea = characterCard.id == "char_loyea_default" || characterCard.name.contains("Loyea", ignoreCase = true)
+
             // 策略调整：不再将物理信息直接塞入 System Prompt，而是作为辅助参考，
-            // 且告诉 AI 如果需要最新数据必须调用工具。
-            val physicalContextData = perceptionManager.buildPhysicalContextString()
+            // 且告诉 AI 如果需要最新数据必须调用工具。非 Loyea 角色直接传入 null。
+            val physicalContextData = if (isLoyea) {
+                perceptionManager.buildPhysicalContextString()
+            } else {
+                null
+            }
 
             val systemPrompt = PromptAssembler.assembleSystemPrompt(
                 card = characterCard,
                 userName = userName.value,
-                useSystemTime = activeSession.value?.useSystemTime ?: false,
+                useSystemTime = if (isLoyea) (activeSession.value?.useSystemTime ?: false) else false,
                 physicalContext = physicalContextData,
                 enableSearch = apiConfig.enableSearch,
                 coreMemories = activeSession.value?.coreMemories ?: emptyList()
@@ -631,6 +638,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     var streamToolCalls = emptyList<LlmToolCall>()
                     val availableMcpTools = mcpManager.getAggregateTools().filter { tool ->
                         val lowName = tool.name.lowercase()
+                        // 如果不是 Loyea 角色，则强行过滤拦截所有物理传感/外设工具，仅保留联网搜索 (web_search)
+                        if (!isLoyea && !lowName.contains("web_search")) {
+                            return@filter false
+                        }
                         when {
                             lowName.contains("web_search") -> activeApiConfig.value.enableSearch
                             lowName.contains("location") -> toolAuthLocation.value
@@ -927,11 +938,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         // 线性滑动窗口只取最新 20 条消息
         val recentHistory = filteredHistory.takeLast(20)
+        val now = System.currentTimeMillis()
         recentHistory.forEach { msg ->
+            // 计算当前与历史消息产生的时间差，构建真实时间流逝感，让 AI 自主识记和遗忘物理时效数据
+            val diffMs = now - msg.timestamp
+            val timeDesc = when {
+                diffMs < 30 * 1000 -> "刚刚"
+                diffMs < 60 * 1000 -> "1分钟内"
+                diffMs < 60 * 60 * 1000 -> "${diffMs / (60 * 1000)}分钟前"
+                diffMs < 24 * 60 * 60 * 1000 -> "${diffMs / (60 * 60 * 1000)}小时前"
+                else -> "${diffMs / (24 * 60 * 60 * 1000)}天前"
+            }
+            val decoratedContent = "[发送于 $timeDesc] ${msg.content}"
             list.add(
                 LlmChatMessage(
                     role = if (msg.sender == Sender.USER) "user" else "assistant",
-                    content = msg.content
+                    content = decoratedContent
                 )
             )
         }

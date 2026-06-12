@@ -30,6 +30,10 @@ All notable changes to this project will be documented in this file.
 - **手表物理上下文感知升级为真实蓝牙源**：在 [PhysicalContextManager.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/perception/PhysicalContextManager.kt#L8) 中将原本的 `MockWatchProvider` 升级重构为 [BluetoothWatchProvider.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/perception/BluetoothWatchProvider.kt)。使得整个感知框架（包括 AI 会话、RAG 记忆、MCP 工具等接口）能够直连真实的蓝牙手表源以采集真实的物理状态，并且在蓝牙未连接时仍然具备自动降级至本地模拟测试数据的双工保障。并且在 [AndroidManifest.xml](file:///D:/CodingProjects/Android/Loyea/app/src/main/AndroidManifest.xml#L9) 中补齐了 Android 12+ 上连接和发现手表所需的 `BLUETOOTH_ADMIN`、`BLUETOOTH_SCAN` 和 `BLUETOOTH_ADVERTISE` 全套蓝牙动态权限。
 
 ### Fixed (修复)
+- **隔离非 Loyea 角色卡的物理感知上下文与工具访问，防止跨会话泄露**：
+  - 在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中引入角色卡类型拦截机制。通过 `characterCard.id == "char_loyea_default"` 进行前置识别，如果不是内置的 Loyea 角色卡（如“小玲喵”），则不在其 System Prompt 里注入物理感知环境数据，并在可用工具列表中强行过滤剔除所有 `BuiltinPerception` 物理传感/外设类工具，实现彻底的角色隔离与隐私脱敏。
+- **引入真实时间戳差值装饰机制，赋予 AI 时效遗忘与时间感知能力**：
+  - 在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 构建大模型上下文的方法 `buildLlmConversation` 中，为每一条装载的历史对话前置拼接 `[发送于 N分钟前/小时前/天前]` 的时间修饰标识。这使得大模型对对话历史具有清晰的时间差认知，能科学地区分历史旧状态与最新实时数据，彻底消除了过时物理数据污染新回复的顽疾。
 - **修复 Wi-Fi 与蓝牙感知导致的 SecurityException 闪退**：
   - 在 [WifiProvider.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/perception/WifiProvider.kt) 获取当前 Wi-Fi SSID 处，使用 `try-catch` 包裹 `wifiManager.connectionInfo` 调用，彻底拦截并降级防护由于 Android 10+ 定位/WIFI 权限未授权而产生的 `SecurityException` 崩溃，确保顺利降级返回默认 `"Wi-Fi Network"`。
   - 在 [BluetoothProvider.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/perception/BluetoothProvider.kt) 的 `getBluetoothStatus()` 主函数中全面引入 `try-catch` 保护，重点防护在无蓝牙权限访问 `bluetoothAdapter.isEnabled` 时产生的安全崩溃隐患。
