@@ -1007,6 +1007,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         isWatchMoving.value = moving
     }
 
+    fun reconnectWatch() {
+        // 先断开，再重新触发连接流程
+        perceptionManager.watchProvider.setWatchConnected(false)
+        perceptionManager.watchProvider.setWatchConnected(true)
+        isWatchConnected.value = perceptionManager.watchProvider.isWatchConnected()
+    }
+
     fun setUseRealLocation(use: Boolean) {
         perceptionManager.locationProvider.setUseRealLocation(use)
         useRealLocation.value = use
