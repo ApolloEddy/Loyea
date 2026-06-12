@@ -610,10 +610,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     round++
                     var streamToolCalls = emptyList<LlmToolCall>()
                     val availableMcpTools = mcpManager.getAggregateTools().filter { tool ->
-                        if (tool.name.endsWith("web_search")) {
-                            activeApiConfig.value.enableSearch
-                        } else {
-                            true
+                        val lowName = tool.name.lowercase()
+                        when {
+                            lowName.contains("web_search") -> activeApiConfig.value.enableSearch
+                            lowName.contains("location") -> toolAuthLocation.value
+                            lowName.contains("weather") || lowName.contains("forecast") -> toolAuthWeather.value
+                            lowName.contains("light") || lowName.contains("noise") -> toolAuthEnvironment.value
+                            lowName.contains("battery") || lowName.contains("wifi") -> toolAuthDevice.value
+                            lowName.contains("bluetooth") || lowName.contains("activity") -> toolAuthBluetoothActivity.value
+                            lowName.contains("health") -> toolAuthHealth.value
+                            else -> true
                         }
                     }
 
@@ -640,7 +646,29 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 messages.value = currentList
                             }
                             is StreamEvent.Content -> {
-                                accumulatedContent += event.text
+                                try {
+                                    accumulatedContent += event.text
+                                    val hapticRegex = "\\[haptic:([a-zA-Z]+)\\]".toRegex()
+                                    var hapticMatch = hapticRegex.find(accumulatedContent)
+                                    while (hapticMatch != null) {
+                                        val hapticType = hapticMatch.groupValues[1]
+                                        if (toolAuthHaptic.value) {
+                                            hapticManager.triggerHaptic(hapticType)
+                                        }
+                                        accumulatedContent = accumulatedContent.removeRange(hapticMatch.range)
+                                        hapticMatch = hapticRegex.find(accumulatedContent)
+                                    }
+                                    // 过滤半截 [haptic: 占位符
+                                    val lastOpen = accumulatedContent.lastIndexOf('[')
+                                    if (lastOpen != -1 && lastOpen > accumulatedContent.lastIndexOf(']')) {
+                                        val tail = accumulatedContent.substring(lastOpen)
+                                        if ("[haptic:".startsWith(tail) || tail.startsWith("[haptic:")) {
+                                            accumulatedContent = accumulatedContent.substring(0, lastOpen)
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e("ChatViewModel", "Haptic parse error: ${e.message}", e)
+                                }
                                 if (calculatedDuration == null) {
                                     val duration = ((System.currentTimeMillis() - startTime) / 1000).toInt()
                                     calculatedDuration = if (accumulatedThoughts.isNotEmpty()) duration else 0
@@ -813,31 +841,24 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         break
                     }
                 }
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException || responseJob?.isCancelled == true) {
-                    currentList = currentList.map { msg ->
-                        if (msg.id == aiMessageId) {
-                            msg.copy(isStillThinking = false)
-                        } else {
-                            msg
-                        }
-                    }
-                    messages.value = currentList
-                } else {
-                    Log.e("ChatViewModel", "SSE Stream Error", e)
-                    currentList = currentList.map { msg ->
-                        if (msg.id == aiMessageId) {
-                            msg.copy(
-                                content = "[错误] 数据流接收异常: ${e.localizedMessage ?: e.message ?: "未知错误"}",
-                                isStillThinking = false,
-                                isError = true
-                            )
-                        } else {
-                            msg
-                        }
-                    }
-                    messages.value = currentList
+            } catch (t: Throwable) {
+                if (t is kotlinx.coroutines.CancellationException) throw t
+                Log.e("ChatViewModel", "FATAL in startAiResponseStream", t)
+                val errMsg = when (t) {
+                    is OutOfMemoryError -> "[崩溃防护] 内存不足，请重启应用"
+                    is StackOverflowError -> "[崩溃防护] 调用栈溢出"
+                    else -> "[错误] ${t.javaClass.simpleName}: ${t.message ?: "未知错误"}"
                 }
+                currentList = currentList.map { msg ->
+                    if (msg.id == aiMessageId) {
+                        msg.copy(
+                            content = errMsg,
+                            isStillThinking = false,
+                            isError = true
+                        )
+                    } else msg
+                }
+                messages.value = currentList
             } finally {
                 isThinking.value = false
                 isMcpRunning.value = false
