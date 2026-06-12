@@ -67,6 +67,8 @@ fun MainScreen(
     getDraft: (String) -> String,
     saveDraft: (String, String) -> Unit,
     clearDraft: (String) -> Unit,
+    onUpdateCoreMemories: (String, List<String>) -> Unit = { _, _ -> },
+    onTriggerManualMemorySummary: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -105,7 +107,9 @@ fun MainScreen(
                         },
                         useSystemTime = useSystemTime,
                         onToggleSystemTime = onToggleSystemTime,
-                        onUserNameSave = onUserNameChange
+                        onUserNameSave = onUserNameChange,
+                        onUpdateCoreMemories = onUpdateCoreMemories,
+                        onTriggerManualMemorySummary = onTriggerManualMemorySummary
                     )
                 }
             }
@@ -174,10 +178,13 @@ fun SidebarContent(
     onSettingsClick: () -> Unit,
     useSystemTime: Boolean,
     onToggleSystemTime: () -> Unit,
-    onUserNameSave: (String) -> Unit
+    onUserNameSave: (String) -> Unit,
+    onUpdateCoreMemories: (String, List<String>) -> Unit = { _, _ -> },
+    onTriggerManualMemorySummary: () -> Unit = {}
 ) {
     val isEn = appLanguage == "en"
     var sessionToDelete by remember { mutableStateOf<String?>(null) }
+    var activeMemorySessionId by remember { mutableStateOf<String?>(null) }
     var showEditNameDialog by remember { mutableStateOf(false) }
     var tempName by remember { mutableStateOf("") }
     val historyGroups = remember(sessions, appLanguage) {
@@ -356,16 +363,41 @@ fun SidebarContent(
                                 color = MaterialTheme.colorScheme.onBackground,
                                 modifier = Modifier.weight(1f)
                             )
-                            IconButton(
-                                onClick = { sessionToDelete = session.id },
-                                modifier = Modifier.size(28.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Delete,
-                                    contentDescription = "Delete",
-                                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
-                                    modifier = Modifier.size(16.dp)
-                                )
+                            var menuExpanded by remember { mutableStateOf(false) }
+                            Box {
+                                IconButton(
+                                    onClick = { menuExpanded = true },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.MoreVert,
+                                        contentDescription = "Options",
+                                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = menuExpanded,
+                                    onDismissRequest = { menuExpanded = false },
+                                    modifier = Modifier.background(MaterialTheme.colorScheme.surface)
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("查看核心记忆", fontSize = 13.sp) },
+                                        leadingIcon = { Icon(Icons.Default.Psychology, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                                        onClick = {
+                                            menuExpanded = false
+                                            activeMemorySessionId = session.id
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("删除会话", color = MaterialTheme.colorScheme.error, fontSize = 13.sp) },
+                                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp)) },
+                                        onClick = {
+                                            menuExpanded = false
+                                            sessionToDelete = session.id
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
@@ -553,6 +585,19 @@ fun SidebarContent(
                 containerColor = MaterialTheme.colorScheme.surface
             )
         }
+
+        // 核心事实记忆 Dialog
+        activeMemorySessionId?.let { sessionId ->
+            val memorySession = sessions.find { it.id == sessionId }
+            if (memorySession != null) {
+                CoreMemoryDialog(
+                    session = memorySession,
+                    onDismissRequest = { activeMemorySessionId = null },
+                    onUpdateMemories = onUpdateCoreMemories,
+                    onTriggerSummary = onTriggerManualMemorySummary
+                )
+            }
+        }
     }
 }
 
@@ -597,3 +642,331 @@ fun MainScreenPreview() {
         )
     }
 }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CoreMemoryDialog(
+    session: ChatSession,
+    onDismissRequest: () -> Unit,
+    onUpdateMemories: (String, List<String>) -> Unit,
+    onTriggerSummary: () -> Unit
+) {
+    var memories by remember(session.coreMemories) { mutableStateOf(session.coreMemories) }
+    var editingIndex by remember { mutableStateOf<Int?>(null) }
+    var editingText by remember { mutableStateOf("") }
+    var showAddRow by remember { mutableStateOf(false) }
+    var newRowText by remember { mutableStateOf("") }
+    val context = LocalContext.current
+
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        shape = RoundedCornerShape(20.dp),
+        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+        modifier = Modifier
+            .fillMaxWidth(0.92f)
+            .padding(16.dp)
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f),
+                shape = RoundedCornerShape(20.dp)
+            ),
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Psychology,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "会话事实记忆",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "大模型会自动从对话中提炼事实并注入系统 Prompt。点击 ★ 可以锁定关键的核心事实，防止被 AI 重新整理时覆盖或删除：",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 280.dp)
+                ) {
+                    if (memories.isEmpty() && !showAddRow) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 40.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "暂无保留的记忆事实",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                fontSize = 14.sp
+                            )
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(memories.size) { index ->
+                                val memory = memories[index]
+                                val isLocked = memory.startsWith("★")
+                                val cleanText = if (isLocked) memory.removePrefix("★").trim() else memory
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(
+                                            if (isLocked) {
+                                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
+                                            } else {
+                                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                            }
+                                        )
+                                        .border(
+                                            width = 1.dp,
+                                            color = if (isLocked) {
+                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+                                            } else {
+                                                MaterialTheme.colorScheme.outline.copy(alpha = 0.05f)
+                                            },
+                                            shape = RoundedCornerShape(10.dp)
+                                        )
+                                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    // 锁定/星标 按钮
+                                    IconButton(
+                                        onClick = {
+                                            val updated = memories.toMutableList()
+                                            if (isLocked) {
+                                                updated[index] = cleanText
+                                            } else {
+                                                updated[index] = "★ $cleanText"
+                                            }
+                                            memories = updated
+                                            onUpdateMemories(session.id, updated)
+                                        },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isLocked) Icons.Default.Star else Icons.Default.StarBorder,
+                                            contentDescription = "Toggle Lock",
+                                            tint = if (isLocked) {
+                                                Color(0xFFFFB300)
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                            },
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+
+                                    if (editingIndex == index) {
+                                        TextField(
+                                            value = editingText,
+                                            onValueChange = { editingText = it },
+                                            textStyle = LocalTextStyle.current.copy(fontSize = 13.sp),
+                                            modifier = Modifier.weight(1f),
+                                            singleLine = true,
+                                            colors = TextFieldDefaults.colors(
+                                                focusedContainerColor = Color.Transparent,
+                                                unfocusedContainerColor = Color.Transparent,
+                                                disabledContainerColor = Color.Transparent,
+                                                focusedIndicatorColor = Color.Transparent,
+                                                unfocusedIndicatorColor = Color.Transparent
+                                            )
+                                        )
+                                        IconButton(
+                                            onClick = {
+                                                if (editingText.isNotBlank()) {
+                                                    val updated = memories.toMutableList()
+                                                    val newText = editingText.trim()
+                                                    updated[index] = if (isLocked) "★ $newText" else newText
+                                                    memories = updated
+                                                    onUpdateMemories(session.id, updated)
+                                                }
+                                                editingIndex = null
+                                            },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = "Confirm",
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    } else {
+                                        Text(
+                                            text = cleanText,
+                                            fontSize = 13.sp,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable {
+                                                    editingIndex = index
+                                                    editingText = cleanText
+                                                }
+                                                .padding(horizontal = 4.dp, vertical = 6.dp)
+                                        )
+                                        IconButton(
+                                            onClick = {
+                                                editingIndex = index
+                                                editingText = cleanText
+                                            },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Edit,
+                                                contentDescription = "Edit",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = {
+                                                val updated = memories.toMutableList()
+                                                updated.removeAt(index)
+                                                memories = updated
+                                                onUpdateMemories(session.id, updated)
+                                            },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Delete,
+                                                contentDescription = "Delete",
+                                                tint = MaterialTheme.colorScheme.error.copy(alpha = 0.6f),
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (showAddRow) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f))
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextField(
+                            value = newRowText,
+                            onValueChange = { newRowText = it },
+                            placeholder = { Text("输入要长期记住的客观事实...", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)) },
+                            textStyle = LocalTextStyle.current.copy(fontSize = 13.sp),
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                disabledContainerColor = Color.Transparent,
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent
+                            )
+                        )
+                        IconButton(
+                            onClick = {
+                                if (newRowText.isNotBlank()) {
+                                    val updated = memories.toMutableList()
+                                    updated.add("★ " + newRowText.trim())
+                                    memories = updated
+                                    onUpdateMemories(session.id, updated)
+                                    newRowText = ""
+                                }
+                                showAddRow = false
+                            },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = "Add",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    FilledTonalButton(
+                        onClick = {
+                            onTriggerSummary()
+                            Toast.makeText(context, "AI 正在后台重新总结提炼本会话记忆事实，请稍候...", Toast.LENGTH_SHORT).show()
+                            onDismissRequest()
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ),
+                        contentPadding = PaddingValues(vertical = 8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AutoAwesome,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("AI 重新总结", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    OutlinedButton(
+                        onClick = { showAddRow = true },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
+                        contentPadding = PaddingValues(vertical = 8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("手动添加", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onDismissRequest,
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Text("关闭", fontSize = 13.sp)
+            }
+        }
+    )
+}
+

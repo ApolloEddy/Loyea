@@ -143,11 +143,19 @@ class MainActivity : ComponentActivity() {
                                 onNewChatClick = { chatViewModel.createNewChat(it) },
                                 activeCharacterCard = activeCharacterCard,
                                 characterCardList = characterCardList,
-                                onTavernClick = { navController.navigate("tavern") },
-                                onNavigateToSettings = { navController.navigate("settings") },
+                                onTavernClick = {
+                                    chatViewModel.stopResponse()
+                                    navController.navigate("tavern")
+                                },
+                                onNavigateToSettings = {
+                                    chatViewModel.stopResponse()
+                                    navController.navigate("settings")
+                                },
                                 onUserNameChange = { chatViewModel.saveUserName(it) },
                                 useSystemTime = activeSession?.useSystemTime ?: false,
                                 onToggleSystemTime = { chatViewModel.toggleCurrentSessionSystemTime() },
+                                onUpdateCoreMemories = { sid, memories -> chatViewModel.updateCoreMemories(sid, memories) },
+                                onTriggerManualMemorySummary = { chatViewModel.triggerManualMemorySummary() },
                                 getDraft = { chatViewModel.getDraft(it) },
                                 saveDraft = { id, text -> chatViewModel.saveDraft(id, text) },
                                 clearDraft = { chatViewModel.clearDraft(it) }
@@ -256,6 +264,13 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (::chatViewModel.isInitialized) {
+            chatViewModel.stopResponse()
         }
     }
 }

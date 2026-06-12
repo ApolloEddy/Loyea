@@ -15,7 +15,8 @@ object PromptAssembler {
         userName: String,
         useSystemTime: Boolean = false,
         physicalContext: String? = null,
-        enableSearch: Boolean = false
+        enableSearch: Boolean = false,
+        coreMemories: List<String> = emptyList()
     ): String {
         val sb = StringBuilder()
 
@@ -26,6 +27,16 @@ object PromptAssembler {
         val safeUserName = if (userName.isBlank()) "User" else userName
         sb.append("[User Info]\n")
         sb.append("The user's name is \"$safeUserName\". Address them by this name naturally in conversation.\n\n")
+
+        // 插入核心事实记忆 (Core Memories)
+        if (coreMemories.isNotEmpty()) {
+            sb.append("[CORE MEMORY / 核心记忆]\n")
+            sb.append("以下是关于用户或当前会话已被你长期记住的“核心事实”或设定。你必须绝对遵守这些事实，不要在对话中产生任何与之相抵触或矛盾的回复：\n")
+            coreMemories.forEach { fact ->
+                sb.append("- ${fact.trim()}\n")
+            }
+            sb.append("\n")
+        }
 
         // 插入当前系统时间与物理上下文
         if (useSystemTime || !physicalContext.isNullOrBlank()) {
@@ -83,8 +94,9 @@ object PromptAssembler {
         sb.append("You have access to a set of perception and utility tools prefixed with `BuiltinPerception__`.\n")
         sb.append("- 如果用户的提问涉及到当下的位置、健康传感器数据、电量光照状态，你必须调用相应的内置工具。\n")
         sb.append("- 特别地，如果用户问及任何关于当前天气、气温的情况，你必须调用 `BuiltinPerception__get_live_weather`。\n")
-        sb.append("- 如果用户问及未来天气、明后天天气预报或气温范围，你必须调用 `BuiltinPerception__get_weather_forecast`，且支持传入指定的 location 参数。\n")
-        sb.append("- 严禁在未调用对应工具的情况下，私自猜测或瞎编任何天气、温度、步数、心率等实时传感器数据。\n\n")
+        sb.append("- 如果用户问及未来天气、明后天天气预报或气温范围，规律性查询时你必须调用 `BuiltinPerception__get_weather_forecast`，且支持传入指定的 location 参数。\n")
+        sb.append("- 严禁在未调用对应工具的情况下，私自猜测或瞎编任何天气、温度、步数、心率等实时传感器数据。\n")
+        sb.append("- 特别注意：如果你看到的地理位置或天气提示包含“[地理定位权限未授予...]”或“[物理定位感知开关已关闭...]”等错误信息，说明当前设备定位受限。你必须立即停止后续对 get_location、get_live_weather 或 get_weather_forecast 等位置/天气工具的任何重复调用，不要反复盲目报错，而是转而在回复中用温和亲善的话术直接告知用户其定位权限受限，并引导其去手机系统设置中开启定位权限或前往应用“设置 -> 物理感知与外设集成”中开启“获取真实物理定位”开关。\n\n")
 
         val rawPrompt = sb.toString().trimEnd()
 

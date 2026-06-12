@@ -54,7 +54,7 @@ enum class ThemeMode {
 
 // 二级页面枚举
 enum class SettingsSubPage {
-    MAIN, API_CONFIG, THEME_SETTINGS, MCP_CONFIG, PHYSICAL_SENSOR
+    MAIN, API_CONFIG, THEME_SETTINGS, MCP_CONFIG, PHYSICAL_SENSOR, MEMORY_SETTINGS
 }
 
 // API 配置数据模型
@@ -144,7 +144,16 @@ fun SettingsScreen(
                     onNavigateToTheme = { subPage = SettingsSubPage.THEME_SETTINGS },
                     onNavigateToMcp = { subPage = SettingsSubPage.MCP_CONFIG },
                     onNavigateToSensor = { subPage = SettingsSubPage.PHYSICAL_SENSOR },
+                    onNavigateToMemory = { subPage = SettingsSubPage.MEMORY_SETTINGS },
                     onBackClick = onBackClick
+                )
+            }
+            SettingsSubPage.MEMORY_SETTINGS -> {
+                MemorySettingsLayout(
+                    apiConfigList = apiConfigList,
+                    activeConfigId = activeConfigId,
+                    appLanguage = appLanguage,
+                    onBackClick = { subPage = SettingsSubPage.MAIN }
                 )
             }
             SettingsSubPage.API_CONFIG -> {
@@ -214,6 +223,7 @@ fun SettingsMainLayout(
     onNavigateToTheme: () -> Unit,
     onNavigateToMcp: () -> Unit,
     onNavigateToSensor: () -> Unit,
+    onNavigateToMemory: () -> Unit,
     onBackClick: () -> Unit
 ) {
     val isEn = appLanguage == "en"
@@ -433,6 +443,49 @@ fun SettingsMainLayout(
                             )
                             Text(
                                 text = if (isEn) "Smartwatch mock, Heart Rate, Location" else "智能手表模拟，心率，GPS定位",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                            )
+                        }
+                    }
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+
+                // 核心事实记忆机制二级页面入口
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onNavigateToMemory() }
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Psychology,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = if (isEn) "Core Fact Memory Settings" else "核心事实记忆设置",
+                                fontSize = 15.sp,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Text(
+                                text = if (isEn) "Configure trigger counts & memory model" else "配置自动总结触发阈值、提取专用模型等",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
                             )
@@ -2403,6 +2456,244 @@ fun PhysicalSensorLayout(
                             tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(20.dp)
                         )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MemorySettingsLayout(
+    apiConfigList: List<ApiConfig>,
+    activeConfigId: String,
+    appLanguage: String,
+    onBackClick: () -> Unit
+) {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("loyea_prefs", android.content.Context.MODE_PRIVATE) }
+
+    var enableMemory by remember { mutableStateOf(prefs.getBoolean("enable_memory_consolidation", true)) }
+    var triggerCount by remember { mutableStateOf(prefs.getInt("memory_consolidation_trigger_count", 10)) }
+    var memoryApiConfigId by remember { mutableStateOf(prefs.getString("memory_api_config_id", "") ?: "") }
+
+    val isEn = appLanguage == "en"
+    var expandedDropdown by remember { mutableStateOf(false) }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(if (isEn) "Memory Settings" else "记忆机制设置", fontSize = 18.sp, fontWeight = FontWeight.Bold) },
+                navigationIcon = {
+                    IconButton(onClick = onBackClick) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowBack,
+                            contentDescription = "Back",
+                            tint = MaterialTheme.colorScheme.onBackground
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
+            )
+        },
+        containerColor = MaterialTheme.colorScheme.background
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp)
+        ) {
+            // Memory Consolidation Switch
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = if (isEn) "AUTOMATIC CONSOLIDATION" else "自动记忆整理",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                )
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surface)
+                        .padding(16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (isEn) "Enable Auto Memory" else "启用自动提取整理",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Text(
+                                text = if (isEn) "LLM will automatically summarize key facts in background" else "大模型将在后台定期自动提炼并去重保存对话核心事实",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                            )
+                        }
+                        Switch(
+                            checked = enableMemory,
+                            onCheckedChange = {
+                                enableMemory = it
+                                prefs.edit().putBoolean("enable_memory_consolidation", it).apply()
+                            }
+                        )
+                    }
+                }
+            }
+
+            if (enableMemory) {
+                // Trigger Message Threshold
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = if (isEn) "TRIGGER THRESHOLD" else "触发整理周期",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                    )
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surface)
+                            .padding(16.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = if (isEn) "Trigger count (messages)" else "触发阈值 (条消息)",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onBackground
+                                )
+                                Text(
+                                    text = if (isEn) "Trigger memory consolidation every $triggerCount messages" else "每隔 $triggerCount 条对话消息自动触发一次记忆整理",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                                )
+                            }
+                            Text(
+                                text = triggerCount.toString(),
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Slider(
+                            value = triggerCount.toFloat(),
+                            onValueChange = {
+                                triggerCount = (it + 0.5f).toInt()
+                            },
+                            onValueChangeFinished = {
+                                prefs.edit().putInt("memory_consolidation_trigger_count", triggerCount).apply()
+                            },
+                            valueRange = 5f..30f,
+                            steps = 4 // 5, 10, 15, 20, 25, 30
+                        )
+                    }
+                }
+
+                // Dedicated Model/API Configuration
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = if (isEn) "SUMMARY MODEL CONFIGURATION" else "总结记忆使用模型/配置",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                    )
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surface)
+                            .padding(16.dp)
+                    ) {
+                        Text(
+                            text = if (isEn) "API Configuration" else "API 配置选择",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Text(
+                            text = if (isEn) "Choose API client config used to synthesize memories" else "专门为记忆合并总结指定的 API 配置与大模型客户端",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        val activeConfig = apiConfigList.find { it.id == memoryApiConfigId }
+                        val displayValue = if (memoryApiConfigId.isEmpty()) {
+                            if (isEn) "Follow Active Conversation Config" else "跟随当前会话配置"
+                        } else {
+                            activeConfig?.let { "${it.name} (${it.modelName})" } ?: (if (isEn) "Follow Active Conversation Config" else "跟随当前会话配置")
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                                .clickable { expandedDropdown = true }
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(text = displayValue, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface)
+                                Icon(
+                                    imageVector = Icons.Default.ArrowDropDown,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            DropdownMenu(
+                                expanded = expandedDropdown,
+                                onDismissRequest = { expandedDropdown = false },
+                                modifier = Modifier.fillMaxWidth(0.85f)
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text(if (isEn) "Follow Active Conversation Config" else "跟随当前会话配置", fontSize = 13.sp) },
+                                    onClick = {
+                                        memoryApiConfigId = ""
+                                        prefs.edit().putString("memory_api_config_id", "").apply()
+                                        expandedDropdown = false
+                                    }
+                                )
+                                apiConfigList.forEach { config ->
+                                    DropdownMenuItem(
+                                        text = { Text("${config.name} (${config.modelName})", fontSize = 13.sp) },
+                                        onClick = {
+                                            memoryApiConfigId = config.id
+                                            prefs.edit().putString("memory_api_config_id", config.id).apply()
+                                            expandedDropdown = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }

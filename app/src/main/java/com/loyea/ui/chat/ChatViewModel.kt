@@ -307,6 +307,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectSession(sessionId: String) {
+        stopResponse()
         currentSessionId.value = sessionId
         prefs.edit().putString("current_session_id", sessionId).apply()
         viewModelScope.launch(Dispatchers.IO) {
@@ -595,7 +596,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 userName = userName.value,
                 useSystemTime = activeSession.value?.useSystemTime ?: false,
                 physicalContext = physicalContextData,
-                enableSearch = apiConfig.enableSearch
+                enableSearch = apiConfig.enableSearch,
+                coreMemories = activeSession.value?.coreMemories ?: emptyList()
             )
 
             // 构建初始会话上下文
@@ -807,16 +809,26 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         }
                         messages.value = currentList
                         saveMessagesAsync(sessionId, currentList)
+                        checkAndTriggerMemorySummaryAsync(sessionId)
                         break
                     }
                 }
             } catch (e: Exception) {
-                if (e !is kotlinx.coroutines.CancellationException) {
+                if (e is kotlinx.coroutines.CancellationException || responseJob?.isCancelled == true) {
+                    currentList = currentList.map { msg ->
+                        if (msg.id == aiMessageId) {
+                            msg.copy(isStillThinking = false)
+                        } else {
+                            msg
+                        }
+                    }
+                    messages.value = currentList
+                } else {
                     Log.e("ChatViewModel", "SSE Stream Error", e)
                     currentList = currentList.map { msg ->
                         if (msg.id == aiMessageId) {
                             msg.copy(
-                                content = "[错误] 数据流接收异常: ${e.localizedMessage}",
+                                content = "[错误] 数据流接收异常: ${e.localizedMessage ?: e.message ?: "未知错误"}",
                                 isStillThinking = false,
                                 isError = true
                             )
@@ -860,9 +872,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         if (!systemPrompt.isNullOrBlank()) {
             list.add(LlmChatMessage(role = "system", content = systemPrompt))
         }
-        history.filter {
+        val filteredHistory = history.filter {
             it.content.isNotBlank() && !it.content.startsWith("[错误]") && !it.content.startsWith("[Error]")
-        }.forEach { msg ->
+        }
+        // 线性滑动窗口只取最新 20 条消息
+        val recentHistory = filteredHistory.takeLast(20)
+        recentHistory.forEach { msg ->
             list.add(
                 LlmChatMessage(
                     role = if (msg.sender == Sender.USER) "user" else "assistant",
@@ -998,6 +1013,121 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun clearDraft(sessionId: String) {
         sessionDrafts.remove(sessionId)
         prefs.edit().remove("draft_$sessionId").apply()
+    }
+
+    private var messageCountSinceLastSummary = 0
+
+    private fun checkAndTriggerMemorySummaryAsync(sessionId: String) {
+        val enableMemory = prefs.getBoolean("enable_memory_consolidation", true)
+        if (!enableMemory) return
+
+        val triggerThreshold = prefs.getInt("memory_consolidation_trigger_count", 10)
+        messageCountSinceLastSummary++
+        if (messageCountSinceLastSummary >= triggerThreshold) {
+            messageCountSinceLastSummary = 0
+            viewModelScope.launch(Dispatchers.IO) {
+                triggerMemorySummaryInternal(sessionId)
+            }
+        }
+    }
+
+    private suspend fun triggerMemorySummaryInternal(sessionId: String) {
+        if (sessionId.isBlank()) return
+        val session = sessions.value.find { it.id == sessionId } ?: return
+        val oldMemories = session.coreMemories
+        val historyMsgs = messages.value.takeLast(20)
+
+        // 区分“核心锁定记忆 (★ 开头)”和“普通事实记忆”
+        val coreFacts = oldMemories.filter { it.startsWith("★") }
+        val normalFacts = oldMemories.filter { !it.startsWith("★") }
+        
+        val summaryPrompt = """
+            你是一个AI事实记忆整合器。你的职责是根据最近的对话历史，提取并精简出长期事实记忆。
+            
+            【锁定核心事实】（以 ★ 开头，由用户锁定，必须完整且原样保留，严禁进行任何文字修改、合并或删除！）：
+            ${if (coreFacts.isEmpty()) "(无)" else coreFacts.joinToString("\n") { "- $it" }}
+            
+            【已有普通事实】（未锁定，可以被修改、合并或删除）：
+            ${if (normalFacts.isEmpty()) "(无)" else normalFacts.joinToString("\n") { "- $it" }}
+            
+            【最近20条对话历史】：
+            ${historyMsgs.joinToString("\n") { "${if (it.sender == Sender.USER) "用户" else "AI"}: ${it.content}" }}
+            
+            任务目标：
+            1. 仔细阅读最近的对话历史，从中提炼出有关于用户个人信息、喜好、重大事件、双方重要约定等需要被AI长期记住的事实（例如：“用户喜欢喝拿铁咖啡”、“用户的猫叫咪咪”）。
+            2. 将提炼的最新事实与已有的记忆整合：
+               - 所有以 ★ 开头的事实必须在最终输出中完整且原样保留（包括 ★ 符号本身和前缀，例如：[★ 用户对花生过敏]），严禁对其做任何内容修改、合并或删除。
+               - 对于未锁定（不带 ★）的普通事实，请与新提取的事实整合。如果新旧事实冲突，请以新对话中的事实为准；如果意思重复或相近，请予以合并；如果某个旧条目已被对话明确推翻，可将其删除。
+            3. 新提取出来的普通事实千万不要带 ★ 符号（★ 符号仅供用户锁定的核心事实使用）。记忆条目必须高度精炼，通常只需一句话陈述一个客观事实。
+            4. 严格输出为以中括号包裹的格式，每一行一个条目，格式为：[★ 锁定事实内容] 或 [普通事实内容]。
+               例如：
+               [★ 用户对花生过敏]
+               [用户今天心情很好]
+            5. 请直接输出整合后的最新事实列表，严禁包含任何前言、后记、分析过程或其他无关闲聊废话。如果最近的对话中没有提到任何有价值的、需要长期记住的核心事实，请完整原样输出所有旧核心记忆和普通事实。
+        """.trimIndent()
+
+        try {
+            val memoryApiId = prefs.getString("memory_api_config_id", "") ?: ""
+            val targetConfig = if (memoryApiId.isBlank()) {
+                activeApiConfig.value
+            } else {
+                apiConfigList.value.find { it.id == memoryApiId } ?: activeApiConfig.value
+            }
+
+            val llmResponse = llmClient.sendChatCompletion(
+                config = targetConfig,
+                systemPrompt = summaryPrompt,
+                history = emptyList()
+            )
+            val responseText = llmResponse.content
+            if (llmResponse.isError || responseText.isBlank()) return
+            
+            val newMemories = mutableListOf<String>()
+            val regex = Regex("\\[([^\\]]+)\\]")
+            regex.findAll(responseText).forEach { matchResult ->
+                val fact = matchResult.groupValues[1].trim()
+                if (fact.isNotBlank()) {
+                    newMemories.add(fact)
+                }
+            }
+            
+            // 确保所有的锁定事实依然完整保留（即使大模型漏掉了，也做兜底）
+            coreFacts.forEach { coreFact ->
+                val coreFactContent = coreFact.removePrefix("★").trim()
+                if (newMemories.none { it.contains(coreFactContent) }) {
+                    newMemories.add(0, coreFact)
+                }
+            }
+
+            if (newMemories.isNotEmpty() || responseText.contains("无旧核心记忆") || oldMemories.isNotEmpty()) {
+                updateCoreMemories(sessionId, newMemories)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun updateCoreMemories(sessionId: String, memories: List<String>) {
+        viewModelScope.launch(Dispatchers.IO) {
+            storageManager.updateSessionCoreMemories(sessionId, memories)
+            withContext(Dispatchers.Main) {
+                sessions.value = sessions.value.map { session ->
+                    if (session.id == sessionId) {
+                        session.copy(coreMemories = memories)
+                    } else {
+                        session
+                    }
+                }
+            }
+        }
+    }
+
+    fun triggerManualMemorySummary() {
+        val sessionId = currentSessionId.value
+        if (sessionId.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            triggerMemorySummaryInternal(sessionId)
+        }
     }
 
     override fun onCleared() {

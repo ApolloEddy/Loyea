@@ -15,11 +15,17 @@ class WeatherProvider(private val context: Context) {
         .build()
 
     suspend fun getLiveWeather(locationString: String?): String = withContext(Dispatchers.IO) {
+        if (locationString != null && locationString.contains("[") && locationString.contains("]")) {
+            return@withContext "无法获取实时天气，定位受限原因：$locationString"
+        }
         val query = resolveQuery(locationString)
         fetchWeatherFromWttr(query)
     }
 
     suspend fun getWeatherForecast(locationString: String?): String = withContext(Dispatchers.IO) {
+        if (locationString != null && locationString.contains("[") && locationString.contains("]")) {
+            return@withContext "无法获取天气预报，定位受限原因：$locationString"
+        }
         val query = resolveQuery(locationString)
         val url = "https://wttr.in/$query?format=j1&lang=zh"
         val request = Request.Builder()

@@ -16,7 +16,8 @@ data class ChatSession(
     val title: String,               // 会话标题
     val lastActiveTime: Long = System.currentTimeMillis(), // 最后活动时间，用于排序
     val characterId: String = "char_loyea_default", // 新增角色人格绑定
-    val useSystemTime: Boolean? = false // 是否在此会话中使用真实系统时间
+    val useSystemTime: Boolean? = false, // 是否在此会话中使用真实系统时间
+    val coreMemories: List<String> = emptyList() // 会话核心记忆列表
 )
 
 /**
@@ -56,7 +57,8 @@ class ChatStorageManager(private val context: Context) {
                     title = raw.title ?: "Unnamed Chat",
                     lastActiveTime = raw.lastActiveTime,
                     characterId = raw.characterId ?: "char_loyea_default",
-                    useSystemTime = raw.useSystemTime ?: false
+                    useSystemTime = raw.useSystemTime ?: false,
+                    coreMemories = raw.coreMemories ?: emptyList()
                 )
             }
         } catch (e: Exception) {
@@ -214,6 +216,21 @@ class ChatStorageManager(private val context: Context) {
             val current = loadSessionListInternal()
             val updated = updateBlock(current)
             saveSessionListInternal(updated)
+        }
+    }
+
+    /**
+     * 原子化更新某个会话的核心记忆
+     */
+    suspend fun updateSessionCoreMemories(sessionId: String, memories: List<String>) {
+        updateSessionList { currentList ->
+            currentList.map { session ->
+                if (session.id == sessionId) {
+                    session.copy(coreMemories = memories)
+                } else {
+                    session
+                }
+            }
         }
     }
 }
