@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased] - 2026-06-13
 
 ### Added (新增)
+- **重构物理感知与大模型工具历史上下文过滤**：
+  - **剔除每次消息的全局传感器物理数据抓取**：移除了此前每次发送消息都调用 `perceptionManager.buildPhysicalContextString()` 的重度逻辑，改为仅将“系统当前时间”作为每次发消息的必要物理信息附带，大幅度减少物理设备调用频率，节省电量并消除无谓的工具执行开销。
+  - **按需自主调用与虚构工具防幻觉**：修正了 `PromptAssembler` 里的 `TOOL USE GUIDELINE` 工具拼写（将 `get_heart_rate` 修正为真实存在的 `get_health_data`），同时在提示词中新增了明确且强制性的“严禁幻觉/猜测调用未定义工具（如 `get_phone_status` 或 `sync_system_time` / `同步系统时间` 等不存在的工具）”强约束，规避大模型幻觉引起的调用失败。
+  - **10分钟滑动过期工具调用历史上下文**：实现了从当前会话的 `history` 历史消息中增量过滤最近 10 分钟（600,000 毫秒）内执行成功且不属于语音回复类的 MCP 工具结果上下文（如 Wi-Fi、电量、定位等物理感知或搜索结果），格式化为 `- X分钟前成功调用了 [工具名] 工具，返回结果为：[数据]`。超过 10 分钟的数据判定为过期，不再作为上下文附带。
+  - **跨会话数据物理隔离**：基于 `history` 对当前会话的工具上下文进行独立过滤，完全杜绝了不同 Session（会话）之间的物理历史记录交叉泄露。
 - **多模态 AI 虚拟工具语音回复组件（McpVoiceReplyItem）与独立防覆盖交互渲染**：
   - **精美独立语音条组件**：在 [ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt) 中引入并实现独立的 `McpVoiceReplyItem` 语音回复条 UI 组件。它摆脱了以往只用普通折叠文本组件渲染 `send_voice_reply` 虚拟工具调用的限制，将其提升渲染为与系统原生语音条一致的精美语音气泡。
   - **流式合成与加载态骨架屏**：当工具状态为 `RUNNING` 时，自动在 UI 上渲染带有圆角、极细描边以及旋转加载圈的“语音合成中...”占位骨架屏；合成完毕后转换为长条形可交互语音播放条，并在其上渲染音频的时长，解决了加载期间的布局闪烁与内容空缺。

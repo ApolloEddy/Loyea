@@ -1694,14 +1694,7 @@ fun McpVoiceReplyItem(
         }
     }
 
-    // 调试 Toast，方便我们在用户真机上彻底查清数据渲染
-    LaunchedEffect(call.status, call.output) {
-        android.widget.Toast.makeText(
-            context, 
-            "[McpVoiceItem] status: ${call.status}, hasUrl: $hasVoiceUrl, output: ${call.output?.take(30)}...", 
-            android.widget.Toast.LENGTH_LONG
-        ).show()
-    }
+
 
     when (call.status) {
         McpStatus.RUNNING -> {
@@ -1738,7 +1731,6 @@ fun McpVoiceReplyItem(
                         .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
                         .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), RoundedCornerShape(16.dp))
                         .clickable { 
-                            android.widget.Toast.makeText(context, "[点击] McpCall ID: ${call.id}", android.widget.Toast.LENGTH_SHORT).show()
                             onPlayClick(call.id)
                         }
                         .padding(horizontal = 16.dp, vertical = 12.dp),

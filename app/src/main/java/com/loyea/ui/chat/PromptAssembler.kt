@@ -114,7 +114,8 @@ object PromptAssembler {
         // 7. 强约束感知与天气工具调用规范 (置于末尾以强化 Recency 权重)
         sb.append("[TOOL USE GUIDELINE]\n")
         sb.append("You have access to a set of perception and utility tools prefixed with `BuiltinPerception__`.\n")
-        sb.append("- You can use these tools (e.g., get_location, get_live_weather, get_heart_rate) to fetch real-time physical parameters or weather updates when appropriate.\n")
+        sb.append("- You can use these tools (e.g., get_location, get_live_weather, get_health_data, get_battery_status) to fetch real-time physical parameters or weather updates when appropriate.\n")
+        sb.append("- IMPORTANT: You MUST ONLY call the tools that are officially defined and passed to you in the API schema. DO NOT hallucinate, guess, or call any non-existent/invented tools (e.g., `get_phone_status`, `sync_system_time`, `同步系统时间`, etc. DO NOT exist and calling them will result in errors. Strictly stick to the defined schema).\n")
         sb.append("- Keep your replies natural and coherent, seamlessly blending sensor data into your roleplay persona if you choose to reference it.\n\n")
 
         val rawPrompt = sb.toString().trimEnd()

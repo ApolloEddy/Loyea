@@ -730,9 +730,32 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             // 判定当前角色是否是 Loyea 核心角色（仅 Loyea 支持物理感知和设备数据读取，隔离跨角色隐私泄露）
-            // 策略调整：不再将物理信息直接塞入 System Prompt，而是作为辅助参考，
-            // 且告诉 AI 如果需要最新数据必须调用工具。
-            val physicalContextData = perceptionManager.buildPhysicalContextString()
+            // 策略调整：不再在每次发送消息时自动调出所有工具物理信息，而是将“系统当前时间”作为必要物理信息随消息附带。
+            // 同时在上下文附上当前会话最近10分钟内成功调用的工具记录，过期数据将被自动丢弃。
+            val now = System.currentTimeMillis()
+            val tenMinutesAgo = now - 10 * 60 * 1000 // 10分钟前
+            val recentToolCallsStr = history
+                .filter { it.timestamp >= tenMinutesAgo }
+                .flatMap { msg ->
+                    val diffMs = now - msg.timestamp
+                    val timeDesc = when {
+                        diffMs < 30 * 1000 -> "刚刚"
+                        diffMs < 60 * 1000 -> "1分钟内"
+                        else -> "${diffMs / (60 * 1000)}分钟前"
+                    }
+                    msg.mcpCalls
+                        .filter { it.status == McpStatus.SUCCESS && it.toolName != "send_voice_reply" }
+                        .map { call ->
+                            "- ${timeDesc}成功调用了 `${call.toolName}` 工具，返回结果为：${call.output.trim()}"
+                        }
+                }
+                .joinToString("\n")
+
+            val physicalContextData = if (recentToolCallsStr.isNotBlank()) {
+                "[RECENT PERCEPTION TOOL CALLS (10MIN CACHE)]\n$recentToolCallsStr"
+            } else {
+                null
+            }
 
             val systemPrompt = PromptAssembler.assembleSystemPrompt(
                 card = characterCard,
@@ -1700,7 +1723,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun playMcpVoice(mcpCallId: String) {
-        android.widget.Toast.makeText(context, "[调试] 触发 playMcpVoice, ID: $mcpCallId", android.widget.Toast.LENGTH_SHORT).show()
         if (currentlyPlayingAudioId.value == mcpCallId) {
             stopAudio()
             return
@@ -1708,7 +1730,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         stopAudio()
         
         val ttsFile = File(context.cacheDir, "tts_${mcpCallId}.mp3")
-        android.widget.Toast.makeText(context, "[调试] 文件存在: ${ttsFile.exists()}, 大小: ${ttsFile.length()}", android.widget.Toast.LENGTH_SHORT).show()
         if (ttsFile.exists() && ttsFile.length() > 0) {
             playAudioFile(mcpCallId, ttsFile)
             return
