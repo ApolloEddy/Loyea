@@ -70,6 +70,7 @@ fun MainScreen(
     onUpdateCoreMemories: (String, List<String>) -> Unit = { _, _ -> },
     onTriggerManualMemorySummary: () -> Unit = {},
     onEditMessage: (String, String) -> Unit = { _, _ -> },
+    viewModel: com.loyea.ui.chat.ChatViewModel? = null,
     modifier: Modifier = Modifier
 ) {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -148,6 +149,7 @@ fun MainScreen(
                 },
                 activeCharacterCard = activeCharacterCard,
                 characterCardList = characterCardList,
+                viewModel = viewModel,
                 modifier = modifier
             )
         }

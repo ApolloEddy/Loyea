@@ -195,7 +195,8 @@ class MainActivity : ComponentActivity() {
                                 onEditMessage = { id, text -> chatViewModel.editMessage(id, text) },
                                 getDraft = { chatViewModel.getDraft(it) },
                                 saveDraft = { id, text -> chatViewModel.saveDraft(id, text) },
-                                clearDraft = { chatViewModel.clearDraft(it) }
+                                clearDraft = { chatViewModel.clearDraft(it) },
+                                viewModel = chatViewModel
                             )
                         }
                         composable("settings") {

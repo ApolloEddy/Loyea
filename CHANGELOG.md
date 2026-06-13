@@ -22,6 +22,9 @@ All notable changes to this project will be documented in this file.
     - 当用户点击数天前历史记录中的语音条、而该音频已被上述滚动清理或意外损坏不存在时，逻辑不会发生静默失败或闪退，而是会**主动通过 `targetCall.input` 反向序列化解析出原始工具入参文本**；
     - 自动将该语音条的 UI 状态重新置为 `RUNNING` 骨架屏进行视觉缓冲，同时自动通过 `withLock` 线程排他锁拉起后台 TTS API 进行**相同音频文件的重新合成**；
     - 合成成功后，自动更新物理文件路径、时长等 Payload，回写保存至数据库，并**当即自动触发物理播放**，实现了完全无感的“点击 $\rightarrow$ API 重新合成 $\rightarrow$ 自动播报”自愈闭环。
+  - **Activity 到 MainScreen 核心 ViewModel 数据通道打通**：
+    - 修复了此前在 [MainActivity.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/MainActivity.kt#L162) 中实例化 `MainScreen` 以及在 [MainScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/main/MainScreen.kt#L118) 中实例化 `ChatScreen` 时均未进行 `viewModel` 传参导致的严重乌龙故障。
+    - 补齐了全局参数路由链，实现了 ViewModel 实例生命周期的深度流动和绑定，彻底唤醒并盘活了点击语音条、音频播放自愈、以及全局文本 TTS 朗读功能，消除了运行时 viewModel 为 null 导致的点击全量失效。
   - **语音条 UI 位置收拢与排布固化**：
     - 在 [ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt) 消息重构中，彻底将 `McpVoiceReplyItem` 语音回复条从 AI 气泡顶部的 `message.mcpCalls` 流程中剥离。
     - 将语音回复条统一固定在 AI 气泡的最底端（即正文文本 `MarkdownText` 的下方），解决了由于工具流执行前后相对顺序不同导致语音条在感知工具卡片（如网页搜索）上下乱跑的显示问题，规范了聊天美学。
