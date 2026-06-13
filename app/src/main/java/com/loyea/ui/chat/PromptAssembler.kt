@@ -118,6 +118,12 @@ object PromptAssembler {
         sb.append("- IMPORTANT: You MUST ONLY call the tools that are officially defined and passed to you in the API schema. DO NOT hallucinate, guess, or call any non-existent/invented tools (e.g., `get_phone_status`, `sync_system_time`, `同步系统时间`, etc. DO NOT exist and calling them will result in errors. Strictly stick to the defined schema).\n")
         sb.append("- Keep your replies natural and coherent, seamlessly blending sensor data into your roleplay persona if you choose to reference it.\n\n")
 
+        // 8. 严格输出格式约束 (OUTPUT FORMAT CONSTRAINT)
+        sb.append("[OUTPUT FORMAT CONSTRAINT / 严格输出格式约束]\n")
+        sb.append("- Never output any bracketed text like `[xxxx]` in your reply, except for the allowed haptic vibration tags like `[haptic:vibration_type]`.\n")
+        sb.append("- Specifically, do NOT include time labels like `[发送于 xxx]`, action labels, or status labels wrapped in square brackets `[...]`.\n")
+        sb.append("- Any action descriptions or mental states must be wrapped in standard parentheses `(...)` or asterisks `*...*`, never in square brackets `[...]`.\n\n")
+
         val rawPrompt = sb.toString().trimEnd()
 
         // 8. 进行占位符 (Macros) 的渲染替换

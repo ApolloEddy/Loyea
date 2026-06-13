@@ -1158,22 +1158,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         // 线性滑动窗口只取最新 20 条消息
         val recentHistory = filteredHistory.takeLast(20)
-        val now = System.currentTimeMillis()
         recentHistory.forEach { msg ->
-            // 计算当前与历史消息产生的时间差，构建真实时间流逝感，让 AI 自主识记和遗忘物理时效数据
-            val diffMs = now - msg.timestamp
-            val timeDesc = when {
-                diffMs < 30 * 1000 -> "刚刚"
-                diffMs < 60 * 1000 -> "1分钟内"
-                diffMs < 60 * 60 * 1000 -> "${diffMs / (60 * 1000)}分钟前"
-                diffMs < 24 * 60 * 60 * 1000 -> "${diffMs / (60 * 60 * 1000)}小时前"
-                else -> "${diffMs / (24 * 60 * 60 * 1000)}天前"
-            }
-            val decoratedContent = if (msg.sender == Sender.USER) {
-                "[发送于 $timeDesc] ${msg.content}"
-            } else {
-                msg.content
-            }
+            val decoratedContent = msg.content
             list.add(
                 LlmChatMessage(
                     role = if (msg.sender == Sender.USER) "user" else "assistant",
