@@ -14,6 +14,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -51,7 +52,8 @@ data class LlmChatMessage(
     val content: String? = null,
     val toolCallId: String? = null,
     val name: String? = null,
-    val toolCalls: List<LlmToolCall> = emptyList()
+    val toolCalls: List<LlmToolCall> = emptyList(),
+    val imageUrl: String? = null
 )
 
 /**
@@ -168,59 +170,24 @@ class LlmClient {
                                         emit(StreamEvent.Thoughts(reasoningContent))
                                     }
 
-                                    // 2. 正文流 (兼容内嵌式 <think> 标签并增量对比提取)
+                                    // 2. 正文流 (兼容内嵌式 <think> 与 <tool_call> 标签并增量提取)
                                     val content = delta.get("content")?.takeIf { !it.isJsonNull }?.asString
                                     if (!content.isNullOrEmpty()) {
                                         fullContentBuilder.append(content)
                                         val fullStr = fullContentBuilder.toString()
                                         
-                                        val thinkStart = fullStr.indexOf("<think>")
-                                        val thinkEnd = fullStr.indexOf("</think>")
+                                        val parsedState = parseIncrementalStreamState(fullStr)
                                         
-                                        if (thinkStart != -1) {
-                                            if (thinkEnd != -1) {
-                                                // 思考段已完全结束
-                                                // 提取思考块
-                                                val thoughtsText = fullStr.substring(thinkStart + 7, thinkEnd)
-                                                if (thoughtsText.length > emittedThoughtsLength) {
-                                                    val newThoughts = thoughtsText.substring(emittedThoughtsLength)
-                                                    emit(StreamEvent.Thoughts(newThoughts))
-                                                    emittedThoughtsLength = thoughtsText.length
-                                                }
-                                                
-                                                // 提取正文（去掉整个思考标签和内容）
-                                                val beforeThink = fullStr.substring(0, thinkStart)
-                                                val afterThink = fullStr.substring(thinkEnd + 8)
-                                                val totalContent = beforeThink + afterThink
-                                                if (totalContent.length > emittedContentLength) {
-                                                    val newContent = totalContent.substring(emittedContentLength)
-                                                    emit(StreamEvent.Content(newContent))
-                                                    emittedContentLength = totalContent.length
-                                                }
-                                            } else {
-                                                // 思考块仍在持续中
-                                                // <think> 之前的部分已经属于正文
-                                                val beforeThink = fullStr.substring(0, thinkStart)
-                                                if (beforeThink.length > emittedContentLength) {
-                                                    val newContent = beforeThink.substring(emittedContentLength)
-                                                    emit(StreamEvent.Content(newContent))
-                                                    emittedContentLength = beforeThink.length
-                                                }
-                                                // <think> 之后的是思考内容
-                                                val thoughtsText = fullStr.substring(thinkStart + 7)
-                                                if (thoughtsText.length > emittedThoughtsLength) {
-                                                    val newThoughts = thoughtsText.substring(emittedThoughtsLength)
-                                                    emit(StreamEvent.Thoughts(newThoughts))
-                                                    emittedThoughtsLength = thoughtsText.length
-                                                }
-                                            }
-                                        } else {
-                                            // 全属于普通正文，无思考标签
-                                            if (fullStr.length > emittedContentLength) {
-                                                val newContent = fullStr.substring(emittedContentLength)
-                                                emit(StreamEvent.Content(newContent))
-                                                emittedContentLength = fullStr.length
-                                            }
+                                        if (parsedState.thoughts.length > emittedThoughtsLength) {
+                                            val newThoughts = parsedState.thoughts.substring(emittedThoughtsLength)
+                                            emit(StreamEvent.Thoughts(newThoughts))
+                                            emittedThoughtsLength = parsedState.thoughts.length
+                                        }
+                                        
+                                        if (parsedState.visibleContent.length > emittedContentLength) {
+                                            val newContent = parsedState.visibleContent.substring(emittedContentLength)
+                                            emit(StreamEvent.Content(newContent))
+                                            emittedContentLength = parsedState.visibleContent.length
                                         }
                                     }
 
@@ -256,13 +223,15 @@ class LlmClient {
                 }
 
                 // 发射收集到的完整 Tool Calls
+                val finalState = parseIncrementalStreamState(fullContentBuilder.toString(), isDone = true)
                 val finalToolCalls = toolCallBuffers.entries.sortedBy { it.key }.mapNotNull { (_, buffer) ->
                     val id = buffer.id ?: "call_${System.currentTimeMillis()}"
                     val name = buffer.name ?: return@mapNotNull null
                     LlmToolCall(id = id, name = name, argumentsJson = buffer.arguments.toString())
                 }
-                if (finalToolCalls.isNotEmpty()) {
-                    emit(StreamEvent.ToolCalls(finalToolCalls))
+                val combinedCalls = finalToolCalls + finalState.completedXmlCalls
+                if (combinedCalls.isNotEmpty()) {
+                    emit(StreamEvent.ToolCalls(combinedCalls))
                 }
 
                 emit(StreamEvent.Done)
@@ -468,6 +437,10 @@ class LlmClient {
                 else if (targetModel == "deepseek-v4-pro") targetModel = "deepseek-v4-flash"
             }
         }
+        // 自愈映射：如果提供商是 MiMo 且仍然传入默认的 gpt-4o-mini，重定向为 mimo-v2.5-pro
+        if (config.provider.equals("MiMo", ignoreCase = true) && targetModel.equals("gpt-4o-mini", ignoreCase = true)) {
+            targetModel = "mimo-v2.5-pro"
+        }
         return targetModel
     }
 
@@ -483,12 +456,99 @@ class LlmClient {
         return baseUrl
     }
 
+    private fun encodeFileToBase64(filePath: String): String {
+        return try {
+            val file = java.io.File(filePath)
+            if (!file.exists()) return ""
+            
+            // 1. 使用 BitmapFactory 解码图片边界
+            val options = android.graphics.BitmapFactory.Options()
+            options.inJustDecodeBounds = true
+            android.graphics.BitmapFactory.decodeFile(filePath, options)
+            
+            val srcWidth = options.outWidth
+            val srcHeight = options.outHeight
+            if (srcWidth <= 0 || srcHeight <= 0) {
+                val bytes = file.readBytes()
+                return android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+            }
+            
+            // 2. 计算缩放因子，使得最大边不超过 800 像素
+            val maxSide = 800
+            var inSampleSize = 1
+            if (srcWidth > maxSide || srcHeight > maxSide) {
+                val widerSampleSize = Math.round(srcWidth.toFloat() / maxSide.toFloat())
+                val tallerSampleSize = Math.round(srcHeight.toFloat() / maxSide.toFloat())
+                inSampleSize = Math.max(widerSampleSize, tallerSampleSize)
+            }
+            if (inSampleSize < 1) inSampleSize = 1
+            
+            // 3. 解码 bitmap
+            options.inJustDecodeBounds = false
+            options.inSampleSize = inSampleSize
+            val bitmap = android.graphics.BitmapFactory.decodeFile(filePath, options) ?: return ""
+            
+            // 4. 等比例缩放到最大边 800 像素
+            val finalBitmap = if (bitmap.width > maxSide || bitmap.height > maxSide) {
+                val ratio = Math.min(maxSide.toFloat() / bitmap.width, maxSide.toFloat() / bitmap.height)
+                val destWidth = (bitmap.width * ratio).toInt()
+                val destHeight = (bitmap.height * ratio).toInt()
+                android.graphics.Bitmap.createScaledBitmap(bitmap, destWidth, destHeight, true)
+            } else {
+                bitmap
+            }
+            
+            // 5. 压缩为 JPEG 字节流
+            val baos = java.io.ByteArrayOutputStream()
+            finalBitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, baos)
+            val bytes = baos.toByteArray()
+            
+            if (finalBitmap != bitmap) {
+                finalBitmap.recycle()
+            }
+            bitmap.recycle()
+            
+            android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            // 回退到原样读取
+            try {
+                val bytes = java.io.File(filePath).readBytes()
+                android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+            } catch (ex: Exception) {
+                ""
+            }
+        }
+    }
+
     private fun toProviderMessages(messages: List<LlmChatMessage>): JsonArray {
         val array = JsonArray()
         messages.forEach { msg ->
             val obj = JsonObject().apply {
                 addProperty("role", msg.role)
-                if (msg.content != null) addProperty("content", msg.content)
+                if (!msg.imageUrl.isNullOrBlank()) {
+                    val contentArray = JsonArray()
+                    contentArray.add(JsonObject().apply {
+                        addProperty("type", "text")
+                        addProperty("text", msg.content ?: "")
+                    })
+                    contentArray.add(JsonObject().apply {
+                        addProperty("type", "image_url")
+                        add("image_url", JsonObject().apply {
+                            val base64 = encodeFileToBase64(msg.imageUrl)
+                            val mimeType = when {
+                                msg.imageUrl.endsWith(".png", true) -> "image/png"
+                                msg.imageUrl.endsWith(".webp", true) -> "image/webp"
+                                msg.imageUrl.endsWith(".gif", true) -> "image/gif"
+                                else -> "image/jpeg"
+                            }
+                            addProperty("url", "data:$mimeType;base64,$base64")
+                        })
+                    })
+                    add("content", contentArray)
+                } else {
+                    if (msg.content != null) addProperty("content", msg.content)
+                }
                 if (!msg.toolCallId.isNullOrBlank()) addProperty("tool_call_id", msg.toolCallId)
                 if (!msg.name.isNullOrBlank()) addProperty("name", msg.name)
                 if (msg.toolCalls.isNotEmpty()) {
@@ -604,28 +664,17 @@ class LlmClient {
         val messageObj = choices.get(0).asJsonObject.getAsJsonObject("message")
         val rawContent = messageObj?.get("content")?.takeIf { !it.isJsonNull }?.asString ?: ""
         val reasoningContent = messageObj?.get("reasoning_content")?.takeIf { !it.isJsonNull }?.asString
-        val toolCalls = parseToolCalls(messageObj?.getAsJsonArray("tool_calls"))
+        val apiToolCalls = parseToolCalls(messageObj?.getAsJsonArray("tool_calls"))
 
-        var finalThoughts: String? = null
-        var finalContent = rawContent
-
-        if (!reasoningContent.isNullOrBlank()) {
-            finalThoughts = reasoningContent
-        }
-
-        val thinkRegex = Regex("<think>([\\s\\S]*?)</think>")
-        val matchResult = thinkRegex.find(rawContent)
-        if (matchResult != null) {
-            if (finalThoughts == null) {
-                finalThoughts = matchResult.groupValues[1].trim()
-            }
-            finalContent = rawContent.replace(thinkRegex, "").trim()
-        }
+        val parsedState = parseIncrementalStreamState(rawContent, isDone = true)
+        val finalThoughts = if (!reasoningContent.isNullOrBlank()) reasoningContent else parsedState.thoughts.takeIf { it.isNotBlank() }
+        val finalContent = parsedState.visibleContent.trim()
+        val combinedToolCalls = apiToolCalls + parsedState.completedXmlCalls
 
         return LlmResponse(
             content = finalContent,
             thoughts = finalThoughts,
-            toolCalls = toolCalls
+            toolCalls = combinedToolCalls
         )
     }
 
@@ -877,4 +926,485 @@ class LlmClient {
             "\n=========================\n\n"
         }
     }
+
+    private fun resolveImagesGenerationsUrl(config: com.loyea.ui.settings.ApiConfig): String {
+        val baseUrl = config.apiUrl.trim()
+        val cleaned = baseUrl.substringBefore("/chat/completions").removeSuffix("/")
+        return "$cleaned/images/generations"
+    }
+
+    private fun resolveAudioSpeechUrl(config: com.loyea.ui.settings.ApiConfig): String {
+        val baseUrl = config.apiUrl.trim()
+        val cleaned = baseUrl.substringBefore("/chat/completions").removeSuffix("/")
+        return "$cleaned/audio/speech"
+    }
+
+    private fun resolveAudioTranscriptionsUrl(config: com.loyea.ui.settings.ApiConfig): String {
+        val baseUrl = config.apiUrl.trim()
+        val cleaned = baseUrl.substringBefore("/chat/completions").removeSuffix("/")
+        return "$cleaned/audio/transcriptions"
+    }
+
+    data class TtsResult(
+        val success: Boolean,
+        val errorMsg: String? = null
+    )
+
+    suspend fun generateSpeech(
+        config: com.loyea.ui.settings.ApiConfig,
+        text: String,
+        model: String,
+        voice: String,
+        outputFile: java.io.File
+    ): TtsResult = withContext(Dispatchers.IO) {
+        if (config.apiKey.isBlank()) return@withContext TtsResult(false, "API Key 不能为空，请前往设置中配置您的 API Key。")
+        try {
+            val isMiMo = config.provider.equals("MiMo", ignoreCase = true)
+            val url = if (isMiMo) resolveChatCompletionsUrl(config) else resolveAudioSpeechUrl(config)
+            
+            val targetModel = if (isMiMo) {
+                if (model.isBlank() || model.equals("tts-1", ignoreCase = true) || model.contains("default", ignoreCase = true)) {
+                    "mimo-v2.5-tts"
+                } else {
+                    model
+                }
+            } else {
+                if (model.isBlank() || model.contains("default", ignoreCase = true)) {
+                    "tts-1"
+                } else {
+                    model
+                }
+            }
+
+            // 智能音色自愈路由，防止非法音色名导致 400 Param Incorrect
+            val targetVoice = if (isMiMo) {
+                val mimoVoices = setOf("mimo_default", "冰糖", "茉莉", "苏打", "白桦", "Mia", "Chloe", "Milo", "Dean")
+                if (voice.isBlank() || !mimoVoices.contains(voice)) {
+                    "茉莉" // 默认小米中文精品音色
+                } else {
+                    voice
+                }
+            } else {
+                val openAiVoices = setOf("alloy", "echo", "fable", "onyx", "nova", "shimmer")
+                val cleanVoice = voice.lowercase().trim()
+                if (voice.isBlank() || !openAiVoices.contains(cleanVoice)) {
+                    "alloy" // 默认 OpenAI 官方精品音色
+                } else {
+                    voice
+                }
+            }
+
+            val requestJson = if (isMiMo) {
+                JsonObject().apply {
+                    addProperty("model", targetModel)
+                    val messagesArray = JsonArray().apply {
+                        add(JsonObject().apply {
+                            addProperty("role", "user")
+                            addProperty("content", "用温柔亲切的语气朗读下文。")
+                        })
+                        add(JsonObject().apply {
+                            addProperty("role", "assistant")
+                            addProperty("content", text)
+                        })
+                    }
+                    add("messages", messagesArray)
+                    val audioObj = JsonObject().apply {
+                        addProperty("format", "wav")
+                        addProperty("voice", targetVoice)
+                    }
+                    add("audio", audioObj)
+                }
+            } else {
+                JsonObject().apply {
+                    addProperty("model", targetModel)
+                    addProperty("input", text)
+                    addProperty("voice", targetVoice)
+                }
+            }
+
+            val requestBodyStr = gson.toJson(requestJson)
+            android.util.Log.d("LlmClient", "TTS request to $url (isMiMo=$isMiMo): $requestBodyStr")
+            val requestBody = requestBodyStr.toRequestBody(mediaType)
+            val requestBuilder = Request.Builder()
+                .url(url)
+                .addHeader("Content-Type", "application/json")
+            if (isMiMo) {
+                requestBuilder.addHeader("api-key", config.apiKey)
+            }
+            requestBuilder.addHeader("Authorization", "Bearer ${config.apiKey}")
+            val request = requestBuilder.post(requestBody).build()
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val errorMsg = response.body?.string() ?: ""
+                    android.util.Log.e("LlmClient", "TTS failed! HTTP ${response.code}, response body: $errorMsg")
+                    val displayError = try {
+                        val errJson = gson.fromJson(errorMsg, JsonObject::class.java)
+                        errJson.getAsJsonObject("error")?.get("message")?.asString ?: errorMsg
+                    } catch (e: Exception) {
+                        errorMsg
+                    }
+                    return@withContext TtsResult(false, "HTTP 错误 ${response.code}: $displayError")
+                }
+                
+                if (isMiMo) {
+                    val resBody = response.body?.string() ?: ""
+                    val resJson = gson.fromJson(resBody, JsonObject::class.java)
+                    val choices = resJson.getAsJsonArray("choices")
+                    if (choices == null || choices.size() == 0) {
+                        return@withContext TtsResult(false, "接口未返回 choices: $resBody")
+                    }
+                    val msgObj = choices.get(0).asJsonObject.getAsJsonObject("message")
+                    val audioObj = msgObj?.getAsJsonObject("audio")
+                    val audioData = audioObj?.get("data")?.asString
+                    if (audioData.isNullOrBlank()) {
+                        return@withContext TtsResult(false, "接口未返回音频数据，请检查服务商额度或配置，服务器返回: $resBody")
+                    }
+                    
+                    val audioBytes = android.util.Base64.decode(audioData, android.util.Base64.DEFAULT)
+                    outputFile.outputStream().use { output ->
+                        output.write(audioBytes)
+                    }
+                    return@withContext TtsResult(true)
+                } else {
+                    val body = response.body ?: return@withContext TtsResult(false, "语音合成接口返回了空的响应体 (Empty Response)")
+                    body.byteStream().use { inputStream ->
+                        outputFile.outputStream().use { outputStream ->
+                            inputStream.copyTo(outputStream)
+                        }
+                    }
+                    return@withContext TtsResult(true)
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            android.util.Log.e("LlmClient", "TTS exception", e)
+            if (outputFile.exists()) {
+                try {
+                    outputFile.delete()
+                } catch (ex: Exception) {
+                    ex.printStackTrace()
+                }
+            }
+            return@withContext TtsResult(false, e.localizedMessage ?: e.message ?: "网络超时或网络异常")
+        }
+    }
+
+    suspend fun transcribeAudio(
+        config: com.loyea.ui.settings.ApiConfig,
+        audioFile: java.io.File,
+        model: String
+    ): String? = withContext(Dispatchers.IO) {
+        if (config.apiKey.isBlank()) return@withContext null
+        try {
+            val isMiMo = config.provider.equals("MiMo", ignoreCase = true)
+            val targetModel = if (isMiMo) {
+                if (model.isBlank() || model.equals("whisper-1", ignoreCase = true) || model.contains("default", ignoreCase = true)) {
+                    "mimo-v2.5-asr"
+                } else {
+                    model
+                }
+            } else {
+                model
+            }
+
+            if (isMiMo) {
+                val url = resolveChatCompletionsUrl(config)
+                val audioBytes = audioFile.readBytes()
+                val base64Data = android.util.Base64.encodeToString(audioBytes, android.util.Base64.NO_WRAP)
+                val format = when (audioFile.extension.lowercase()) {
+                    "mp3" -> "mp3"
+                    "wav" -> "wav"
+                    "m4a" -> "m4a"
+                    else -> "wav"
+                }
+
+                val requestJson = JsonObject().apply {
+                    addProperty("model", targetModel)
+                    val messagesArray = JsonArray().apply {
+                        add(JsonObject().apply {
+                            addProperty("role", "user")
+                            val contentArray = JsonArray().apply {
+                                add(JsonObject().apply {
+                                    addProperty("type", "input_audio")
+                                    val inputAudioObj = JsonObject().apply {
+                                        addProperty("data", base64Data)
+                                        addProperty("format", format)
+                                    }
+                                    add("input_audio", inputAudioObj)
+                                })
+                            }
+                            add("content", contentArray)
+                        })
+                    }
+                    add("messages", messagesArray)
+                }
+
+                val requestBodyStr = gson.toJson(requestJson)
+                android.util.Log.d("LlmClient", "ASR request to $url (isMiMo=true): size=${audioBytes.size} bytes, format=$format")
+                val requestBody = requestBodyStr.toRequestBody(mediaType)
+                val requestBuilder = Request.Builder()
+                    .url(url)
+                    .addHeader("Content-Type", "application/json")
+                if (isMiMo) {
+                    requestBuilder.addHeader("api-key", config.apiKey)
+                }
+                requestBuilder.addHeader("Authorization", "Bearer ${config.apiKey}")
+                val request = requestBuilder.post(requestBody).build()
+
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        val errorMsg = response.body?.string() ?: ""
+                        android.util.Log.e("LlmClient", "ASR failed! HTTP ${response.code}, response body: $errorMsg")
+                        return@withContext null
+                    }
+                    val resBody = response.body?.string() ?: ""
+                    val resJson = gson.fromJson(resBody, JsonObject::class.java)
+                    val choices = resJson.getAsJsonArray("choices")
+                    if (choices == null || choices.size() == 0) return@withContext null
+                    val content = choices.get(0).asJsonObject.getAsJsonObject("message")?.get("content")?.asString
+                    return@withContext content
+                }
+            } else {
+                val url = resolveAudioTranscriptionsUrl(config)
+                val mimeType = when (audioFile.extension.lowercase()) {
+                    "m4a" -> "audio/m4a"
+                    "mp4" -> "audio/mp4"
+                    "wav" -> "audio/wav"
+                    else -> "audio/m4a"
+                }
+                val fileBody = audioFile.asRequestBody(mimeType.toMediaType())
+                val requestBody = okhttp3.MultipartBody.Builder()
+                    .setType(okhttp3.MultipartBody.FORM)
+                    .addFormDataPart("file", audioFile.name, fileBody)
+                    .addFormDataPart("model", targetModel)
+                    .build()
+
+                val request = Request.Builder()
+                    .url(url)
+                    .addHeader("Authorization", "Bearer ${config.apiKey}")
+                    .post(requestBody)
+                    .build()
+
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) return@withContext null
+                    val resBody = response.body?.string() ?: ""
+                    val jsonObj = gson.fromJson(resBody, JsonObject::class.java)
+                    return@withContext jsonObj.get("text")?.asString
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
+    suspend fun generateImage(
+        config: com.loyea.ui.settings.ApiConfig,
+        prompt: String,
+        model: String
+    ): String? = withContext(Dispatchers.IO) {
+        if (config.apiKey.isBlank()) return@withContext null
+        try {
+            val url = resolveImagesGenerationsUrl(config)
+            val targetModel = if (config.provider.equals("MiMo", ignoreCase = true) && (model.equals("dall-e-3", ignoreCase = true) || model.isBlank())) {
+                "mimo-v2.5-images"
+            } else {
+                model
+            }
+            val requestJson = JsonObject().apply {
+                addProperty("prompt", prompt)
+                addProperty("model", targetModel)
+                addProperty("n", 1)
+                addProperty("size", "1024x1024")
+            }
+            val requestBody = gson.toJson(requestJson).toRequestBody(mediaType)
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("Authorization", "Bearer ${config.apiKey}")
+                .addHeader("Content-Type", "application/json")
+                .post(requestBody)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext null
+                val resBody = response.body?.string() ?: ""
+                val jsonObj = gson.fromJson(resBody, JsonObject::class.java)
+                val dataArray = jsonObj.getAsJsonArray("data")
+                if (dataArray != null && dataArray.size() > 0) {
+                    return@withContext dataArray.get(0).asJsonObject.get("url")?.asString
+                }
+                return@withContext null
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
+    data class ParsedStreamState(
+        val thoughts: String,
+        val visibleContent: String,
+        val completedXmlCalls: List<LlmToolCall>
+    )
+
+    fun parseIncrementalStreamState(fullStr: String, isDone: Boolean = false): ParsedStreamState {
+        var thoughtsAccumulator = ""
+        var visibleContentAccumulator = ""
+        val completedXmlCalls = mutableListOf<LlmToolCall>()
+
+        // 1. 寻找未闭合的 <tool_call> 或 <tool_invocation>。如果有且尚未 Done，截断后续正在生成的文本，挂起不发射
+        val lastToolCallStart = fullStr.lastIndexOf("<tool_call>")
+        val lastToolCallEnd = fullStr.lastIndexOf("</tool_call>")
+        val isToolCallUnclosed = !isDone && lastToolCallStart != -1 && lastToolCallStart > lastToolCallEnd
+
+        val lastToolInvocationStart = fullStr.lastIndexOf("<tool_invocation")
+        var lastToolInvocationEnd = -1
+        if (lastToolInvocationStart != -1) {
+            val endIdx = fullStr.indexOf("/>", lastToolInvocationStart)
+            if (endIdx != -1) {
+                lastToolInvocationEnd = endIdx + 2
+            }
+        }
+        val isToolInvocationUnclosed = !isDone && lastToolInvocationStart != -1 && lastToolInvocationEnd == -1
+
+        var processLimit = fullStr.length
+        if (isToolCallUnclosed && isToolInvocationUnclosed) {
+            processLimit = minOf(lastToolCallStart, lastToolInvocationStart)
+        } else if (isToolCallUnclosed) {
+            processLimit = lastToolCallStart
+        } else if (isToolInvocationUnclosed) {
+            processLimit = lastToolInvocationStart
+        }
+
+        val safeStr = fullStr.substring(0, processLimit)
+
+        // 2. 提取并滤除安全文本中所有已就绪的工具调用
+        var cleanStr = safeStr
+
+        // 2.1 处理 <tool_call>... (使用超强自愈正则，适配传统闭合、残缺、或连续不闭合)
+        val toolCallRegex = Regex("<tool_call>([\\s\\S]*?)(?:</tool_call>|(?=<tool_call>|$))")
+        val matches = toolCallRegex.findAll(cleanStr)
+        for (match in matches) {
+            val xmlBlock = match.value
+            val parsedCalls = parseXmlToolCallsOnly(xmlBlock)
+            completedXmlCalls.addAll(parsedCalls)
+            cleanStr = cleanStr.replace(xmlBlock, "")
+        }
+
+        // 2.2 处理 <tool_invocation ... />
+        val toolInvocationRegex = Regex("""<tool_invocation\s+name="([^"]+)"\s+arguments=["']?(\{[\s\S]*?\})["']?\s*/>""")
+        val invocationMatches = toolInvocationRegex.findAll(cleanStr)
+        for (match in invocationMatches) {
+            val xmlBlock = match.value
+            val funcName = match.groupValues[1]
+            val argumentsJson = match.groupValues[2]
+            completedXmlCalls.add(
+                LlmToolCall(
+                    id = "xml_call_${System.currentTimeMillis()}_${(0..1000).random()}",
+                    name = funcName,
+                    argumentsJson = argumentsJson
+                )
+            )
+            cleanStr = cleanStr.replace(xmlBlock, "")
+        }
+
+        // 3. 在已经滤除掉工具调用的 cleanStr 中，进行 <think> 与正文的处理
+        var cursor = 0
+        val len = cleanStr.length
+        while (cursor < len) {
+            val thinkStart = cleanStr.indexOf("<think>", cursor)
+            if (thinkStart == -1) {
+                visibleContentAccumulator += cleanStr.substring(cursor)
+                break
+            }
+
+            if (thinkStart > cursor) {
+                visibleContentAccumulator += cleanStr.substring(cursor, thinkStart)
+            }
+
+            val thinkEnd = cleanStr.indexOf("</think>", thinkStart)
+            if (thinkEnd != -1) {
+                thoughtsAccumulator += cleanStr.substring(thinkStart + 7, thinkEnd)
+                cursor = thinkEnd + 8
+            } else {
+                thoughtsAccumulator += cleanStr.substring(thinkStart + 7)
+                break
+            }
+        }
+
+        return ParsedStreamState(
+            thoughts = thoughtsAccumulator.trim(),
+            visibleContent = visibleContentAccumulator,
+            completedXmlCalls = completedXmlCalls
+        )
+    }
+
+    private fun parseXmlToolCallsOnly(xmlBlock: String): List<LlmToolCall> {
+        val calls = mutableListOf<LlmToolCall>()
+        
+        // 1. 支持自愈残缺不闭合的标签正则
+        val blockContentRegex = Regex("<tool_call>([\\s\\S]*?)(?:</tool_call>|$)")
+        val match = blockContentRegex.find(xmlBlock) ?: return emptyList()
+        val block = match.groupValues[1].trim()
+
+        // 2. 优先尝试解析函数风格：name(key="value", ...)
+        val funcStyleRegex = Regex("^([a-zA-Z0-9_]+)\\(([\\s\\S]*)\\)$")
+        val funcMatch = funcStyleRegex.matchEntire(block)
+        if (funcMatch != null) {
+            val funcName = funcMatch.groupValues[1]
+            val argsStr = funcMatch.groupValues[2]
+            
+            val paramRegex = Regex("([a-zA-Z0-9_]+)\\s*=\\s*['\"]([\\s\\S]*?)['\"](?=\\s*,|\\s*$)")
+            val argsMap = mutableMapOf<String, Any>()
+            paramRegex.findAll(argsStr).forEach { paramMatch ->
+                val key = paramMatch.groupValues[1]
+                val valStr = paramMatch.groupValues[2]
+                argsMap[key] = valStr
+            }
+            
+            if (funcName.isNotBlank()) {
+                calls.add(
+                    LlmToolCall(
+                        id = "xml_call_${System.currentTimeMillis()}_${(0..1000).random()}",
+                        name = funcName,
+                        argumentsJson = gson.toJson(argsMap)
+                    )
+                )
+                return calls
+            }
+        }
+
+        // 3. 兜底走原本的 XML 风格解析：<function=name> <parameter=val>...</parameter>
+        val oldFuncRegex = Regex("<function\\s*=\\s*([^>\\s]+)>|<function\\s+name\\s*=\\s*\"([^\"]+)\">")
+        val oldFuncMatch = oldFuncRegex.find(block)
+        val funcName = oldFuncMatch?.groupValues?.get(1)?.takeIf { it.isNotEmpty() }
+            ?: oldFuncMatch?.groupValues?.get(2)?.takeIf { it.isNotEmpty() }
+            ?: ""
+
+        if (funcName.isNotBlank()) {
+            val paramRegex = Regex("<parameter\\s*=\\s*([^>\\s]+)>([\\s\\S]*?)</parameter>|<parameter\\s+name\\s*=\\s*\"([^\"]+)\">([\\s\\S]*?)</parameter>")
+            val argsMap = mutableMapOf<String, Any>()
+            paramRegex.findAll(block).forEach { paramMatch ->
+                val key = paramMatch.groupValues[1].takeIf { it.isNotEmpty() }
+                    ?: paramMatch.groupValues[3].takeIf { it.isNotEmpty() }
+                val value = paramMatch.groupValues[2].takeIf { paramMatch.groupValues[1].isNotEmpty() }
+                    ?: paramMatch.groupValues[4]
+                if (key != null) {
+                    argsMap[key] = value.trim()
+                }
+            }
+            val argumentsJson = gson.toJson(argsMap)
+            calls.add(
+                LlmToolCall(
+                    id = "xml_call_${System.currentTimeMillis()}_${(0..1000).random()}",
+                    name = funcName,
+                    argumentsJson = argumentsJson
+                )
+            )
+        }
+        return calls
+    }
 }
+
+

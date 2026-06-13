@@ -91,6 +91,20 @@ class PerceptionMcpServer(private val context: Context) {
                 inputSchema = mapOf("type" to "object", "properties" to emptyMap<String, Any>())
             ),
             McpTool(
+                name = "send_voice_reply",
+                description = "向用户（主人）发送一条语音消息。当你想要用语音对主人表达关心、娇嗔、或者说悄悄话、或者用户明确要求你“发语音”、“发段语音”、“语音聊聊”时必须调用。这会直接在主人的屏幕上呈现出一条你的专属语音回复条并自动开始播放。",
+                inputSchema = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "text" to mapOf(
+                            "type" to "string",
+                            "description" to "要转换为语音播放的纯口头话语。严禁带有动作描述（如括号等旁白描述），只填你想直接说给主人听的话。"
+                        )
+                    ),
+                    "required" to listOf("text")
+                )
+            ),
+            McpTool(
                 name = "web_search",
                 description = "在互联网上检索最新的实时信息，当需要确认客观事实、新闻、实时资讯或解答没有把握的位置性问题时使用。",
                 inputSchema = mapOf(
@@ -200,6 +214,14 @@ class PerceptionMcpServer(private val context: Context) {
                     val db = perceptionManager.noiseProvider.getAmbientNoiseDb()
                     val dbText = if (db >= 0) "$db dB" else "Permission Denied"
                     "Ambient Noise: $dbText"
+                }
+                "send_voice_reply" -> {
+                    val text = arguments?.get("text")?.toString() ?: ""
+                    if (text.isBlank()) {
+                        "Error: Voice reply text cannot be empty."
+                    } else {
+                        "Voice reply sent successfully: \"$text\""
+                    }
                 }
                 "web_search" -> {
                     val query = arguments?.get("query")?.toString() ?: ""

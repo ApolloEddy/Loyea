@@ -58,6 +58,12 @@ import androidx.compose.ui.draw.paint
 import androidx.compose.ui.layout.ContentScale
 import com.loyea.ui.chat.PromptAssembler
 import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.compose.foundation.Image
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -70,7 +76,7 @@ fun ChatScreen(
     messages: List<Message>,
     isThinking: Boolean,
     isMcpRunning: Boolean,
-    onSendMessage: (String) -> Unit,
+    onSendMessage: (String, String?, String?, Int) -> Unit,
     onStopResponse: () -> Unit,
     onToggleThoughts: (String) -> Unit,
     onNewChatClick: (CharacterCard) -> Unit,
@@ -82,6 +88,7 @@ fun ChatScreen(
     saveDraft: (String, String) -> Unit,
     clearDraft: (String) -> Unit,
     onEditMessage: (String, String) -> Unit,
+    viewModel: ChatViewModel? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -95,6 +102,27 @@ fun ChatScreen(
     var showPersonaSelector by remember { mutableStateOf(false) }
     var lastSessionId by remember { mutableStateOf(currentSessionId) }
 
+    val selectedImagePath = remember { mutableStateOf<String?>(null) }
+    var lightboxImagePath by remember { mutableStateOf<String?>(null) }
+
+    val pickMediaLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            val file = File(context.cacheDir, "vision_${System.currentTimeMillis()}.jpg")
+            try {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    file.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                selectedImagePath.value = file.absolutePath
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
     // 切换会话时，自动保存和载入草稿
     LaunchedEffect(currentSessionId) {
         if (lastSessionId.isNotEmpty() && lastSessionId != currentSessionId) {
@@ -103,6 +131,7 @@ fun ChatScreen(
         val loadedDraft = getDraft(currentSessionId)
         inputText = TextFieldValue(loadedDraft)
         lastSessionId = currentSessionId
+        selectedImagePath.value = null // 切换会话时清空图片预览
     }
 
     // 自动滚动到底部
@@ -188,6 +217,7 @@ fun ChatScreen(
                     MessageItem(
                         message = message,
                         userBubbleColor = userBubbleColor,
+                        currentlyPlayingAudioId = viewModel?.currentlyPlayingAudioId?.value,
                         onCopy = {
                             clipboardManager.setText(AnnotatedString(message.content))
                             Toast.makeText(context, if (isEn) "Copied to clipboard" else "已复制到剪贴板", Toast.LENGTH_SHORT).show()
@@ -197,6 +227,15 @@ fun ChatScreen(
                         },
                         onEdit = { newText ->
                             onEditMessage(message.id, newText)
+                        },
+                        onSpeak = {
+                            viewModel?.playTts(message.id, message.content)
+                        },
+                        onMcpVoicePlay = { mcpCallId ->
+                            viewModel?.playMcpVoice(mcpCallId)
+                        },
+                        onImageClick = { path ->
+                            lightboxImagePath = path
                         }
                     )
                 }
@@ -211,13 +250,202 @@ fun ChatScreen(
                 item { Spacer(modifier = Modifier.height(16.dp)) }
             }
 
+            // 1. 已选图片预览卡片
+            if (selectedImagePath.value != null) {
+                val previewBitmap = rememberLocalImagePainter(selectedImagePath.value)
+                if (previewBitmap != null) {
+                    Box(
+                        modifier = Modifier
+                            .padding(horizontal = 24.dp, vertical = 4.dp)
+                            .size(72.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
+                    ) {
+                        Image(
+                            bitmap = previewBitmap,
+                            contentDescription = "Preview Image",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                        IconButton(
+                            onClick = { selectedImagePath.value = null },
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .size(20.dp)
+                                .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Delete",
+                                tint = Color.White,
+                                modifier = Modifier.size(12.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 2. 录音波形状态面板 (当正在录音时)
+            val isRecording = viewModel?.isRecording?.value ?: false
+            val recordingDuration = viewModel?.recordingDuration?.value ?: 0
+            val recordingAmplitude = viewModel?.recordingAmplitude?.value ?: 0f
+
+            AnimatedVisibility(
+                visible = isRecording,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(
+                            androidx.compose.ui.graphics.Brush.verticalGradient(
+                                colors = listOf(
+                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f),
+                                    MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
+                                )
+                            )
+                        )
+                        .border(
+                            width = 1.dp,
+                            brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                                colors = listOf(
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.25f),
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.05f)
+                                )
+                            ),
+                            shape = RoundedCornerShape(24.dp)
+                        )
+                        .padding(16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            // 红色录音呼吸点
+                            val infiniteTransition = rememberInfiniteTransition(label = "BlinkingDot")
+                            val alphaDot by infiniteTransition.animateFloat(
+                                initialValue = 0.3f,
+                                targetValue = 1f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(600, easing = LinearEasing),
+                                    repeatMode = RepeatMode.Reverse
+                                ),
+                                label = "BlinkingDotAlpha"
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .graphicsLayer { alpha = alphaDot }
+                                    .background(Color.Red, CircleShape)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            val seconds = recordingDuration / 10
+                            val tenths = recordingDuration % 10
+                            Text(
+                                text = String.format("%02d:%02d.%d", seconds / 60, seconds % 60, tenths),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+
+                        // 绘制跳跃式波动音轨 (12柱 Q弹物理过渡)
+                        Row(
+                            modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val amplitudeFactor = (recordingAmplitude / 32767f).coerceIn(0f, 1f)
+                            for (i in 0 until 12) {
+                                val centerFactor = remember(i) {
+                                    val dist = Math.abs(i - 5.5f)
+                                    (1f - (dist / 6f)).coerceIn(0.2f, 1f)
+                                }
+                                val randomOffset = remember(i) { kotlin.random.Random.nextFloat() * 0.3f + 0.7f }
+                                val targetHeight = 8.dp + (32.dp * amplitudeFactor * centerFactor * randomOffset)
+                                val animatedHeight by animateDpAsState(
+                                    targetValue = targetHeight,
+                                    animationSpec = spring(
+                                        dampingRatio = Spring.DampingRatioLowBouncy,
+                                        stiffness = Spring.StiffnessLow
+                                    ),
+                                    label = "WaveformHeight_$i"
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .padding(horizontal = 2.dp)
+                                        .width(3.5.dp)
+                                        .height(animatedHeight)
+                                        .clip(CircleShape)
+                                        .background(
+                                            androidx.compose.ui.graphics.Brush.verticalGradient(
+                                                colors = listOf(
+                                                    MaterialTheme.colorScheme.primary,
+                                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
+                                                )
+                                            )
+                                        )
+                                )
+                            }
+                        }
+
+                        // 动作按钮
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(
+                                onClick = { viewModel?.stopRecording { _, _ -> } },
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                            ) {
+                                Text(
+                                    text = if (isEn) "Cancel" else "取消",
+                                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.85f),
+                                    fontWeight = FontWeight.Medium,
+                                    fontSize = 14.sp
+                                )
+                            }
+                            Button(
+                                onClick = {
+                                    viewModel?.stopRecording { file, duration ->
+                                        if (file != null && duration > 0) {
+                                            viewModel.transcribeAndSendAudio(file, duration) {
+                                                Toast.makeText(context, if (isEn) "Speech recognition failed" else "语音识别失败，未提取到有效文字", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary
+                                ),
+                                shape = RoundedCornerShape(16.dp),
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                                modifier = Modifier.height(38.dp)
+                            ) {
+                                Text(
+                                    text = if (isEn) "Send" else "说完了",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             // 底部输入区
             ChatInputBar(
                 value = inputText,
                 appLanguage = appLanguage,
                 characterName = activeCharacterCard.name,
                 onValueChange = { 
-                    // 过滤掉回车换行符，不允许输入回车
                     val filteredText = it.text.replace("\n", "").replace("\r", "")
                     inputText = it.copy(text = filteredText)
                     if (currentSessionId.isNotEmpty()) {
@@ -226,18 +454,27 @@ fun ChatScreen(
                 },
                 onSend = {
                     val trimmed = inputText.text.trim()
-                    if (trimmed.isNotBlank()) {
-                        onSendMessage(trimmed)
+                    if (trimmed.isNotBlank() || selectedImagePath.value != null) {
+                        onSendMessage(trimmed, selectedImagePath.value, null, 0)
                         inputText = TextFieldValue("")
+                        selectedImagePath.value = null
                         if (currentSessionId.isNotEmpty()) {
                             clearDraft(currentSessionId)
                         }
-                        keyboardController?.hide() // 点击发送或键盘发送后收回输入法
+                        keyboardController?.hide()
                     }
                 },
                 onStop = onStopResponse,
                 onAttach = {
-                    Toast.makeText(context, "Attachment clicked", Toast.LENGTH_SHORT).show()
+                    pickMediaLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                },
+                onVoiceClick = {
+                    val isSttEnabled = viewModel?.enableStt?.value ?: true
+                    if (isSttEnabled) {
+                        viewModel?.startRecording()
+                    } else {
+                        Toast.makeText(context, if (isEn) "STT is disabled in settings" else "语音输入功能在设置中已被关闭", Toast.LENGTH_SHORT).show()
+                    }
                 },
                 isThinking = isThinking,
                 isMcpRunning = isMcpRunning
@@ -259,6 +496,30 @@ fun ChatScreen(
                         onNewChatClick(selectedChar)
                     }
                 )
+            }
+        }
+
+        if (lightboxImagePath != null) {
+            Dialog(
+                onDismissRequest = { lightboxImagePath = null },
+                properties = DialogProperties(usePlatformDefaultWidth = false)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black)
+                        .clickable { lightboxImagePath = null }
+                ) {
+                    val lbBitmap = rememberLocalImagePainter(lightboxImagePath)
+                    if (lbBitmap != null) {
+                        Image(
+                            bitmap = lbBitmap,
+                            contentDescription = "Full Image",
+                            modifier = Modifier.fillMaxSize().padding(16.dp),
+                            contentScale = ContentScale.Fit
+                        )
+                    }
+                }
             }
         }
     }
@@ -378,6 +639,24 @@ fun ModelSelector(
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun rememberLocalImagePainter(imagePath: String?): ImageBitmap? {
+    if (imagePath.isNullOrBlank()) return null
+    return remember(imagePath) {
+        try {
+            val file = File(imagePath)
+            if (file.exists()) {
+                BitmapFactory.decodeFile(file.absolutePath)?.asImageBitmap()
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
         }
     }
 }
@@ -531,15 +810,18 @@ fun SelectPersonaContent(
 fun MessageItem(
     message: Message,
     userBubbleColor: String,
+    currentlyPlayingAudioId: String?,
     onCopy: () -> Unit,
     onToggleThoughts: () -> Unit,
-    onEdit: (String) -> Unit
+    onEdit: (String) -> Unit,
+    onSpeak: () -> Unit,
+    onMcpVoicePlay: (String) -> Unit,
+    onImageClick: (String) -> Unit
 ) {
     val isUser = message.sender == Sender.USER
 
-    // 每一个气泡被创建时，都会伴随一个平滑的自下而上淡入效果
     val animatableAlpha = remember { Animatable(0f) }
-    val animatableOffsetY = remember { Animatable(30f) } // 自下而上漂移 30 像素
+    val animatableOffsetY = remember { Animatable(30f) }
 
     LaunchedEffect(key1 = message.id) {
         launch {
@@ -556,6 +838,18 @@ fun MessageItem(
         }
     }
 
+    // Shimmer 占位呼吸效果
+    val shimmerTransition = rememberInfiniteTransition(label = "ShimmerTransition")
+    val shimmerAlpha by shimmerTransition.animateFloat(
+        initialValue = 0.4f,
+        targetValue = 0.8f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = EaseInOutQuad),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "ShimmerAlpha"
+    )
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -566,7 +860,6 @@ fun MessageItem(
         horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
     ) {
         if (isUser) {
-            // 用户气泡：有圆角和自适应的背景颜色
             val bubbleBgColor = remember(userBubbleColor) {
                 if (userBubbleColor.isNotBlank()) {
                     try {
@@ -584,9 +877,9 @@ fun MessageItem(
                 val b = bubbleBgColor.blue
                 val brightness = r * 0.299f + g * 0.587f + b * 0.114f
                 if (brightness > 0.6f) {
-                    Color(0xFF1A1A1A) // 浅色气泡背景配深色文字
+                    Color(0xFF1A1A1A)
                 } else {
-                    Color(0xFFFAFAFA) // 深色气泡背景配浅色文字
+                    Color(0xFFFAFAFA)
                 }
             } else {
                 MaterialTheme.colorScheme.onSecondaryContainer
@@ -596,82 +889,177 @@ fun MessageItem(
             var editInputText by remember(message.content) { mutableStateOf(TextFieldValue(message.content)) }
             var showUserCopyIcon by remember { mutableStateOf(false) }
 
-            if (isEditing) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth(0.85f)
-                        .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 4.dp))
-                        .background(bubbleBgColor ?: MaterialTheme.colorScheme.secondaryContainer)
-                        .padding(12.dp)
-                ) {
-                    androidx.compose.foundation.text.BasicTextField(
-                        value = editInputText,
-                        onValueChange = { editInputText = it },
-                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = bubbleTextColor),
+            // 1. 用户图片展示 (带 Shimmer 骨架屏占位)
+            if (!message.imageUrl.isNullOrBlank()) {
+                val imageBitmap = rememberLocalImagePainter(message.imageUrl)
+                if (imageBitmap != null) {
+                    Image(
+                        bitmap = imageBitmap,
+                        contentDescription = "User Image",
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .background(Color.Black.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
-                            .padding(8.dp),
-                        cursorBrush = androidx.compose.ui.graphics.SolidColor(bubbleTextColor)
+                            .fillMaxWidth(0.7f)
+                            .heightIn(max = 200.dp)
+                            .padding(bottom = 6.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f), RoundedCornerShape(16.dp))
+                            .clickable { onImageClick(message.imageUrl) },
+                        contentScale = ContentScale.Crop
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(0.7f)
+                            .height(200.dp)
+                            .padding(bottom = 6.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.05f * shimmerAlpha))
+                            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), RoundedCornerShape(16.dp)),
+                        contentAlignment = Alignment.Center
                     ) {
-                        TextButton(
-                            onClick = { 
-                                isEditing = false 
-                                editInputText = TextFieldValue(message.content)
-                            },
-                            colors = ButtonDefaults.textButtonColors(contentColor = bubbleTextColor.copy(alpha = 0.7f))
-                        ) {
-                            Text("取消", fontSize = 13.sp)
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Button(
-                            onClick = {
-                                val trimmed = editInputText.text.trim()
-                                if (trimmed.isNotBlank()) {
-                                    onEdit(trimmed)
-                                    isEditing = false
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = MaterialTheme.colorScheme.onPrimary
-                            ),
-                            shape = RoundedCornerShape(12.dp),
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                            modifier = Modifier.height(32.dp)
-                        ) {
-                            Text("保存并回溯", fontSize = 13.sp)
-                        }
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                            strokeWidth = 2.dp
+                        )
                     }
                 }
-            } else {
-                Box(
+            }
+
+            // 2. 用户语音条展示 (带播放中三柱实时波形动效)
+            if (!message.audioUrl.isNullOrBlank()) {
+                Row(
                     modifier = Modifier
                         .fillMaxWidth(0.85f)
-                        .clip(
-                            RoundedCornerShape(
-                                topStart = 16.dp,
-                                topEnd = 16.dp,
-                                bottomStart = 16.dp,
-                                bottomEnd = 4.dp
-                            )
-                        )
+                        .padding(bottom = 6.dp)
+                        .clip(RoundedCornerShape(16.dp))
                         .background(bubbleBgColor ?: MaterialTheme.colorScheme.secondaryContainer)
-                        .clickable { showUserCopyIcon = !showUserCopyIcon }
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                        .clickable { onSpeak() }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.End
                 ) {
-                    androidx.compose.foundation.text.selection.SelectionContainer {
-                        Text(
-                            text = message.content,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = bubbleTextColor
+                    Text(
+                        text = "${message.audioDuration}\"",
+                        color = bubbleTextColor,
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                    if (message.isAudioPlaying) {
+                        Row(
+                            modifier = Modifier.height(16.dp).padding(start = 2.dp),
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            for (j in 0 until 3) {
+                                val infiniteTransition = rememberInfiniteTransition(label = "audioPlayingUser_${message.id}_$j")
+                                val heightPercent by infiniteTransition.animateFloat(
+                                    initialValue = 0.2f,
+                                    targetValue = 1.0f,
+                                    animationSpec = infiniteRepeatable(
+                                        animation = tween(400 + j * 120, easing = LinearEasing),
+                                        repeatMode = RepeatMode.Reverse
+                                    ),
+                                    label = "AudioHeight_${message.id}_$j"
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .width(2.5.dp)
+                                        .fillMaxHeight(heightPercent)
+                                        .clip(CircleShape)
+                                        .background(bubbleTextColor)
+                                )
+                            }
+                        }
+                    } else {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                            contentDescription = "Play Voice",
+                            tint = bubbleTextColor,
+                            modifier = Modifier.size(20.dp)
                         )
+                    }
+                }
+            }
+
+            // 3. 用户文本展示
+            if (message.content.isNotBlank()) {
+                if (isEditing) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth(0.85f)
+                            .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 4.dp))
+                            .background(bubbleBgColor ?: MaterialTheme.colorScheme.secondaryContainer)
+                            .padding(12.dp)
+                    ) {
+                        BasicTextField(
+                            value = editInputText,
+                            onValueChange = { editInputText = it },
+                            textStyle = MaterialTheme.typography.bodyLarge.copy(color = bubbleTextColor),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color.Black.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                                .padding(8.dp),
+                            cursorBrush = SolidColor(bubbleTextColor)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(
+                                onClick = { 
+                                    isEditing = false 
+                                    editInputText = TextFieldValue(message.content)
+                                },
+                                colors = ButtonDefaults.textButtonColors(contentColor = bubbleTextColor.copy(alpha = 0.7f))
+                            ) {
+                                Text("取消", fontSize = 13.sp)
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Button(
+                                onClick = {
+                                    val trimmed = editInputText.text.trim()
+                                    if (trimmed.isNotBlank()) {
+                                        onEdit(trimmed)
+                                        isEditing = false
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary
+                                ),
+                                shape = RoundedCornerShape(12.dp),
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                                modifier = Modifier.height(32.dp)
+                            ) {
+                                Text("保存并回溯", fontSize = 13.sp)
+                            }
+                        }
+                    }
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(0.85f)
+                            .clip(
+                                RoundedCornerShape(
+                                    topStart = 16.dp,
+                                    topEnd = 16.dp,
+                                    bottomStart = 16.dp,
+                                    bottomEnd = 4.dp
+                                )
+                            )
+                            .background(bubbleBgColor ?: MaterialTheme.colorScheme.secondaryContainer)
+                            .clickable { showUserCopyIcon = !showUserCopyIcon }
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                    ) {
+                        androidx.compose.foundation.text.selection.SelectionContainer {
+                            Text(
+                                text = message.content,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = bubbleTextColor
+                            )
+                        }
                     }
                 }
             }
@@ -726,7 +1114,6 @@ fun MessageItem(
                 }
             }
         } else if (message.isError) {
-            // 错误气泡：柔和淡红背景，警告深红文字，类似警告通知卡片
             Box(
                 modifier = Modifier
                     .fillMaxWidth(0.85f)
@@ -738,7 +1125,7 @@ fun MessageItem(
                             bottomEnd = 16.dp
                         )
                     )
-                    .background(Color(0xFFFDE8E8)) // 柔和浅红背景
+                    .background(Color(0xFFFDE8E8))
                     .border(1.dp, Color(0xFFF8B4B4), RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp))
                     .padding(horizontal = 16.dp, vertical = 12.dp)
             ) {
@@ -755,28 +1142,37 @@ fun MessageItem(
                     Text(
                         text = message.content.replace("[错误]", "").trim(),
                         style = MaterialTheme.typography.bodyLarge,
-                        color = Color(0xFFE02424) // 警告深红文字
+                        color = Color(0xFFE02424)
                     )
                 }
             }
         } else {
-            // AI 气泡：无背景，纯文本，左侧缩进排版，支持 MCP & Thinking 展开
+            // AI 气泡
             Column(
                 modifier = Modifier
                     .fillMaxWidth(0.9f)
                     .padding(end = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // 1. 渲染所有的 MCP 调用项
                 if (message.mcpCalls.isNotEmpty()) {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         message.mcpCalls.forEach { call ->
-                            McpCallItem(mcpCall = call)
+                            val isVoiceReply = call.toolName.equals("send_voice_reply", ignoreCase = true) || 
+                                               call.toolName.endsWith("__send_voice_reply", ignoreCase = true) || 
+                                               call.toolName.endsWith(".send_voice_reply", ignoreCase = true)
+                            if (isVoiceReply) {
+                                McpVoiceReplyItem(
+                                    call = call,
+                                    currentlyPlayingAudioId = currentlyPlayingAudioId,
+                                    onPlayClick = onMcpVoicePlay
+                                )
+                            } else {
+                                McpCallItem(mcpCall = call)
+                            }
                         }
                     }
                 }
 
-                // 2. 渲染 Thinking 推理链
                 if (message.thoughts != null) {
                     ThinkingProcessLayout(
                         thoughts = message.thoughts,
@@ -787,9 +1183,133 @@ fun MessageItem(
                     )
                 }
 
-                // 3. 渲染主回答正文 (当正文不为空时)
+                // AI 生图展示 (带 Shimmer 骨架屏占位)
+                if (!message.imageUrl.isNullOrBlank()) {
+                    val imageBitmap = rememberLocalImagePainter(message.imageUrl)
+                    if (imageBitmap != null) {
+                        Image(
+                            bitmap = imageBitmap,
+                            contentDescription = "AI Generated Image",
+                            modifier = Modifier
+                                .fillMaxWidth(0.7f)
+                                .heightIn(max = 200.dp)
+                                .padding(vertical = 4.dp)
+                                .clip(RoundedCornerShape(20.dp))
+                                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f), RoundedCornerShape(20.dp))
+                                .clickable { onImageClick(message.imageUrl) },
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(0.7f)
+                                .height(200.dp)
+                                .padding(vertical = 4.dp)
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.05f * shimmerAlpha))
+                                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), RoundedCornerShape(20.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(28.dp),
+                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+                                    strokeWidth = 2.5.dp
+                                )
+                                Text(
+                                    text = "AI 正在绘制/加载图片...",
+                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // AI 语音条展示
+                if (!message.audioUrl.isNullOrBlank()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth(0.7f)
+                            .padding(bottom = 6.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
+                            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), RoundedCornerShape(16.dp))
+                            .clickable { onSpeak() }
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (message.isAudioPlaying) {
+                            Row(
+                                modifier = Modifier.height(16.dp).padding(end = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                for (j in 0 until 3) {
+                                    val infiniteTransition = rememberInfiniteTransition(label = "audioPlayingAiBubble_${message.id}_$j")
+                                    val heightPercent by infiniteTransition.animateFloat(
+                                        initialValue = 0.2f,
+                                        targetValue = 1.0f,
+                                        animationSpec = infiniteRepeatable(
+                                            animation = tween(400 + j * 120, easing = LinearEasing),
+                                            repeatMode = RepeatMode.Reverse
+                                        ),
+                                        label = "AudioHeightAiBubble_${message.id}_$j"
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .width(2.5.dp)
+                                            .fillMaxHeight(heightPercent)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.primary)
+                                    )
+                                }
+                            }
+                        } else {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                                contentDescription = "Play Voice",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp).padding(end = 8.dp)
+                            )
+                        }
+                        Text(
+                            text = "${message.audioDuration}\"",
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                } else if (message.isAudioSynthesizing) {
+                    // 正在合成中的占位长条
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth(0.7f)
+                            .padding(bottom = 6.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.04f))
+                            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.1f), RoundedCornerShape(16.dp))
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "语音回复合成中...",
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+
                 if (message.content.isNotBlank()) {
-                    // 对内容进行预处理，防止颜文字中的反引号破坏 Markdown 渲染
                     val processedContent = remember(message.content) {
                         message.content.replace(Regex("(?<!`)`(?!`)"), "\\\\`")
                     }
@@ -819,13 +1339,54 @@ fun MessageItem(
                             modifier = Modifier.size(16.dp)
                         )
                     }
-                    IconButton(onClick = { /* TODO: Speak */ }, modifier = Modifier.size(28.dp)) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.VolumeUp,
-                            contentDescription = "Speak",
-                            tint = iconColor,
-                            modifier = Modifier.size(16.dp)
-                        )
+                    
+                    // Speak 朗读按钮，带正在播放时的实时三柱均衡器动画，以及正在合成中的 Loading 状态
+                    val isSynthesizing = message.isAudioSynthesizing
+                    IconButton(
+                        onClick = { if (!isSynthesizing) onSpeak() }, 
+                        modifier = Modifier.size(28.dp),
+                        enabled = !isSynthesizing
+                    ) {
+                        if (isSynthesizing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        } else if (message.isAudioPlaying) {
+                            Row(
+                                modifier = Modifier.height(12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(1.5.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                for (j in 0 until 3) {
+                                    val infiniteTransition = rememberInfiniteTransition(label = "audioPlayingAi_${message.id}_$j")
+                                    val heightPercent by infiniteTransition.animateFloat(
+                                        initialValue = 0.2f,
+                                        targetValue = 1.0f,
+                                        animationSpec = infiniteRepeatable(
+                                            animation = tween(400 + j * 120, easing = LinearEasing),
+                                            repeatMode = RepeatMode.Reverse
+                                        ),
+                                        label = "AudioHeightAi_${message.id}_$j"
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .width(2.dp)
+                                            .fillMaxHeight(heightPercent)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.primary)
+                                    )
+                                }
+                            }
+                        } else {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                                contentDescription = "Speak",
+                                tint = iconColor,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
                     IconButton(onClick = { /* TODO: Regenerate */ }, modifier = Modifier.size(28.dp)) {
                         Icon(
@@ -864,6 +1425,7 @@ fun ChatInputBar(
     onSend: () -> Unit,
     onStop: () -> Unit,
     onAttach: () -> Unit,
+    onVoiceClick: () -> Unit,
     isThinking: Boolean = false,
     isMcpRunning: Boolean = false,
     characterName: String = "Loyea"
@@ -936,7 +1498,7 @@ fun ChatInputBar(
                                     false
                                 }
                             } else {
-                                false
+                                    false
                             }
                         },
                     keyboardOptions = KeyboardOptions(
@@ -955,12 +1517,12 @@ fun ChatInputBar(
 
         Spacer(modifier = Modifier.width(8.dp))
 
-        // 发送或停止按钮
+        // 发送、停止或语音按钮
         val buttonColor by animateColorAsState(
             targetValue = if (isActive) {
                 MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.8f)
             } else if (isTextEmpty) {
-                Color.Transparent
+                MaterialTheme.colorScheme.onBackground.copy(alpha = 0.05f)
             } else {
                 MaterialTheme.colorScheme.primary
             },
@@ -973,8 +1535,14 @@ fun ChatInputBar(
                 .size(48.dp)
                 .clip(CircleShape)
                 .background(buttonColor)
-                .clickable(enabled = isActive || !isTextEmpty) { 
-                    if (isActive) onStop() else onSend() 
+                .clickable { 
+                    if (isActive) {
+                        onStop()
+                    } else if (!isTextEmpty) {
+                        onSend()
+                    } else {
+                        onVoiceClick()
+                    }
                 },
             contentAlignment = Alignment.Center
         ) {
@@ -1070,7 +1638,7 @@ fun ChatScreenPreview() {
             messages = emptyList(),
             isThinking = false,
             isMcpRunning = false,
-            onSendMessage = {},
+            onSendMessage = { _, _, _, _ -> },
             onStopResponse = {},
             onToggleThoughts = {},
             onNewChatClick = {},
@@ -1083,6 +1651,124 @@ fun ChatScreenPreview() {
             clearDraft = {},
             onEditMessage = { _, _ -> }
         )
+    }
+}
+
+@Composable
+fun McpVoiceReplyItem(
+    call: McpCall,
+    currentlyPlayingAudioId: String?,
+    onPlayClick: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val isPlaying = currentlyPlayingAudioId == call.id
+
+    var duration = 0
+    var hasVoiceUrl = false
+    
+    val output = call.output
+    if (!output.isNullOrBlank() && output.startsWith("AUDIO_URL:")) {
+        try {
+            val parts = output.split("|")
+            val urlPart = parts.getOrNull(0) ?: ""
+            val durationPart = parts.getOrNull(1) ?: ""
+            if (urlPart.startsWith("AUDIO_URL:") && durationPart.startsWith("DURATION:")) {
+                duration = durationPart.removePrefix("DURATION:").toIntOrNull() ?: 0
+                hasVoiceUrl = true
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    when (call.status) {
+        McpStatus.RUNNING -> {
+            Row(
+                modifier = modifier
+                    .fillMaxWidth(0.7f)
+                    .padding(bottom = 6.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.04f))
+                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.1f), RoundedCornerShape(16.dp))
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "语音合成中...",
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        }
+        McpStatus.SUCCESS -> {
+            if (hasVoiceUrl) {
+                Row(
+                    modifier = modifier
+                        .fillMaxWidth(0.7f)
+                        .padding(bottom = 6.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
+                        .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), RoundedCornerShape(16.dp))
+                        .clickable { 
+                            onPlayClick(call.id)
+                        }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (isPlaying) {
+                        Row(
+                            modifier = Modifier.height(16.dp).padding(end = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            for (j in 0 until 3) {
+                                val infiniteTransition = rememberInfiniteTransition(label = "audioPlayingMcpCall_${call.id}_$j")
+                                val heightPercent by infiniteTransition.animateFloat(
+                                    initialValue = 0.2f,
+                                    targetValue = 1.0f,
+                                    animationSpec = infiniteRepeatable(
+                                        animation = tween(400 + j * 120, easing = LinearEasing),
+                                        repeatMode = RepeatMode.Reverse
+                                    ),
+                                    label = "AudioHeightMcpCall_${call.id}_$j"
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .width(2.5.dp)
+                                        .fillMaxHeight(heightPercent)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.primary)
+                                )
+                            }
+                        }
+                    } else {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                            contentDescription = "Play Voice",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp).padding(end = 8.dp)
+                        )
+                    }
+                    Text(
+                        text = "${duration}\"",
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            } else {
+                McpCallItem(mcpCall = call, modifier = modifier)
+            }
+        }
+        McpStatus.FAILED -> {
+            McpCallItem(mcpCall = call, modifier = modifier)
+        }
     }
 }
 

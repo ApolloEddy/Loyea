@@ -34,5 +34,13 @@ data class Message(
     val mcpCalls: List<McpCall> = emptyList(),
     val isStillThinking: Boolean = false,
     val isError: Boolean = false,
-    val characterId: String? = null
+    val characterId: String? = null,
+
+    // 多模态 Vision 与 Speech 新增字段，带默认值以兼容旧数据
+    val imageUrl: String? = null,
+    val audioUrl: String? = null,
+    val audioDuration: Int = 0,
+    val isAudioPlaying: Boolean = false,
+    val isAudioSynthesizing: Boolean = false
 )
+

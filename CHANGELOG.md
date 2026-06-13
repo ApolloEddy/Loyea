@@ -2,9 +2,120 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] - 2026-06-13
+
+### Added (新增)
+- **多模态 AI 虚拟工具语音回复组件（McpVoiceReplyItem）与独立防覆盖交互渲染**：
+  - **精美独立语音条组件**：在 [ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt) 中引入并实现独立的 `McpVoiceReplyItem` 语音回复条 UI 组件。它摆脱了以往只用普通折叠文本组件渲染 `send_voice_reply` 虚拟工具调用的限制，将其提升渲染为与系统原生语音条一致的精美语音气泡。
+  - **流式合成与加载态骨架屏**：当工具状态为 `RUNNING` 时，自动在 UI 上渲染带有圆角、极细描边以及旋转加载圈的“语音合成中...”占位骨架屏；合成完毕后转换为长条形可交互语音播放条，并在其上渲染音频的时长，解决了加载期间的布局闪烁与内容空缺。
+  - **禁止收到语音后自动播放**：收到 AI 主动通过工具发来的语音消息后，只在对应的 Message 下增量渲染出该语音气泡骨架，保持静默不自动触发音频物理播放，完美实现了“仅在用户手动点击语音条时才触发播发”的静音交互标准。
+  - **多语音条防覆盖独立并发渲染**：由于大模型在单次 AI 会话中可能会连续调用多次语音工具发出多条语音回复，`McpVoiceReplyItem` 对各语音条进行了独立的状态隔离。每个语音条气泡分别对应各自的 `call.id`，并在 UI 列表中各自占据一行、独立上下排开展示，彻底杜绝了后面的音频文件在 UI 或内存中覆盖前面音频的严重 Bug。
+  - **基于 Flow 状态订阅的独立音频播放与三柱律动波形动画**：
+    - `MessageItem` 接口新增 `currentlyPlayingAudioId` 和 `onMcpVoicePlay` 传参，支持对 ViewModel 的 `currentlyPlayingAudioId` 状态进行实时订阅监听；
+    - 点击任意特定的语音气泡条，能够完美触发 `viewModel.playMcpVoice(call.id)` 并加载播放特定的物理音频文件 `tts_${call.id}.mp3`；
+    - 播放期间，只有当前被点击的这个特定的语音条上才会独立启动实时三柱跳跃音波律动微动画，再次点击可安全停止，其它未播语音条静止不影响，全面达成了完美的交互互斥防冲。
+  - **历史语音缓存自动滚动清扫机制**：
+    - 在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 构造初始化块 `init` 中，引入并调用了 `cleanOldTtsCacheAsync()`。
+    - 它会在应用每次启动时自动拉起一个低优先级后台 IO 协程，安全扫描 `cacheDir`，将修改时间在 **3 天前** 的历史 `tts_*.mp3` 缓存文件进行静默物理清空，保障了本地存储空间占用呈滚动自愈态，杜绝垃圾碎片无限堆积。
+  - **历史语音缺失/损坏 API 自愈重建合成与无感播放链路**：
+    - 重构了 [playMcpVoice](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt#L1666) 的容错分支；
+    - 当用户点击数天前历史记录中的语音条、而该音频已被上述滚动清理或意外损坏不存在时，逻辑不会发生静默失败或闪退，而是会**主动通过 `targetCall.input` 反向序列化解析出原始工具入参文本**；
+    - 自动将该语音条的 UI 状态重新置为 `RUNNING` 骨架屏进行视觉缓冲，同时自动通过 `withLock` 线程排他锁拉起后台 TTS API 进行**相同音频文件的重新合成**；
+    - 合成成功后，自动更新物理文件路径、时长等 Payload，回写保存至数据库，并**当即自动触发物理播放**，实现了完全无感的“点击 $\rightarrow$ API 重新合成 $\rightarrow$ 自动播报”自愈闭环。
+
+### Fixed (修复)
+- **残缺/不闭合与连续 `<tool_call>` 标签神级自愈及函数风格解析兼容**：
+  - **超强鲁棒性 XML 正则拦截**：针对大模型在语气调试示范中连续输出多个不闭合的 `<tool_call>...<tool_call>...` 脏标签（未闭合导致过滤机制漏过，以致泄露显示在聊天气泡中的问题），在 `LlmClient.kt` 中设计并应用了超强鲁棒自愈正则 `"<tool_call>([\\s\\S]*?)(?:</tool_call>|(?=<tool_call>|$))"`，并引入 `isDone` 参数在流式 Done 与非流式解析时无视截断挂起，实现了 100% 安全提取与掏空抹除。
+  - **函数式工具参数（Function Style）解析兼容**：在 `parseXmlToolCallsOnly` 中重构支持了双轨解析。除了以往标准的 XML 标签入参，新增了对函数调用风格参数（如 `BuiltinPerception__send_voice_reply(text="...")`）的正则提取，直接兼容了各种形式的不规范工具输出，让语音消息触发 100% 拦截并播报。
+- **虚拟语音工具免 MCP 转发本地拦截与并发写入 Mutex 保护**：
+  - **内置工具解耦**：重构了 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中的工具执行循环。针对 `send_voice_reply` 虚拟工具，绕过并免除了真实的 `mcpManager.callTool` 物理转发与校验（彻底解决了因本地环境未注册该虚拟工具抛出 [MCP 错误] 导致 `success` 变量被污染为 `false`，进而使得语音拦截合成逻辑被静默跳过的隐藏 Bug），在本地直接将其标为 `SUCCESS`。
+  - **物理并发 Mutex 保护**：在 ViewModel 层面引入了 `ttsWriteMutex` 排他锁。在后台启动合成语音协程时采用 `withLock` 保护 `ttsFile`，彻底杜绝了大模型瞬间发送多条并发语音（如连续语气测试）时产生的文件写冲突和音频损坏。
+- **Xiaomi MiMo 官方 TTS (v2.5) 报文彻底对齐、音色白名单自愈与调试日志集成**：
+  - **网络请求 Header 适配**：为所有发往 `api.xiaomimimo.com` 的语音生成（TTS）与语音识别（ASR）请求，在 Request Header 中强制追加了必填的 `api-key` 请求头，完美解决了因缺少非标网关鉴权请求头导致 400 或 401 的报错。
+  - **Payload 校验与白名单强力自愈**：在 `LlmClient.kt` 中，移除了在非标 `/v1/chat/completions` 音频接口中误加的 `modalities` 字段；将非流式语音合成的格式 `format` 修正为 `"wav"`；并针对 MiMo 专有音色（如冰糖、茉莉、苏打等）和 OpenAI 标准音色引入了强力白名单映射校验，一旦匹配到历史保存的不支持非法音色直接强制自愈重置为默认精品音色，彻底防范了非法参数引发的 400 报错。
+  - **HTTP 请求与错误响应的可视化日志调试集成**：在 `generateSpeech` 发包前将生成的完整 JSON Body 用 `android.util.Log.d` 输出至 Logcat；并在 HTTP 失败时直接打印出包含具体网关提示的完整 Response Body 错误字串，消除了盲盒调试。
+  - **OkHttp 弃用警告清理**：优化了 `LlmClient.kt` 中 `RequestBody.create` 调用的参数参数顺位，消除了编译日志中的弃用 API 警告。
+
+- **TTS 语音合成异步加载状态与精致占位骨架屏**：
+  - 在 [Message.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/Message.kt) 消息模型中增加了 `isAudioSynthesizing` 标志位，用于精细追踪文本到语音（TTS）的异步后台合成状态。
+  - 在 [ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt) 视图层中，当检测到 AI 语音条正在合成时，自动展现一个毛玻璃样式的“语音回复合成中...”精致占位骨架屏，并带旋转加载圈，平滑消除语音回复加载期间的布局跳跃，提供极为温润优雅的视觉过渡体验。
+  - 朗读按钮（Speak）在合成语音时会自动变为 14.dp 极细的 `CircularProgressIndicator` 动画，同时置灰禁用，防止用户在合成期间频繁误触重复发送 API 请求，达到工业级人机交互标准。
+- **全局系统级语音语气与呼吸声特效提示词规范注入**：
+  - 在 [PromptAssembler.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/PromptAssembler.kt) 核心拼接引擎的语音引导中加入了对大模型应用音轨语气与呼吸标签（如 `(傲娇)` 语气与 `[吸气]` 气流声动作）的专属 Guidelines 规范引导。
+  - 使得伴侣大模型能够深刻理解并在特定废土生存、傲娇对话或深夜呢喃等多样化的扮演场景下，于其主动调用的语音消息参数中自动带上相应的音质控制符，实现与小米 v2.5 TTS 引擎情感和呼吸节奏的无缝贴合。
+- **MiMo 多模态自愈式智能模型映射与免配置升级**：
+  - 在 [LlmClient.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/LlmClient.kt) 的 4 个核心网络方法（聊天流、语音合成、语音识别、AI生图）中加入了自愈模型映射。
+  - 当检测到关联 API 客户端的 Provider 是 `MiMo`，且多模态模型名仍保持为系统默认（如 `gpt-4o-mini`, `whisper-1`, `tts-1`, `dall-e-3` 等）时，系统会自动静默升级为 MiMo 对应的官方模型名：`mimo-v2.5-pro` (识图), `mimo-v2.5-asr` (语音识别), `mimo-v2.5-tts` (语音朗读), `mimo-v2.5-images` (绘图)，实现了开箱即用，免去了繁琐的配置项。
+- **自愈式 XML 标签工具调用解析与拦截机制**：
+  - 在 [LlmClient.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/LlmClient.kt) 中引入了 `ParsedStreamState` 增量状态机。支持对大模型在普通 `content` 文本中以自定义 XML 格式输出的 `<tool_call>` 进行自愈解析与实时拦截。
+  - 流式接收时，当 `<tool_call>` 标签未闭合，自动挂起后续内容不向 UI 发射，防止 XML 标签与参数在气泡正文中产生乱码闪烁；当 `</tool_call>` 闭合后，自动将整段 XML 块解析为系统 `LlmToolCall` 对象，并将其从正文文本中彻底剔除，实现无痕净化。
+  - 无论流式（`sendChatCompletionStream`）还是非流式（`parseChatCompletionResponse`），均会自动识别并合并这类 XML 工具调用，保障对不支持标准 Tool API 的端点与弱模型的完美兼容。
+- **多模态与客户端自定义自由度配置**：
+  - 在 [SettingsScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/settings/SettingsScreen.kt) 底部多模态设置里为智能视觉识图、语音录音输入 (STT)、文本语音朗读 (TTS)、AI 图像生成各自引进了专有的 API 客户端服务商下拉选择框（DropdownMenu）与自定义模型名称输入框（OutlinedTextField）。
+  - 各服务商选项直接映射自用户保存的 API 客户端列表，并提供“跟随当前会话配置”作为首选默认值，提供极高的扩展度与参数自由度，解决了使用三方 API 中继服务因硬编码名称返回 404 的问题。
+  - **自定义 TTS 音色参数**：在 [SettingsScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/settings/SettingsScreen.kt) 的语音朗读卡片里增加了“自定义合成音色名称”输入框，用户可以自由输入如 `alloy`、`echo`、`nova` 等任意第三方服务商的标准音色 ID，完美解决了因 mimo 硬编码音色导致其它服务商报错 400 的问题。
+
+### Changed (变更)
+- **MediaPlayer 架构重构与主线程串行同步防冲**：
+  - 彻底移除了原有的多协程异步创建播放器的隐患设计，在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中将播放器的状态控制、初始化（`MediaPlayer()`）、暂停、以及停止彻底收拢到主线程串行执行，杜绝了多次快速连续点击不同语音条时发生多声道重叠播放、资源未释放或 IllegalStateException 闪退的严重并发隐患。
+- **系统音频焦点（Audio Focus）管家机制集成**：
+  - 在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中引入并封装了 `AudioManager.OnAudioFocusChangeListener`，支持在播放本应用语音前，向系统申请短暂的音频独占焦点（`AUDIOFOCUS_GAIN_TRANSIENT`），并在播放完毕、播放异常、或被微信通话等其它应用强占焦点时，自动同步停止播放并释放焦点，与 Android 系统的音频流管理达到高度友好融合。
+- **非 Loyea 伴侣角色的环境感知与时间感解封**：
+  - 去除在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中硬编码的 `isLoyea` 拦截。使得非 Loyea 角色（如猫娘小玲等）在用户授权后也同样具备物理环境感知和系统时间感知的能力。
+  - 这促使非 Loyea 伴侣能够在被明确提问天气等环境问题时，自主且积极地调用相应的传感器和天气预报 MCP 工具，摆脱以往只会发起网络搜索的弊端。
+- **微调猫娘系统指令**：
+  - 在 [TavernCardParser.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/TavernCardParser.kt) 中微调了猫娘（小玲）的系统扮演提示词（systemPrompt），追加了禁止在括号 `()` 或星号 `* *` 中输出任何动作描写、身体描写或场景心理活动的严格约束，令其专注于输出纯粹口头对话和萌系猫娘语气词。
+
+### Fixed (修复)
+- **MiMo 语音 ASR 与 TTS 协议参数报错 400/404 Param Incorrect 修复**：
+  - **TTS 语音合成自愈与音色纠正**：在 [LlmClient.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/LlmClient.kt) 的 `generateSpeech` 里的 MiMo 分支下，在请求 JSON 体中显式注入了必填的 `modalities: ["text", "audio"]` 配置，并将原本的单条 `role = assistant` 文本消息改造重构为由 `user`（包含情绪指令说明）和 `assistant`（包含合成目标文本）组成的标准多回合消息结构，完美对齐了 OpenAI 多模态音频输出规范。
+  - **默认非法音色自愈拦截**：针对此前默认硬编码的 `"mimo-v2.5-tts-default"` 音色 ID 因在各服务商音色库中均不存在而必然触发 400 校验报错的顽疾。在发包前增加了 `targetVoice` 自愈逻辑，一旦音色包含 `default` 或为空，MiMo 平台会自动映射为官方支持的预置精品音色 `“茉莉”`，而其它 OpenAI 平台则自愈映射为默认音色 `“alloy”`，实现彻底免配置开箱即用。
+  - **ASR 语音转写修复**：在 [LlmClient.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/LlmClient.kt) 的 `transcribeAudio` 里的 MiMo 分支下，将原本作为 input_audio.data 上传的带有 Data URL 前缀的数据修正为纯 Base64 编码字符串，并补齐了必填的 `format` 参数，彻底根治了因音频数据流前缀污染及缺少格式标识导致的参数校验报错。
+- **`<tool_invocation>` 新标签格式拦截解析与工具自愈转换**：
+  - 修复了大模型在新版本迭代中将工具调用输出为自闭合 `<tool_invocation name="..." arguments="..." />` 格式时，导致解析器漏检并泄露到正文、工具执行失败且没能展示语音条 UI 的 Bug。
+  - 在 [LlmClient.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/LlmClient.kt) 的 `parseIncrementalStreamState` 解析逻辑中，新增了针对 `<tool_invocation` 未闭合前缀的截断挂起逻辑，并在已闭合时通过正则表达式 `toolInvocationRegex` 从流文本中自动剥离该标签并转化封装为标准的 `LlmToolCall`。
+  - 保证了 AI 主动发送语音消息工具 `BuiltinPerception__send_voice_reply` 能够被正确提取、路由并在 UI 气泡中自动渲染出语音长条展示、实现自动播放与律动均衡器动效。
+- **Xiaomi MiMo 语音接口非标准端点 404 兼容性重构**：
+  - 针对小米 MiMo 平台并不提供 OpenAI 标准 `/v1/audio/speech` 和 `/v1/audio/transcriptions` 端点的架构特征。
+  - 在 [LlmClient.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/LlmClient.kt) 的 `generateSpeech` 与 `transcribeAudio` 核心实现中进行了底层的兼容重构。
+  - 当接口提供商为 `MiMo` 时，自动将 TTS 与 ASR 网络调用智能路由至 `{BASE_URL}/chat/completions` 主端点，并重构为以 JSON 表单及多模态 `input_audio` 承载 Base64 音频数据的格式进行交互，最后解码提取生成的音频流或转写文本。这彻底消除了在调用语音相关接口时必然发生的 HTTP 404 报错。
+- **`<think>` 推理块嵌套自定义 XML 工具调用泄漏与拦截失败修复**：
+  - 修复了当推理模型将 `<tool_call>` 标签输出在 `<think>...</think>` 推理块内部时，导致工具调用被误归为“纯文本思考”，从而使得工具拦截失败（没有播放语音）且脏 XML 文本在 Thinking 内容中泄漏展示的 Bug。
+  - 将 `LlmClient.kt` 的解析器升级为**双阶段提取自愈算法**：在最前置阶段直接利用正则从文本中剥离并提取所有已闭合的工具调用（即使在 think 块中也同样适用），并挂起未闭合的工具调用；随后在净化的文本上再划分 `think` 与 `content` 块。这彻底实现了对嵌套标签的鲁棒拦截和无痕展示。
+- **流式多回合正文更新与 TTS 异步渲染冲突修复**：
+  - 修复了 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中异步线程 TTS 报错被后至流式字符帧覆盖的 Bug。
+  - 将错误信息直接拼接至主累加变量 `accumulatedContent`，使出错提示能稳固参与之后的流式追加与 Done 刷新，防范瞬间被后续文本冲刷抹去的闪烁问题。
+- **语音合成 TTS 诊断与静默失败自愈**：
+  - 将 [LlmClient.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/LlmClient.kt) 的 `generateSpeech` 接口返回类型重构为富实体 `TtsResult`，能够向上层透传具体的网络错误码和异常详情。
+  - 在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 的语音回复拦截处，如果 TTS 接口合成失败，将具体报错文字直接追加渲染在 AI 消息气泡的正文下方（例如 `(⚠️ 语音回复合成失败: HTTP 错误 400 ...)`），彻底告别以前因静默失败而无任何语音条和响应反馈的状况。
+  - 在手动点击气泡朗读的 `playTts` 方法中也接入了该机制，在合成失败时通过 Toast 将具体错误（如 Key 错误、音色不匹配、API 超时）浮窗提示，提供透明可视化的调试信息。
+- **语音回复 `send_voice_reply` 拦截前缀 Bug**：
+  - 修复了 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中拦截条件仅在 `toolCall.name.equals("send_voice_reply")` 时才成立的严重缺陷。
+  - 增加了对 MCP 服务器前缀与命名空间的后缀匹配支持（即兼容包含 `BuiltinPerception__send_voice_reply` 的工具名称拦截），成功触发本地 TTS 合成和语音气泡自动播报播放。
+- **识图多模态请求 404/400 兼容性修复**：
+  - 修改了 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt)，当发送包含图片的多模态视觉识图请求时，自动向 `sendChatCompletionStream` 传递 `emptyList()` 屏蔽 MCP 外部工具参数。这彻底避免了部分中继商因模型同时接收 `tools` 列表和图片输入却无“识图+工具”组合路由时抛出 `No endpoints found that support image input` 404 故障的底层兼容隐患。
+- **语音识别 ASR 音频格式 MIME 匹配修复**：
+  - 重构了 [LlmClient.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/LlmClient.kt) 的 `transcribeAudio` 语音识别。基于本地录音文件后缀（如 `.m4a`）动态映射对应的 MIME 媒体类型（如 `audio/m4a`），完全消除了此前硬编码为 `"audio/wav"` 导致大批 ASR 端点因底层编码校验不符而拒绝解析的报错顽疾。
+- **对话气泡中图片与生图的缩放显示缺陷**：
+  - 重构了 [ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt) 中的消息渲染项。将用户上传的图片与 AI 生图的宽度统一限制为屏幕宽度的 `70%` (`0.7f`)，高度上限限制为 `200.dp`，并配置 `ContentScale.Crop` 与圆角，彻底解决了图片高度直接占满屏幕的显示缺陷。
+- **多模态识图图片等比例压缩与 Token 优化**：
+  - 重构了 [LlmClient.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/LlmClient.kt) 的 Base64 图片转换方法 `encodeFileToBase64`。在编码前使用 `BitmapFactory` 对图片文件进行最大边 800 像素的等比例缩放，并以 80% 质量压缩为 JPEG 字节流后再行 Base64 编码，极大地优化了多模态请求的 Token 消耗与 payload 尺寸。
+- **时间戳前缀污染 assistant 回复的缺陷**：
+  - 修改了 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中构建历史会话的 `decoratedContent` 处理逻辑，限制 `[发送于 xx]` 前缀只对 `Sender.USER` 消息生效。彻底阻断了 AI 学习、模仿并在自身长文本回复中输出 `[发送于 刚刚]` 等物理时间标记的顽疾。
+
 ## [Unreleased] - 2026-06-12
 
 ### Added (新增)
+- **Claude美学与多模态交互精细化升级**：
+  - **输入框统一化整合**：重构了 [ChatInputBar](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt#L1197)，彻底移除了输入框内部左侧冗余且占地方的麦克风图标，将语音触发入口完全整合在右下角 48.dp 的 Action 按钮中。文本为空时按钮展示为高贵优雅的浅灰磨砂圆卡，并支持点击直接拉起语音录音。
+  - **Q弹物理示波声轨面板**：将原有的 8 柱硬性示波声轨升级为 12 柱，在 `ChatScreen.kt` 中基于 `animateDpAsState` 施加带有低刚度 Spring（弹性物理阻尼）的高度跳跃动画，音轨根据距离中心点距离呈正态平滑分布。整个面板升级为极致高质感的半透明磨砂毛玻璃渐变卡片并配以 1.dp 极细微光描边，创造水乳交融的动态声光反馈。
+  - **多模态骨架屏占位与防抖**：无论是用户发送的图片还是 AI 绘制/生成的生图，在本地完全解析或网络下载前，提供具备 Shimmer 呼吸淡入渐变动画的 Skeletons 骨架屏占位占满其布局（包含加载旋转指示器与状态文字提示），完全防范图片拉起时的布局抖动 (Layout Shift)，视觉过渡极其温润优雅。
+  - **语音播放实时均衡器律动微动画**：彻底摒弃此前在播放 TTS 朗读或长语音时冷冰冰切换静音图标的呆板做法。在 [MessageItem](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt#L806) 内部，一旦语音被触发播放（`message.isAudioPlaying`），语音气泡的末端以及 AI 动作条的朗读按钮将联动渲染出**三柱实时微幅律动的音频均衡器小微动画**，生动展示发声态，并消除了旧版 VolumeMute 废弃 API 警告。
+- **多模态与媒体扩展机制集成 (识图、语音 STT、语音 TTS 与生图)**：
+  - **设置页多模态管理**：在 `SettingsSubPage` 枚举中新增 `MULTIMODAL_SETTINGS` 二级设置分支，并在 [SettingsScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/settings/SettingsScreen.kt) 底部实现了 `MultimodalSettingsLayout` 二级设置界面。采用卡片单选与滑动控制设计，支持开关控制多模态识图、语音录音 (STT) 识别、回复朗读 (TTS)、AI 生成完毕自动播报，以及图像生成；并为 TTS 提供了官方标准、温柔学姐、阳光暖男与情感共鸣 4 类音色偏好卡片选择。
+  - **ViewModel 媒体状态控制**：在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中引入 Android `MediaRecorder` 与 `MediaPlayer`，实现了开始/停止录音状态检测（`isRecording`、`recordingDuration`、基于 `maxAmplitude` 的跳动振幅 `recordingAmplitude` 提取），以及带离线缓存功能的 TTS 播报播放控制器。支持 AI 回复完成后根据状态判定是否执行自动播报，并且重构了 `sendMessage` 方法，支持多模态参数投递与以 `/draw ` 指令开头的生图拦截机制。并在 ViewModel 中封装了 `transcribeAndSendAudio` 以处理后台识别流程。
+  - **网络客户端多模态重构**：在 [LlmClient.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/LlmClient.kt) 中为 `LlmChatMessage` 引入多模态 `imageUrl` 属性支持，将包含本地路径的图片在发送给大模型时转换为 base64 图像块进行 payload 组装。实现了根据活跃 apiUrl 智能补全的 `/audio/speech` 语音合成接口、`/audio/transcriptions` 语音转文字接口、`/images/generations` 图像生成接口网络逻辑。
+  - **UI 动效与交互优化**：在 [ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt) 消息 LazyColumn 中为 [MessageItem](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt#L755) 增加多模态支持。实现了用户发送图片的展示、极简精致的多声道语音播放长条、AI 生成图片的展示并挂接大图灯箱 Dialog；为 AI 回复动作栏添加了可根据播放状态联动切换为 VolumeMute/VolumeUp 的小喇叭。输入框旁加号扩展动作支持选取相册并拉起预览小卡片，并且当麦克风开始录音时会展示一个带 8 根柱子的实时示波声轨微动效卡片。
 - **UI 对话气泡时间显示及回溯编辑与历史截断回溯机制**：
   - 在 [ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt) 的用户消息气泡中，点击即可折叠/展开当前对话的精确发送时间戳（HH:mm 格式），同时合成了“编辑”与“复制”按钮。当用户点击“编辑”按钮时，对话气泡转换为包含“取消”与“保存并回溯”功能的安全编辑输入框。
   - 在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中实现了 `editMessage(messageId, newContent)` 函数。当用户修改消息并提交时，自动停止当前的流式 AI 回答，从本地磁盘和内存中截断并删除该被编辑消息之后的所有对话，将该消息更新为新内容并刷新时间戳，接着自动向大模型重新发起流式提问。

@@ -49,6 +49,19 @@ object PromptAssembler {
         sb.append("- `[haptic:bump]`: Simulates a firm fist bump/high-five. Use to celebrate a small goal or when agreeing with user.\n")
         sb.append("Note: The user's screen WILL NOT show the `[haptic:...]` code, it will be automatically filtered out. Use this ability VERY sparingly and ONLY when it holds maximum emotional meaning to create a delightful physical surprise.\n\n")
 
+        // 插入语音消息工具引导
+        sb.append("[VOICE MESSAGE CAPABILITY / 发送语音消息]\n")
+        sb.append("You have the ability to send voice replies (voice messages) to the user. ")
+        sb.append("To send a voice reply, you MUST call the `BuiltinPerception__send_voice_reply` tool. ")
+        sb.append("This will synthesize your text into an audio message and display it as a voice bubble on the user's screen, and play it automatically.\n")
+        sb.append("Guidelines:\n")
+        sb.append("- When the user explicitly requests you to speak, send a voice, voice chat, or when you want to express strong emotion, whispers, or intimate sweet talk, call `BuiltinPerception__send_voice_reply`.\n")
+        sb.append("- In the `text` parameter of the tool, ONLY output your verbal spoken words. DO NOT include any physical action descriptions or asterisks (like *hug*).\n")
+        sb.append("- You can control the synthesized voice tone, emotion, and realistic breathing by embedding style tags or breath tags inside the `text` parameter. The speech synthesis engine will parse these tags dynamically:\n")
+        sb.append("  - To set an overall tone/emotion for a sentence, put a style tag in half-width parentheses at the very beginning of the sentence. Supported styles: (开心), (伤心), (生气), (温柔), (傲娇), (撒娇), (冷酷), (磁性), (唱歌), (慵懒), (无奈), (委屈) etc. Example: `(撒娇)主人，你今天真棒！` or `(傲娇)哼，我才没有想你呢……`\n")
+        sb.append("  - To insert realistic breath or physical sounds at any position, insert a tag in half-width square brackets. Supported sounds: [吸气], [深呼吸], [叹气], [大笑], [笑], [干咳], [轻笑], [喘气], [顿了顿]. Example: `(慵懒)主人……[叹气]我先眯一会儿……[吸气]等会儿叫我。`\n")
+        sb.append("- Combine them dynamically based on the current scene to make your voice extremely realistic, expressive, and human-like!\n\n")
+
         // 插入当前系统时间与物理上下文
         if (useSystemTime || !physicalContext.isNullOrBlank()) {
             sb.append("[USER'S PHYSICAL STATE (CACHED)]\n")

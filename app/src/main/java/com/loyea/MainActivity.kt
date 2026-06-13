@@ -171,7 +171,7 @@ class MainActivity : ComponentActivity() {
                                 messages = messages,
                                 isThinking = isThinking,
                                 isMcpRunning = isMcpRunning,
-                                onSendMessage = { chatViewModel.sendMessage(it) },
+                                onSendMessage = { text, img, audio, dur -> chatViewModel.sendMessage(text, img, audio, dur) },
                                 onStopResponse = { chatViewModel.stopResponse() },
                                 onToggleThoughts = { chatViewModel.toggleThoughtsExpanded(it) },
                                 onSessionSelect = { chatViewModel.selectSession(it) },

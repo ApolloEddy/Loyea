@@ -59,6 +59,7 @@ fun McpCallItem(
     val toolEmoji = when {
         mcpCall.toolName.contains("wifi") -> "📶"
         mcpCall.toolName.contains("noise") -> "🔊"
+        mcpCall.toolName.contains("send_voice_reply") -> "🎙️"
         mcpCall.toolName.contains("location") -> "📍"
         mcpCall.toolName.contains("forecast") -> "📅"
         mcpCall.toolName.contains("weather") -> "🌤️"
