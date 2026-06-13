@@ -1707,15 +1707,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         stopAudio()
         
         val ttsFile = File(context.cacheDir, "tts_${mcpCallId}.mp3")
-        if (ttsFile.exists()) {
-            val duration = getAudioDurationInSeconds(ttsFile)
-            if (duration > 0) {
-                playAudioFile(mcpCallId, ttsFile)
-                return
-            } else {
-                Log.w("ChatViewModel", "语音文件损坏，尝试删除并重新合成: ${ttsFile.absolutePath}")
-                try { ttsFile.delete() } catch (e: Exception) {}
-            }
+        if (ttsFile.exists() && ttsFile.length() > 0) {
+            playAudioFile(mcpCallId, ttsFile)
+            return
+        } else if (ttsFile.exists()) {
+            Log.w("ChatViewModel", "语音文件损坏或大小为0，尝试删除并重新合成: ${ttsFile.absolutePath}")
+            try { ttsFile.delete() } catch (e: Exception) {}
         }
 
         // 走到这里说明文件不存在或者已经损坏，需要自愈重新拉取合成
@@ -1961,6 +1958,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
         } catch (e: Exception) {
             Log.e("ChatViewModel", "播放音频文件发生异常: ${e.message}", e)
+            android.widget.Toast.makeText(context, "音频播放失败: ${e.localizedMessage ?: e.message}", android.widget.Toast.LENGTH_SHORT).show()
             stopAudio()
         }
     }

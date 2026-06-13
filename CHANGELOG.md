@@ -22,6 +22,15 @@ All notable changes to this project will be documented in this file.
     - 当用户点击数天前历史记录中的语音条、而该音频已被上述滚动清理或意外损坏不存在时，逻辑不会发生静默失败或闪退，而是会**主动通过 `targetCall.input` 反向序列化解析出原始工具入参文本**；
     - 自动将该语音条的 UI 状态重新置为 `RUNNING` 骨架屏进行视觉缓冲，同时自动通过 `withLock` 线程排他锁拉起后台 TTS API 进行**相同音频文件的重新合成**；
     - 合成成功后，自动更新物理文件路径、时长等 Payload，回写保存至数据库，并**当即自动触发物理播放**，实现了完全无感的“点击 $\rightarrow$ API 重新合成 $\rightarrow$ 自动播报”自愈闭环。
+  - **语音条 UI 位置收拢与排布固化**：
+    - 在 [ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt) 消息重构中，彻底将 `McpVoiceReplyItem` 语音回复条从 AI 气泡顶部的 `message.mcpCalls` 流程中剥离。
+    - 将语音回复条统一固定在 AI 气泡的最底端（即正文文本 `MarkdownText` 的下方），解决了由于工具流执行前后相对顺序不同导致语音条在感知工具卡片（如网页搜索）上下乱跑的显示问题，规范了聊天美学。
+  - **轻量化音频检测与底层解码冲突规避**：
+    - 废除了在 [playMcpVoice](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt#L1708) 触发播放时执行的繁重 `MediaPlayer.prepare()` 获取时长的音频损坏检测，代之以无副作用且极轻量级的 `ttsFile.length() > 0` 物理体积检测。
+    - 规避了短时间内连续两次创建、准备底层解码器导致的 Audio 驱动锁或资源竞争，彻底消除了点击语音条可能发生的“没动静”的隐藏隐患。
+  - **音频播放透明化异常 Toast 抛出**：
+    - 升级了 [playAudioFile](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt#L1934) 异常处理，在捕获到任何底层硬解码、文件读取、或焦点抢占失败引发的崩溃时，在主线程以 Toast 浮窗向用户显式弹窗报错原因，清除了黑盒调试死角。
+
 
 ### Fixed (修复)
 - **残缺/不闭合与连续 `<tool_call>` 标签神级自愈及函数风格解析兼容**：

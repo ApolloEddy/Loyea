@@ -1160,13 +1160,7 @@ fun MessageItem(
                             val isVoiceReply = call.toolName.equals("send_voice_reply", ignoreCase = true) || 
                                                call.toolName.endsWith("__send_voice_reply", ignoreCase = true) || 
                                                call.toolName.endsWith(".send_voice_reply", ignoreCase = true)
-                            if (isVoiceReply) {
-                                McpVoiceReplyItem(
-                                    call = call,
-                                    currentlyPlayingAudioId = currentlyPlayingAudioId,
-                                    onPlayClick = onMcpVoicePlay
-                                )
-                            } else {
+                            if (!isVoiceReply) {
                                 McpCallItem(mcpCall = call)
                             }
                         }
@@ -1318,6 +1312,24 @@ fun MessageItem(
                             text = processedContent,
                             color = MaterialTheme.colorScheme.onBackground
                         )
+                    }
+                }
+
+                // AI 虚拟工具语音回复条展示 (McpVoiceReplyItem 统一收拢在底端渲染，防止位置乱跑)
+                val voiceCalls = message.mcpCalls.filter { call ->
+                    call.toolName.equals("send_voice_reply", ignoreCase = true) || 
+                    call.toolName.endsWith("__send_voice_reply", ignoreCase = true) || 
+                    call.toolName.endsWith(".send_voice_reply", ignoreCase = true)
+                }
+                if (voiceCalls.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
+                        voiceCalls.forEach { call ->
+                            McpVoiceReplyItem(
+                                call = call,
+                                currentlyPlayingAudioId = currentlyPlayingAudioId,
+                                onPlayClick = onMcpVoicePlay
+                            )
+                        }
                     }
                 }
                 
