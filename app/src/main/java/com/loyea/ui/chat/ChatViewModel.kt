@@ -1700,6 +1700,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun playMcpVoice(mcpCallId: String) {
+        android.widget.Toast.makeText(context, "[调试] 触发 playMcpVoice, ID: $mcpCallId", android.widget.Toast.LENGTH_SHORT).show()
         if (currentlyPlayingAudioId.value == mcpCallId) {
             stopAudio()
             return
@@ -1707,6 +1708,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         stopAudio()
         
         val ttsFile = File(context.cacheDir, "tts_${mcpCallId}.mp3")
+        android.widget.Toast.makeText(context, "[调试] 文件存在: ${ttsFile.exists()}, 大小: ${ttsFile.length()}", android.widget.Toast.LENGTH_SHORT).show()
         if (ttsFile.exists() && ttsFile.length() > 0) {
             playAudioFile(mcpCallId, ttsFile)
             return

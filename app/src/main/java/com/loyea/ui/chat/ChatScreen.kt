@@ -1721,7 +1721,7 @@ fun McpVoiceReplyItem(
         McpStatus.SUCCESS -> {
             if (hasVoiceUrl) {
                 Row(
-                    modifier = modifier
+                    modifier = Modifier
                         .fillMaxWidth(0.7f)
                         .padding(bottom = 6.dp)
                         .clip(RoundedCornerShape(16.dp))
