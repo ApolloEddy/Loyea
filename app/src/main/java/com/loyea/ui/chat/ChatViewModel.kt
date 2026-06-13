@@ -190,6 +190,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     var imageGenConfigId = mutableStateOf("")
         private set
 
+    var ttsProviderTemplate = mutableStateOf("Auto")
+        private set
+    
+    var ttsTemplates = mutableStateOf<List<TtsTemplate>>(emptyList())
+        private set
+
+    var isUpdatingTemplates = mutableStateOf(false)
+        private set
+    
+    var updateTemplatesStatus = mutableStateOf("")
+        private set
+
     // 13. 媒体录制与播放状态
     private var mediaRecorder: MediaRecorder? = null
     private var audioFile: File? = null
@@ -377,6 +389,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         ttsConfigId.value = prefs.getString("tts_config_id", "") ?: ""
         ttsModelName.value = prefs.getString("tts_model_name", "tts-1") ?: "tts-1"
         imageGenConfigId.value = prefs.getString("image_gen_config_id", "") ?: ""
+        
+        ttsProviderTemplate.value = prefs.getString("tts_provider_template", "Auto") ?: "Auto"
+        
+        val savedJson = prefs.getString("multimodal_templates_json", "") ?: ""
+        if (savedJson.isNotBlank()) {
+            loadTemplatesFromJson(savedJson)
+        } else {
+            loadDefaultTemplates()
+        }
+
+        // 加载工具授权状态
+        toolAuthLocation.value = prefs.getBoolean("tool_auth_location", true)
+        toolAuthWeather.value = prefs.getBoolean("tool_auth_weather", true)
+        toolAuthEnvironment.value = prefs.getBoolean("tool_auth_environment", true)
+        toolAuthDevice.value = prefs.getBoolean("tool_auth_device", true)
+        toolAuthBluetoothActivity.value = prefs.getBoolean("tool_auth_bluetooth_activity", true)
+        toolAuthHealth.value = prefs.getBoolean("tool_auth_health", true)
+        toolAuthHaptic.value = prefs.getBoolean("tool_auth_haptic", true)
+        enableBackgroundGreeting.value = prefs.getBoolean("enable_background_greeting", true)
     }
 
 
@@ -1510,6 +1541,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 imageGenConfigId.value = v
                 prefs.edit().putString("image_gen_config_id", v).apply()
             }
+            "tts_provider_template" -> {
+                val v = value as String
+                ttsProviderTemplate.value = v
+                prefs.edit().putString("tts_provider_template", v).apply()
+            }
         }
     }
 
@@ -2151,4 +2187,190 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             mediaRecorder?.release()
         } catch (e: Exception) {}
     }
+
+    private fun loadTemplatesFromJson(json: String) {
+        try {
+            val type = object : com.google.gson.reflect.TypeToken<Map<String, List<TtsTemplate>>>() {}.type
+            val map: Map<String, List<TtsTemplate>> = Gson().fromJson(json, type)
+            map["tts"]?.let {
+                ttsTemplates.value = it
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            loadDefaultTemplates()
+        }
+    }
+
+    private fun loadDefaultTemplates() {
+        try {
+            val type = object : com.google.gson.reflect.TypeToken<Map<String, List<TtsTemplate>>>() {}.type
+            val map: Map<String, List<TtsTemplate>> = Gson().fromJson(DEFAULT_TEMPLATES_JSON, type)
+            map["tts"]?.let {
+                ttsTemplates.value = it
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun fetchTemplatesFromNetwork() {
+        viewModelScope.launch(Dispatchers.IO) {
+            isUpdatingTemplates.value = true
+            updateTemplatesStatus.value = "正在从云端拉取最新模板配置..."
+            try {
+                val client = okhttp3.OkHttpClient.Builder()
+                    .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                    .build()
+                
+                val urls = listOf(
+                    "https://cdn.jsdelivr.net/gh/ApolloEddy/Loyea@main/assets/multimodal_templates.json",
+                    "https://raw.githubusercontent.com/ApolloEddy/Loyea/main/assets/multimodal_templates.json"
+                )
+                
+                var success = false
+                var jsonResult = ""
+                var lastError = ""
+                
+                for (url in urls) {
+                    if (success) break
+                    try {
+                        val request = okhttp3.Request.Builder().url(url).build()
+                        client.newCall(request).execute().use { response ->
+                            if (response.isSuccessful) {
+                                val body = response.body?.string()
+                                if (!body.isNullOrBlank() && body.contains("\"tts\"")) {
+                                    jsonResult = body
+                                    success = true
+                                } else {
+                                    lastError = "响应数据为空或格式不匹配"
+                                }
+                            } else {
+                                lastError = "HTTP 错误 ${response.code}"
+                            }
+                        }
+                    } catch (e: Exception) {
+                        lastError = e.localizedMessage ?: e.message ?: "网络超时"
+                    }
+                }
+                
+                if (success) {
+                    prefs.edit().putString("multimodal_templates_json", jsonResult).apply()
+                    withContext(Dispatchers.Main) {
+                        loadTemplatesFromJson(jsonResult)
+                        updateTemplatesStatus.value = "更新成功！已同步最新配置"
+                    }
+                } else {
+                    withContext(Dispatchers.Main) {
+                        updateTemplatesStatus.value = "更新失败: $lastError，已为您保留本地内置模板"
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    updateTemplatesStatus.value = "更新失败: ${e.localizedMessage}，已为您保留本地内置模板"
+                }
+            } finally {
+                withContext(Dispatchers.Main) {
+                    isUpdatingTemplates.value = false
+                }
+            }
+        }
+    }
 }
+
+data class ModelCandidate(val id: String, val name: String)
+data class VoiceCandidate(val id: String, val name: String)
+
+data class TtsTemplate(
+    val provider: String,
+    val displayName: String,
+    val defaultModel: String,
+    val defaultVoice: String,
+    val models: List<ModelCandidate>,
+    val voices: List<VoiceCandidate>
+)
+
+private val DEFAULT_TEMPLATES_JSON = """
+{
+  "tts": [
+    {
+      "provider": "MiMo",
+      "displayName": "小米 MiMo",
+      "defaultModel": "mimo-v2.5-tts",
+      "defaultVoice": "茉莉",
+      "models": [
+        {"id": "mimo-v2.5-tts", "name": "MiMo 语音合成 (v2.5)"},
+        {"id": "mimo-v2.5-audio", "name": "MiMo 语音大模型"}
+      ],
+      "voices": [
+        {"id": "茉莉", "name": "官方标准原声 (女)"},
+        {"id": "白桦", "name": "白桦 (男)"},
+        {"id": "冰糖", "name": "冰糖 (温柔女声)"},
+        {"id": "苏打", "name": "苏打 (温柔男声)"},
+        {"id": "Mia", "name": "Mia (美式女声)"},
+        {"id": "Chloe", "name": "Chloe (美式女声)"},
+        {"id": "Milo", "name": "Milo (美式男声)"},
+        {"id": "Dean", "name": "Dean (美式男声)"},
+        {"id": "mimo_default", "name": "MiMo 默认音色"}
+      ]
+    },
+    {
+      "provider": "OpenAI",
+      "displayName": "OpenAI",
+      "defaultModel": "tts-1",
+      "defaultVoice": "alloy",
+      "models": [
+        {"id": "tts-1", "name": "tts-1 (标准流式)"},
+        {"id": "tts-1-hd", "name": "tts-1-hd (高保真)"}
+      ],
+      "voices": [
+        {"id": "alloy", "name": "Alloy (中性)"},
+        {"id": "echo", "name": "Echo (中性偏男)"},
+        {"id": "fable", "name": "Fable (富有戏剧性)"},
+        {"id": "onyx", "name": "Onyx (深沉男声)"},
+        {"id": "nova", "name": "Nova (活泼女声)"},
+        {"id": "shimmer", "name": "Shimmer (专业女声)"}
+      ]
+    },
+    {
+      "provider": "Alibaba",
+      "displayName": "阿里百炼 (DashScope)",
+      "defaultModel": "cosyvoice-v3-flash",
+      "defaultVoice": "longanyang",
+      "models": [
+        {"id": "cosyvoice-v3-flash", "name": "cosyvoice-v3-flash"},
+        {"id": "cosyvoice-v3.5-plus", "name": "cosyvoice-v3.5-plus"},
+        {"id": "cosyvoice-tg-v1", "name": "cosyvoice-tg-v1 (声音复刻)"},
+        {"id": "sambert-zhichuan-v1", "name": "sambert-zhichuan-v1 (基础)"}
+      ],
+      "voices": [
+        {"id": "longanyang", "name": "龙安阳 (标准男声)"},
+        {"id": "longying", "name": "龙莹 (标准女声)"},
+        {"id": "longwan", "name": "龙婉 (温柔女声)"},
+        {"id": "longxiaoxia", "name": "龙小小 (可爱女童)"},
+        {"id": "longxiaochun", "name": "龙小春 (活泼男童)"},
+        {"id": "longshu", "name": "龙书 (成熟男声)"},
+        {"id": "longjielao", "name": "龙姐唠 (粤语女声)"}
+      ]
+    },
+    {
+      "provider": "Volcengine",
+      "displayName": "火山引擎 (豆包)",
+      "defaultModel": "volcengine-tts",
+      "defaultVoice": "female_emotion_1",
+      "models": [
+        {"id": "volcengine-tts", "name": "火山引擎基础语音合成"},
+        {"id": "doubao-tts", "name": "豆包语音合成大模型"}
+      ],
+      "voices": [
+        {"id": "female_emotion_1", "name": "情感女声 (推荐)"},
+        {"id": "male_emotion_1", "name": "情感男声 (推荐)"},
+        {"id": "female_story", "name": "讲故事女声"},
+        {"id": "male_story", "name": "讲故事男声"},
+        {"id": "child_default", "name": "默认童声"}
+      ]
+    }
+  ]
+}
+""".trimIndent()
+

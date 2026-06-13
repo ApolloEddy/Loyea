@@ -959,81 +959,173 @@ class LlmClient {
     ): TtsResult = withContext(Dispatchers.IO) {
         if (config.apiKey.isBlank()) return@withContext TtsResult(false, "API Key 不能为空，请前往设置中配置您的 API Key。")
         try {
-            val isMiMo = config.provider.equals("MiMo", ignoreCase = true)
-            val url = if (isMiMo) resolveChatCompletionsUrl(config) else resolveAudioSpeechUrl(config)
+            val provider = config.provider.trim()
+            val isMiMo = provider.equals("MiMo", ignoreCase = true)
+            val isAli = provider.equals("Alibaba", ignoreCase = true) || provider.equals("DashScope", ignoreCase = true)
+            val isVolcano = provider.equals("Volcengine", ignoreCase = true) || provider.equals("Doubao", ignoreCase = true)
             
-            val targetModel = if (isMiMo) {
-                if (model.isBlank() || model.equals("tts-1", ignoreCase = true) || model.contains("default", ignoreCase = true)) {
-                    "mimo-v2.5-tts"
-                } else {
-                    model
+            // 1. 构建 URL
+            val url = when {
+                isMiMo -> resolveChatCompletionsUrl(config)
+                isAli -> {
+                    val baseUrl = config.apiUrl.trim().removeSuffix("/")
+                    if (baseUrl.contains("/api/v1/services")) baseUrl else "$baseUrl/api/v1/services/audio/tts/SpeechSynthesizer"
                 }
-            } else {
-                if (model.isBlank() || model.contains("default", ignoreCase = true)) {
-                    "tts-1"
-                } else {
-                    model
+                isVolcano -> {
+                    val baseUrl = config.apiUrl.trim().removeSuffix("/")
+                    if (baseUrl.contains("/api/v1/tts")) baseUrl else "$baseUrl/api/v1/tts"
+                }
+                else -> resolveAudioSpeechUrl(config)
+            }
+            
+            // 2. 解析火山引擎密钥结构: APPID:ACCESS_TOKEN:CLUSTER_ID
+            var volcanoAppId = ""
+            var volcanoToken = ""
+            var volcanoClusterId = ""
+            if (isVolcano) {
+                val parts = config.apiKey.split(":", ",")
+                if (parts.size < 3) {
+                    return@withContext TtsResult(false, "火山引擎 API Key 格式错误！请在 API 设置中将密钥配置为：APPID:ACCESS_TOKEN:CLUSTER_ID (冒号或逗号分隔)")
+                }
+                volcanoAppId = parts[0].trim()
+                volcanoToken = parts[1].trim()
+                volcanoClusterId = parts[2].trim()
+            }
+            
+            // 3. 智能模型自愈
+            val targetModel = when {
+                isMiMo -> {
+                    if (model.isBlank() || model.equals("tts-1", ignoreCase = true) || model.contains("default", ignoreCase = true)) {
+                        "mimo-v2.5-tts"
+                    } else model
+                }
+                isAli -> {
+                    if (model.isBlank() || model.contains("default", ignoreCase = true)) {
+                        "cosyvoice-v3-flash"
+                    } else model
+                }
+                isVolcano -> {
+                    if (model.isBlank() || model.contains("default", ignoreCase = true)) {
+                        "volcengine-tts"
+                    } else model
+                }
+                else -> {
+                    if (model.isBlank() || model.contains("default", ignoreCase = true)) {
+                        "tts-1"
+                    } else model
                 }
             }
-
-            // 智能音色自愈路由，防止非法音色名导致 400 Param Incorrect
-            val targetVoice = if (isMiMo) {
-                val mimoVoices = setOf("mimo_default", "冰糖", "茉莉", "苏打", "白桦", "Mia", "Chloe", "Milo", "Dean")
-                if (voice.isBlank() || !mimoVoices.contains(voice)) {
-                    "茉莉" // 默认小米中文精品音色
-                } else {
-                    voice
+            
+            // 4. 智能音色自愈
+            val targetVoice = when {
+                isMiMo -> {
+                    val mimoVoices = setOf("mimo_default", "冰糖", "茉莉", "苏打", "白桦", "Mia", "Chloe", "Milo", "Dean")
+                    if (voice.isBlank() || !mimoVoices.contains(voice)) "茉莉" else voice
                 }
-            } else {
-                val openAiVoices = setOf("alloy", "echo", "fable", "onyx", "nova", "shimmer")
-                val cleanVoice = voice.lowercase().trim()
-                if (voice.isBlank() || !openAiVoices.contains(cleanVoice)) {
-                    "alloy" // 默认 OpenAI 官方精品音色
-                } else {
-                    voice
+                isAli -> {
+                    if (voice.isBlank()) "longanyang" else voice
+                }
+                isVolcano -> {
+                    if (voice.isBlank()) "female_emotion_1" else voice
+                }
+                else -> {
+                    val openAiVoices = setOf("alloy", "echo", "fable", "onyx", "nova", "shimmer")
+                    val cleanVoice = voice.lowercase().trim()
+                    if (voice.isBlank() || !openAiVoices.contains(cleanVoice)) "alloy" else voice
                 }
             }
-
-            val requestJson = if (isMiMo) {
-                JsonObject().apply {
-                    addProperty("model", targetModel)
-                    val messagesArray = JsonArray().apply {
-                        add(JsonObject().apply {
-                            addProperty("role", "user")
-                            addProperty("content", "用温柔亲切的语气朗读下文。")
+            
+            // 5. 构建请求体
+            val requestJson = when {
+                isMiMo -> {
+                    JsonObject().apply {
+                        addProperty("model", targetModel)
+                        val messagesArray = JsonArray().apply {
+                            add(JsonObject().apply {
+                                addProperty("role", "user")
+                                addProperty("content", "用温柔亲切的语气朗读下文。")
+                            })
+                            add(JsonObject().apply {
+                                addProperty("role", "assistant")
+                                addProperty("content", text)
+                            })
+                        }
+                        add("messages", messagesArray)
+                        val audioObj = JsonObject().apply {
+                            addProperty("format", "wav")
+                            addProperty("voice", targetVoice)
+                        }
+                        add("audio", audioObj)
+                    }
+                }
+                isAli -> {
+                    JsonObject().apply {
+                        addProperty("model", targetModel)
+                        add("input", JsonObject().apply {
+                            addProperty("text", text)
                         })
-                        add(JsonObject().apply {
-                            addProperty("role", "assistant")
-                            addProperty("content", text)
+                        add("parameters", JsonObject().apply {
+                            addProperty("voice", targetVoice)
+                            addProperty("format", "mp3")
                         })
                     }
-                    add("messages", messagesArray)
-                    val audioObj = JsonObject().apply {
-                        addProperty("format", "wav")
+                }
+                isVolcano -> {
+                    JsonObject().apply {
+                        add("app", JsonObject().apply {
+                            addProperty("appid", volcanoAppId)
+                            addProperty("token", volcanoToken)
+                            addProperty("cluster", volcanoClusterId)
+                        })
+                        add("user", JsonObject().apply {
+                            addProperty("uid", "loyea_user")
+                        })
+                        add("audio", JsonObject().apply {
+                            addProperty("voice_type", targetVoice)
+                            addProperty("encoding", "mp3")
+                        })
+                        add("request", JsonObject().apply {
+                            addProperty("reqid", java.util.UUID.randomUUID().toString())
+                            addProperty("text", text)
+                            addProperty("text_type", "plain")
+                            addProperty("operation", "query")
+                        })
+                    }
+                }
+                else -> {
+                    JsonObject().apply {
+                        addProperty("model", targetModel)
+                        addProperty("input", text)
                         addProperty("voice", targetVoice)
                     }
-                    add("audio", audioObj)
-                }
-            } else {
-                JsonObject().apply {
-                    addProperty("model", targetModel)
-                    addProperty("input", text)
-                    addProperty("voice", targetVoice)
                 }
             }
-
+            
             val requestBodyStr = gson.toJson(requestJson)
-            android.util.Log.d("LlmClient", "TTS request to $url (isMiMo=$isMiMo): $requestBodyStr")
+            android.util.Log.d("LlmClient", "TTS request to $url (provider=$provider): $requestBodyStr")
             val requestBody = requestBodyStr.toRequestBody(mediaType)
             val requestBuilder = Request.Builder()
                 .url(url)
                 .addHeader("Content-Type", "application/json")
-            if (isMiMo) {
-                requestBuilder.addHeader("api-key", config.apiKey)
+            
+            when {
+                isMiMo -> {
+                    requestBuilder.addHeader("api-key", config.apiKey)
+                    requestBuilder.addHeader("Authorization", "Bearer ${config.apiKey}")
+                }
+                isAli -> {
+                    requestBuilder.addHeader("Authorization", "Bearer ${config.apiKey}")
+                }
+                isVolcano -> {
+                    requestBuilder.addHeader("Authorization", "Bearer;${volcanoToken}")
+                }
+                else -> {
+                    requestBuilder.addHeader("Authorization", "Bearer ${config.apiKey}")
+                }
             }
-            requestBuilder.addHeader("Authorization", "Bearer ${config.apiKey}")
+            
             val request = requestBuilder.post(requestBody).build()
-
+            
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     val errorMsg = response.body?.string() ?: ""
@@ -1047,33 +1139,55 @@ class LlmClient {
                     return@withContext TtsResult(false, "HTTP 错误 ${response.code}: $displayError")
                 }
                 
-                if (isMiMo) {
-                    val resBody = response.body?.string() ?: ""
-                    val resJson = gson.fromJson(resBody, JsonObject::class.java)
-                    val choices = resJson.getAsJsonArray("choices")
-                    if (choices == null || choices.size() == 0) {
-                        return@withContext TtsResult(false, "接口未返回 choices: $resBody")
-                    }
-                    val msgObj = choices.get(0).asJsonObject.getAsJsonObject("message")
-                    val audioObj = msgObj?.getAsJsonObject("audio")
-                    val audioData = audioObj?.get("data")?.asString
-                    if (audioData.isNullOrBlank()) {
-                        return@withContext TtsResult(false, "接口未返回音频数据，请检查服务商额度或配置，服务器返回: $resBody")
-                    }
-                    
-                    val audioBytes = android.util.Base64.decode(audioData, android.util.Base64.DEFAULT)
-                    outputFile.outputStream().use { output ->
-                        output.write(audioBytes)
-                    }
-                    return@withContext TtsResult(true)
-                } else {
-                    val body = response.body ?: return@withContext TtsResult(false, "语音合成接口返回了空的响应体 (Empty Response)")
-                    body.byteStream().use { inputStream ->
-                        outputFile.outputStream().use { outputStream ->
-                            inputStream.copyTo(outputStream)
+                when {
+                    isMiMo -> {
+                        val resBody = response.body?.string() ?: ""
+                        val resJson = gson.fromJson(resBody, JsonObject::class.java)
+                        val choices = resJson.getAsJsonArray("choices")
+                        if (choices == null || choices.size() == 0) {
+                            return@withContext TtsResult(false, "接口未返回 choices: $resBody")
                         }
+                        val msgObj = choices.get(0).asJsonObject.getAsJsonObject("message")
+                        val audioObj = msgObj?.getAsJsonObject("audio")
+                        val audioData = audioObj?.get("data")?.asString
+                        if (audioData.isNullOrBlank()) {
+                            return@withContext TtsResult(false, "接口未返回音频数据，请检查服务商额度或配置，服务器返回: $resBody")
+                        }
+                        
+                        val audioBytes = android.util.Base64.decode(audioData, android.util.Base64.DEFAULT)
+                        outputFile.outputStream().use { output ->
+                            output.write(audioBytes)
+                        }
+                        return@withContext TtsResult(true)
                     }
-                    return@withContext TtsResult(true)
+                    isVolcano -> {
+                        val resBody = response.body?.string() ?: ""
+                        val resJson = gson.fromJson(resBody, JsonObject::class.java)
+                        val code = resJson.get("code")?.asInt ?: 0
+                        val msg = resJson.get("message")?.asString ?: "未知错误"
+                        if (code != 3000 && !msg.equals("success", ignoreCase = true)) {
+                            return@withContext TtsResult(false, "火山语音合成错误 (code $code): $msg")
+                        }
+                        val audioData = resJson.get("data")?.asString
+                        if (audioData.isNullOrBlank()) {
+                            return@withContext TtsResult(false, "火山语音未返回音频数据，服务器返回: $resBody")
+                        }
+                        val audioBytes = android.util.Base64.decode(audioData, android.util.Base64.DEFAULT)
+                        outputFile.outputStream().use { output ->
+                            output.write(audioBytes)
+                        }
+                        return@withContext TtsResult(true)
+                    }
+                    else -> {
+                        // Ali 或 OpenAI，返回的是音频二进制流
+                        val body = response.body ?: return@withContext TtsResult(false, "语音合成接口返回了空的响应体 (Empty Response)")
+                        body.byteStream().use { inputStream ->
+                            outputFile.outputStream().use { outputStream ->
+                                inputStream.copyTo(outputStream)
+                            }
+                        }
+                        return@withContext TtsResult(true)
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -1082,9 +1196,7 @@ class LlmClient {
             if (outputFile.exists()) {
                 try {
                     outputFile.delete()
-                } catch (ex: Exception) {
-                    ex.printStackTrace()
-                }
+                } catch (ex: Exception) {}
             }
             return@withContext TtsResult(false, e.localizedMessage ?: e.message ?: "网络超时或网络异常")
         }

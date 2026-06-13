@@ -112,17 +112,31 @@ object PromptAssembler {
         }
 
         // 7. 强约束感知与天气工具调用规范 (置于末尾以强化 Recency 权重)
-        sb.append("[TOOL USE GUIDELINE]\n")
-        sb.append("You have access to a set of perception and utility tools prefixed with `BuiltinPerception__`.\n")
-        sb.append("- You can use these tools (e.g., get_location, get_live_weather, get_health_data, get_battery_status) to fetch real-time physical parameters or weather updates when appropriate.\n")
-        sb.append("- IMPORTANT: You MUST ONLY call the tools that are officially defined and passed to you in the API schema. DO NOT hallucinate, guess, or call any non-existent/invented tools (e.g., `get_phone_status`, `sync_system_time`, `同步系统时间`, etc. DO NOT exist and calling them will result in errors. Strictly stick to the defined schema).\n")
-        sb.append("- Keep your replies natural and coherent, seamlessly blending sensor data into your roleplay persona if you choose to reference it.\n\n")
+        sb.append("[TOOL USE GUIDELINE / 工具调用规范]\n")
+        sb.append("You have access to a set of perception and utility tools. You should actively call them to get real-time info instead of hallucinating or refusing to answer.\n")
+        sb.append("Available tools:\n")
+        sb.append("- `BuiltinPerception__get_live_weather`: Use this tool when the user asks about the current weather, temperature, or climate conditions.\n")
+        sb.append("- `BuiltinPerception__get_weather_forecast`: Use this tool when the user asks about future weather forecasts (e.g., tomorrow, next 3 days).\n")
+        sb.append("- `BuiltinPerception__get_location`: Use this tool when the user asks where you or they are, or to get coordinates.\n")
+        sb.append("- `BuiltinPerception__get_battery_status`: Use this tool when the user asks about phone battery, power, or charging state.\n")
+        sb.append("- `BuiltinPerception__get_bluetooth_status`: Use this tool when the user asks about Bluetooth connections or nearby scanned peripherals.\n")
+        sb.append("- `BuiltinPerception__get_health_data`: Use this tool when the user asks about step counts, heart rate, or physical health sensors.\n")
+        if (enableSearch) {
+            sb.append("- `BuiltinPerception__web_search`: Use this tool to query real-time news, current events, or search the web for facts.\n")
+        }
+        sb.append("\nHow to trigger tools:\n")
+        sb.append("1. **Standard Tool Calls**: If supported by your API, return the tool call structured fields natively.\n")
+        sb.append("2. **Text-based XML Fallback**: If standard tool calling is not working, or if you prefer text invocation, you can trigger any tool by outputting the XML format directly in your response text. The system will parse and execute it behind the scenes, and the tag will NOT be shown to the user. Format: `<tool_call>ToolName(arg1=\"value1\", arg2=\"value2\")</tool_call>`.\n")
+        sb.append("   - Example: `<tool_call>BuiltinPerception__get_live_weather(location=\"北京\")</tool_call>`\n")
+        sb.append("   - Example: `<tool_call>BuiltinPerception__web_search(query=\"今日头条热搜\")</tool_call>`\n")
+        sb.append("   - IMPORTANT: Do NOT invent or call any non-existent tools. Keep your replies natural, blending the sensor data seamlessly into your persona once you receive the tool outputs.\n\n")
 
         // 8. 严格输出格式约束 (OUTPUT FORMAT CONSTRAINT)
         sb.append("[OUTPUT FORMAT CONSTRAINT / 严格输出格式约束]\n")
         sb.append("- Never output any bracketed text like `[xxxx]` in your reply, except for the allowed haptic vibration tags like `[haptic:vibration_type]`.\n")
         sb.append("- Specifically, do NOT include time labels like `[发送于 xxx]`, action labels, or status labels wrapped in square brackets `[...]`.\n")
-        sb.append("- Any action descriptions or mental states must be wrapped in standard parentheses `(...)` or asterisks `*...*`, never in square brackets `[...]`.\n\n")
+        sb.append("- Any action descriptions or mental states must be wrapped in standard parentheses `(...)` or asterisks `*...*`, never in square brackets `[...]`.\n")
+        sb.append("- Note: This bracket restriction ONLY applies to square brackets `[...]`. You are fully allowed and encouraged to output XML tags like `<tool_call>` or `<think>` when needed.\n\n")
 
         val rawPrompt = sb.toString().trimEnd()
 

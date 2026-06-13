@@ -4,7 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-06-13
 
+### Fixed (修复)
+- **工具调用（如天气、搜索）失效与过度自我审查修复**：
+  - **重构工具调用指南 `[TOOL USE GUIDELINE]`**：在 [PromptAssembler.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/PromptAssembler.kt#L114) 中，将之前过于强硬恐吓、容易造成大模型过度自我审查的负向指令替换为温和且极具明确指示性的场景触发引导（例如“当用户问起实时天气时必须调用 `BuiltinPerception__get_live_weather`”），彻底消除了大模型的调用心理负担。
+  - **引入文本 XML 格式调用双轨 Fallback 机制**：在提示词中公开说明除了标准 API tool_calls 之外，还支持直接在输出中生成 XML 格式 `<tool_call>ToolName(args)</tool_call>` 进行双轨触发，消除了大模型对于特定 API Schema 的依赖性，极大提升了各种中转 API 的工具调用兼容性与稳定性。
+  - **明确放行工具调用标签**：在 [PromptAssembler.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/PromptAssembler.kt#L125) 中明确在方括号限制中放行尖括号标签（即 `<tool_call>` 和 `<think>`），避免模型在输出工具调用标签时产生合规冲突。
+  - **加载工具授权状态**：在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt#L400) 的 `init` 阶段，补齐了从 SharedPreferences 中加载 `toolAuthWeather` 等全部 8 个工具权限值的缺失，彻底解决由于状态在重启后脱节导致实际运行权限未生效的 Bug。
+
 ### Added (新增)
+- **多模态与媒体设置页彻底重构与多厂商 TTS API 深度对接模板设计**：
+  - **高档卡片化模块布局**：彻底重构了多模态与媒体设置页（`MultimodalSettingsLayout`）的界面，将原先凌乱散落的表单重构为四个独立、精致的高档卡片式布局（语音合成 TTS、语音输入 STT、视觉图片理解、AI生图），每个卡片带有独特的图标和描边设计，极大提升了视觉和交互的美学标准。
+  - **主流服务商 API 协议模板**：为主流的 TTS 服务商量身定制了底层的对接模板，支持“自动检测 (Auto)”、“OpenAI 官方”、“小米 MiMo”、“阿里百炼 (DashScope)”和“火山引擎 (豆包)”以及“完全自定义”等六大模板协议。UI 会根据用户选择自动渲染并提供相应的模型 and 音色快捷选择选项，完美防范了参数错配。
+  - **候选模型与音色快捷 Chips/RadioButton 视图**：在 TTS 卡片内设计了根据所选模板协议自动浮现的候选模型与音色快捷选择组件。候选模型通过水平滚动的 Chip 呈现，点击一键选定；候选音色采用两列整齐排布的 Grid 卡片（自带 RadioButton 勾选状态并标注对应的 API 内部音色 ID），点击即可完成与输入框的智能绑定，同时保留了输入框完全自定义的自由度。
+  - **一键云端接口模板同步功能**：在多模态页面顶部引入了“云端接口模板配置”操作栏。支持通过 jsDelivr CDN/GitHub 双渠道高可用拉取最新维护的接口配置 JSON，一键更新本地 SharedPreferences 缓存中的模型与音色候选数据，并向用户实时反馈“正在拉取...”、“同步成功”、“更新失败”等详细提示。
+  - **阿里 DashScope (百炼) 语音合成 HTTP REST 接口对接**：在 `LlmClient` 语音生成逻辑中新增了对阿里云百炼语音合成官方 SpeechSynthesizer REST 接口（`/api/v1/services/audio/tts/SpeechSynthesizer`）的直接支持，实现了输入文本（input.text）与音色控制参数（parameters.voice、format: "mp3" 等）的精确匹配，直接保存返回的音频二进制流。
+  - **火山引擎 (豆包) 语音合成 HTTP V1 接口对接**：在 `LlmClient` 中新增了对火山引擎语音合成 HTTP V1 接口（`/api/v1/tts`）的兼容实现。
+    - **多参数解包机制**：首创在 `ApiKey` 中以 `APPID:ACCESS_TOKEN:CLUSTER_ID` 格式进行复合秘钥的输入与解包，无缝兼顾了火山引擎必需的鉴权多参数；
+    - **多模态 V1 报文深度对齐**：封装了包含 `app`、`user`、`audio`、`request` (带 UUID 唯一 reqid) 的标准 JSON 请求体，并智能解析响应中 `code == 3000` 时的 Base64 编码音频段并解码存盘，彻底补齐了火山原生态语音合成链路。
 - **重构物理感知与大模型工具历史上下文过滤**：
   - **剔除每次消息的全局传感器物理数据抓取**：移除了此前每次发送消息都调用 `perceptionManager.buildPhysicalContextString()` 的重度逻辑，改为仅将“系统当前时间”作为每次发消息的必要物理信息附带，大幅度减少物理设备调用频率，节省电量并消除无谓的工具执行开销。
   - **按需自主调用与虚构工具防幻觉**：修正了 `PromptAssembler` 里的 `TOOL USE GUIDELINE` 工具拼写（将 `get_heart_rate` 修正为真实存在的 `get_health_data`），同时在提示词中新增了明确且强制性的“严禁幻觉/猜测调用未定义工具（如 `get_phone_status` 或 `sync_system_time` / `同步系统时间` 等不存在的工具）”强约束，规避大模型幻觉引起的调用失败。
