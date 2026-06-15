@@ -2974,6 +2974,86 @@ fun MemorySettingsLayout(
                     }
                 }
             }
+
+            // 脑内心智与共情系统 (Cyber Mind & Empathy System)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = if (isEn) "CYBER MIND & EMPATHY SYSTEM" else "脑内心智与共情系统",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                )
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surface)
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // 1. Graph Memory (Graph RAG) Switch
+                    var enableGraphMemory by remember { mutableStateOf(prefs.getBoolean("enable_graph_memory", true)) }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (isEn) "Long-term Relation Graph (Graph RAG)" else "长程关系图谱 (Graph RAG)",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Text(
+                                text = if (isEn) "Enable local triple relationship extraction and association recall" else "开启本地三元组关系网络提取与关联式记忆召回",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                            )
+                        }
+                        Switch(
+                            checked = enableGraphMemory,
+                            onCheckedChange = {
+                                enableGraphMemory = it
+                                prefs.edit().putBoolean("enable_graph_memory", it).apply()
+                            }
+                        )
+                    }
+
+                    Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
+
+                    // 2. Acoustic Emotion Perception Switch
+                    var enableVoiceEmotion by remember { mutableStateOf(prefs.getBoolean("enable_voice_emotion_perception", true)) }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (isEn) "Acoustic Emotion Perception" else "声学情绪感知系统",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Text(
+                                text = if (isEn) "Allows AI to sense and align with your voice emotion during chats" else "允许 AI 在语音交互中敏锐感知并对齐主人的语气情绪",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                            )
+                        }
+                        Switch(
+                            checked = enableVoiceEmotion,
+                            onCheckedChange = {
+                                enableVoiceEmotion = it
+                                prefs.edit().putBoolean("enable_voice_emotion_perception", it).apply()
+                            }
+                        )
+                    }
+                }
+            }
         }
     }
 }

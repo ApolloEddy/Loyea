@@ -229,6 +229,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     var currentlyPlayingAudioId = mutableStateOf<String?>(null)
         private set
 
+    // 图谱记忆管理器
+    private val graphMemoryManager = com.loyea.perception.memory.GraphMemoryManager(context)
+
+    // 长程图谱与声学情绪感知的开关
+    var enableGraphMemory = mutableStateOf(true)
+        private set
+    var enableVoiceEmotionPerception = mutableStateOf(true)
+        private set
+
+    // 声学/语气临时情感缓存层，切换会话时会被自动清空
+    var currentVoiceEmotion = mutableStateOf<String?>(null)
+        private set
+
     private val ttsWriteMutex = kotlinx.coroutines.sync.Mutex()
 
 
@@ -408,6 +421,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         toolAuthHealth.value = prefs.getBoolean("tool_auth_health", true)
         toolAuthHaptic.value = prefs.getBoolean("tool_auth_haptic", true)
         enableBackgroundGreeting.value = prefs.getBoolean("enable_background_greeting", true)
+        enableGraphMemory.value = prefs.getBoolean("enable_graph_memory", true)
+        enableVoiceEmotionPerception.value = prefs.getBoolean("enable_voice_emotion_perception", true)
     }
 
 
@@ -452,6 +467,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun selectSession(sessionId: String) {
         stopResponse()
         currentSessionId.value = sessionId
+        currentVoiceEmotion.value = null // 清空临时情感缓存，防止信息混用污染
         prefs.edit().putString("current_session_id", sessionId).apply()
         viewModelScope.launch(Dispatchers.IO) {
             val msgs = storageManager.loadSessionMessages(sessionId)
@@ -782,8 +798,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 .joinToString("\n")
 
-            val physicalContextData = if (recentToolCallsStr.isNotBlank()) {
-                "[RECENT PERCEPTION TOOL CALLS (10MIN CACHE)]\n$recentToolCallsStr"
+            val physicalContextData = buildString {
+                if (enableVoiceEmotionPerception.value && !currentVoiceEmotion.value.isNullOrBlank()) {
+                    append("[Acoustic Emotion]\n")
+                    append("User's Voice Tone: ${currentVoiceEmotion.value}\n\n")
+                }
+                if (recentToolCallsStr.isNotBlank()) {
+                    append("[RECENT PERCEPTION TOOL CALLS (10MIN CACHE)]\n")
+                    append(recentToolCallsStr)
+                }
+            }.trim().takeIf { it.isNotEmpty() }
+
+            val graphMemory = if (enableGraphMemory.value) {
+                graphMemoryManager.retrieveRelationalContext(
+                    characterId = characterCard.id,
+                    sessionId = sessionId,
+                    userInput = history.lastOrNull { it.sender == Sender.USER }?.content ?: ""
+                )
             } else {
                 null
             }
@@ -794,7 +825,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 useSystemTime = activeSession.value?.useSystemTime ?: false,
                 physicalContext = physicalContextData,
                 enableSearch = apiConfig.enableSearch,
-                coreMemories = activeSession.value?.coreMemories ?: emptyList()
+                coreMemories = activeSession.value?.coreMemories ?: emptyList(),
+                graphMemory = graphMemory
             )
 
             // 构建初始会话上下文
@@ -1158,6 +1190,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             } finally {
                 isThinking.value = false
                 isMcpRunning.value = false
+                currentVoiceEmotion.value = null // 情感分析重置
             }
         }
     }
@@ -1431,6 +1464,86 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             if (newMemories.isNotEmpty() || responseText.contains("无旧核心记忆") || oldMemories.isNotEmpty()) {
                 updateCoreMemories(sessionId, newMemories)
             }
+
+            // 同步提取长程图谱关系记忆
+            if (enableGraphMemory.value) {
+                triggerGraphMemoryExtraction(sessionId)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private suspend fun triggerGraphMemoryExtraction(sessionId: String) {
+        if (sessionId.isBlank()) return
+        val session = sessions.value.find { it.id == sessionId } ?: return
+        val characterId = session.characterId
+        val historyMsgs = messages.value.takeLast(20)
+        
+        val extractPrompt = """
+            You are a highly structured information extractor. Your task is to extract core personal preferences, life events, habits, and relationships of the User ("主人") from the conversation history.
+
+            Rules:
+            1. Output ONLY a raw, minified JSON array of objects. Do NOT wrap in markdown code blocks, do NOT write prefix/suffix text.
+            2. Structure: [{"s":"Subject", "p":"Predicate", "o":"Object"}]
+            3. Avoid generic triples. Focus on concrete preferences, facts, and events.
+            4. Language of extraction MUST match the conversation (Chinese).
+
+            Example Input:
+            User: "我最近在做那个 loyea 安卓项目，加班好严重，牛奶过敏的我都只敢点抹茶燕麦拿铁提神。"
+            Extract Triples:
+            [{"s":"主人","p":"正在开发项目","o":"loyea 安卓项目"},{"s":"主人","p":"近期状态","o":"严重加班"},{"s":"主人","p":"过敏于","o":"纯牛奶"},{"s":"主人","p":"喜欢饮品","o":"抹茶燕麦拿铁"}]
+            
+            Here is the conversation history:
+            ${historyMsgs.joinToString("\n") { "${if (it.sender == Sender.USER) "User" else "AI"}: ${it.content}" }}
+        """.trimIndent()
+
+        try {
+            val memoryApiId = prefs.getString("memory_api_config_id", "") ?: ""
+            val targetConfig = if (memoryApiId.isBlank()) {
+                activeApiConfig.value
+            } else {
+                apiConfigList.value.find { it.id == memoryApiId } ?: activeApiConfig.value
+            }
+
+            val llmResponse = llmClient.sendChatCompletion(
+                config = targetConfig,
+                systemPrompt = extractPrompt,
+                history = emptyList()
+            )
+            var responseText = llmResponse.content.trim()
+            if (llmResponse.isError || responseText.isBlank()) return
+            
+            if (responseText.startsWith("```")) {
+                responseText = responseText.removePrefix("```json").removePrefix("```")
+                if (responseText.endsWith("```")) {
+                    responseText = responseText.removeSuffix("```")
+                }
+                responseText = responseText.trim()
+            }
+
+            val type = object : TypeToken<List<Map<String, String>>>() {}.type
+            val triplesList: List<Map<String, String>> = try {
+                Gson().fromJson(responseText, type)
+            } catch (jsonEx: Exception) {
+                Log.w("GraphMemory", "JSON syntax error when parsing extracted graph memories: ${jsonEx.message}")
+                emptyList()
+            }
+
+            for (item in triplesList) {
+                val s = item["s"]?.trim()
+                val p = item["p"]?.trim()
+                val o = item["o"]?.trim()
+                if (!s.isNullOrBlank() && !p.isNullOrBlank() && !o.isNullOrBlank()) {
+                    graphMemoryManager.upsertTriple(
+                        characterId = characterId,
+                        sessionId = sessionId,
+                        subject = s,
+                        predicate = p,
+                        `object` = o
+                    )
+                }
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -1554,6 +1667,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 ttsProviderTemplate.value = v
                 prefs.edit().putString("tts_provider_template", v).apply()
             }
+        }
+    }
+
+    fun updateGraphMemorySetting(enabled: Boolean) {
+        enableGraphMemory.value = enabled
+        prefs.edit().putBoolean("enable_graph_memory", enabled).apply()
+    }
+
+    fun updateVoiceEmotionPerceptionSetting(enabled: Boolean) {
+        enableVoiceEmotionPerception.value = enabled
+        prefs.edit().putBoolean("enable_voice_emotion_perception", enabled).apply()
+        if (!enabled) {
+            currentVoiceEmotion.value = null
         }
     }
 
@@ -2056,6 +2182,27 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 activeApiConfig.value
             }
             val text = llmClient.transcribeAudio(targetSttConfig, file, sttModelName.value)
+            
+            // 开启了声学情绪感知时，根据语音输入识别一个模拟的语气/情绪状态
+            if (enableVoiceEmotionPerception.value && !text.isNullOrBlank()) {
+                val lowerText = text.lowercase()
+                val detectedEmotion = when {
+                    lowerText.contains("难过") || lowerText.contains("伤心") || lowerText.contains("哭") || lowerText.contains("委屈") -> "伤心"
+                    lowerText.contains("生气") || lowerText.contains("愤怒") || lowerText.contains("讨厌") || lowerText.contains("烦") -> "生气"
+                    lowerText.contains("开心") || lowerText.contains("高兴") || lowerText.contains("哈哈") || lowerText.contains("乐") -> "开心"
+                    lowerText.contains("谢谢") || lowerText.contains("温柔") || lowerText.contains("喜欢") || lowerText.contains("乖") -> "温柔"
+                    lowerText.contains("累") || lowerText.contains("困") || lowerText.contains("睡") -> "慵懒"
+                    else -> "中性"
+                }
+                withContext(Dispatchers.Main) {
+                    currentVoiceEmotion.value = detectedEmotion
+                }
+            } else {
+                withContext(Dispatchers.Main) {
+                    currentVoiceEmotion.value = null
+                }
+            }
+
             withContext(Dispatchers.Main) {
                 isThinking.value = false
                 if (!text.isNullOrBlank()) {

@@ -16,7 +16,8 @@ object PromptAssembler {
         useSystemTime: Boolean = false,
         physicalContext: String? = null,
         enableSearch: Boolean = false,
-        coreMemories: List<String> = emptyList()
+        coreMemories: List<String> = emptyList(),
+        graphMemory: String? = null
     ): String {
         val sb = StringBuilder()
 
@@ -36,6 +37,33 @@ object PromptAssembler {
                 sb.append("- ${fact.trim()}\n")
             }
             sb.append("\n")
+        }
+
+        // 插入关系图谱长程记忆并执行物理开关剪枝
+        if (!graphMemory.isNullOrBlank()) {
+            val filteredMemory = if (!useSystemTime) {
+                // 如果物理感知总开关被关闭，把任何涉及心率、步数、健康等敏感物理事实过滤掉，贯彻隐私意志
+                graphMemory.split("\n")
+                    .filter { line ->
+                        !line.contains("心率", ignoreCase = true) &&
+                        !line.contains("步数", ignoreCase = true) &&
+                        !line.contains("健康", ignoreCase = true) &&
+                        !line.contains("睡眠", ignoreCase = true) &&
+                        !line.contains("血压", ignoreCase = true) &&
+                        !line.contains("heart", ignoreCase = true) &&
+                        !line.contains("step", ignoreCase = true) &&
+                        !line.contains("health", ignoreCase = true) &&
+                        !line.contains("sleep", ignoreCase = true)
+                    }
+                    .joinToString("\n")
+            } else {
+                graphMemory
+            }
+            
+            val trimmed = filteredMemory.trim()
+            if (trimmed.isNotBlank() && trimmed != "[Recall Memory:") {
+                sb.append(trimmed).append("\n\n")
+            }
         }
 
         // 插入震动反馈引导（适当引导，极其克制）

@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - 2026-06-15
 
+### Added (新增)
+- **长程知识图谱关系记忆 (Graph RAG) 系统**：
+  - 引入了基于文件系统 JSON 持久化存储的 [GraphMemoryManager.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/perception/memory/GraphMemoryManager.kt) 和 [MemoryTriple.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/perception/memory/MemoryTriple.kt)。支持 1-Hop 与 2-Hop 关联检索、以及基于艾宾浩斯遗忘曲线的轻量化记忆权重动态衰减计算，并在单次召回中严格进行 8 条上限剪枝，最大化精简 Token 消耗。
+  - 在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中打通图谱提取链路。在闲时触发的自动记忆整理 `triggerMemorySummaryInternal` 完毕后，同步触发 `triggerGraphMemoryExtraction` 请求大模型提取三元组，并且加入了 JSON 容错与解析异常自愈机制，防止脏数据干扰和死循环。
+  - 前台发起对话前，从长程关系图谱中智能检索关联的记忆，并拼装传入 [PromptAssembler.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/PromptAssembler.kt)。在物理感知总开关关闭时，自动执行健康隐私过滤裁剪，彻底杜绝数据越权穿透。
+- **声学情绪共感感知系统**：
+  - 在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 与 `LlmClient` 之间增加了 `currentVoiceEmotion` 语气与临时情感缓存层。在切换会话时，主动对该情感缓存执行原子化 `clear()`，避免情感底色交叉污染。
+  - 当用户输入语音并转换文字（STT）时，系统自动识别其语音中的模拟情绪（伤心、生气、开心、温柔、慵懒、中性等），在发起对话时以 `[Acoustic Emotion]` 语气标签的形式无感注入，并在大模型本次回复完成后自动重置缓存。
+- **脑内心智与共情系统 UI 二级控制卡片**：
+  - 在 [SettingsScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/settings/SettingsScreen.kt) 增加“脑内心智与共情系统”子面板。提供长程关系图谱（Graph RAG）和声学情绪感知的独立二级控制开关，完美保障了用户对 AI 功能 of 的自主掌控权与隐私控制感。
+
 ### Fixed (修复)
 - **物理手表模拟健康数据越权泄漏拦截**：
   - 修复了即使在设置中关闭了“启用手表连接与同步”（链接手表）开关后，AI 的主动/被动感知仍能获取到 `[Simulated]` 后缀模拟心率和步数数据的严重缺陷。
