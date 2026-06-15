@@ -84,7 +84,8 @@ class LlmClient {
         }
 
         try {
-            val processedMessages = messages
+            // 当本次请求 tools 为空（例如传图时），对 messages 历史做自愈翻译，将 tool_calls 翻译为普通文本 XML 格式，防止 API 400 报错
+            val processedMessages = sanitizeMessages(messages, tools.isNotEmpty())
 
             // 根据深度思考状态，对 DeepSeek 进行智能路由（仅在开启智能模型路由时生效）
             val targetModel = resolveTargetModel(config)
@@ -189,6 +190,11 @@ class LlmClient {
                                             emit(StreamEvent.Content(newContent))
                                             emittedContentLength = parsedState.visibleContent.length
                                         }
+
+                                        // 若发现已经解析出完整闭合的 XML 工具调用，立即主动 break 跳出流，触发调用，避免大模型脑补后续内容
+                                        if (parsedState.completedXmlCalls.isNotEmpty()) {
+                                            break
+                                        }
                                     }
 
                                     // 3. 工具调用流
@@ -224,6 +230,19 @@ class LlmClient {
 
                 // 发射收集到的完整 Tool Calls
                 val finalState = parseIncrementalStreamState(fullContentBuilder.toString(), isDone = true)
+                
+                // 彻底防范并补发在 Done 释放时可能滞留/改变的 thoughts 和 visibleContent，杜绝丢字漏字
+                if (finalState.thoughts.length > emittedThoughtsLength) {
+                    val finalThoughts = finalState.thoughts.substring(emittedThoughtsLength)
+                    emit(StreamEvent.Thoughts(finalThoughts))
+                    emittedThoughtsLength = finalState.thoughts.length
+                }
+                if (finalState.visibleContent.length > emittedContentLength) {
+                    val finalContent = finalState.visibleContent.substring(emittedContentLength)
+                    emit(StreamEvent.Content(finalContent))
+                    emittedContentLength = finalState.visibleContent.length
+                }
+
                 val finalToolCalls = toolCallBuffers.entries.sortedBy { it.key }.mapNotNull { (_, buffer) ->
                     val id = buffer.id ?: "call_${System.currentTimeMillis()}"
                     val name = buffer.name ?: return@mapNotNull null
@@ -1516,6 +1535,70 @@ class LlmClient {
             )
         }
         return calls
+    }
+
+    private fun sanitizeMessages(messages: List<LlmChatMessage>, hasTools: Boolean): List<LlmChatMessage> {
+        if (hasTools) return messages
+        
+        val result = mutableListOf<LlmChatMessage>()
+        var pendingToolOutputs = java.lang.StringBuilder()
+        
+        messages.forEach { msg ->
+            if (msg.role == "tool") {
+                // 收集所有的 tool 消息，在后面非 tool 消息或结束时统一合并发射
+                val toolName = msg.name ?: "unknown_tool"
+                if (pendingToolOutputs.isNotEmpty()) {
+                    pendingToolOutputs.append("\n\n")
+                }
+                pendingToolOutputs.append("[系统提示 - 感知外设 `${toolName}` 的返回结果:\n${msg.content ?: ""}]")
+            } else {
+                // 遇到非 tool 消息时，先将之前积累的 tool 消息以一条 user 消息形式发射，确保 role 交替
+                if (pendingToolOutputs.isNotEmpty()) {
+                    result.add(
+                        LlmChatMessage(
+                            role = "user",
+                            content = pendingToolOutputs.toString()
+                        )
+                    )
+                    pendingToolOutputs = java.lang.StringBuilder()
+                }
+                
+                // 处理 assistant 消息中的 toolCalls 翻译为普通文本 XML
+                if (msg.role == "assistant" && msg.toolCalls.isNotEmpty()) {
+                    val sb = StringBuilder(msg.content ?: "")
+                    msg.toolCalls.forEach { call ->
+                        sb.append("\n<tool_call>${call.name}")
+                        try {
+                            val argsMap = parseArgumentsMap(call.argumentsJson)
+                            if (argsMap.isNotEmpty()) {
+                                val argsStr = argsMap.entries.joinToString(", ") { "${it.key}=\"${it.value}\"" }
+                                sb.append("($argsStr)")
+                            } else {
+                                sb.append("()")
+                            }
+                        } catch (e: Exception) {
+                            sb.append("()")
+                        }
+                        sb.append("</tool_call>")
+                    }
+                    result.add(msg.copy(role = "assistant", content = sb.toString(), toolCalls = emptyList()))
+                } else {
+                    result.add(msg)
+                }
+            }
+        }
+        
+        // 扫尾：如果最后一条或几条是 tool 消息，将其合并发射
+        if (pendingToolOutputs.isNotEmpty()) {
+            result.add(
+                LlmChatMessage(
+                    role = "user",
+                    content = pendingToolOutputs.toString()
+                )
+            )
+        }
+        
+        return result
     }
 }
 

@@ -2,7 +2,102 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] - 2026-06-15
+
+### Fixed (修复)
+- **物理手表模拟健康数据越权泄漏拦截**：
+  - 修复了即使在设置中关闭了“启用手表连接与同步”（链接手表）开关后，AI 的主动/被动感知仍能获取到 `[Simulated]` 后缀模拟心率和步数数据的严重缺陷。
+  - 在 [BluetoothWatchProvider.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/perception/BluetoothWatchProvider.kt) 中重构了 `getHeartRateBpm()` 的降级模拟生成条件，将其严格绑定在独立的 `sim_watch_connected` 模拟开关中，避免与蓝牙连接状态混淆。
+  - 在 [PerceptionMcpServer.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/perception/PerceptionMcpServer.kt) 的 `get_health_data` 工具调用以及 [PhysicalContextManager.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/perception/PhysicalContextManager.kt) 的被动感知组装逻辑中，引入了更严格的 `isWatchSyncEnabled` 独立卡口。当用户已关闭手表同步且没有连接真实的蓝牙物理手表时，强行禁止生成或拼装任何 `[Simulated]` 的模拟数据，仅返回系统底层原始 Health Connect 状态（如 `Permission Denied`、`No Data`），彻底实现了数据层与交互状态的权限一致性闭环。
+
+### Changed (变更)
+- **语音条文字显示功能 Claude 美学重构**：
+  - 在 [ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt) 中重构了 `McpVoiceReplyItem` 组件成功（SUCCESS）状态下的渲染风格。
+  - 移除了传统的 ad-hoc 主题风格，定制了专属的 Claude 温暖沙色与纸张质感的极简卡片 UI，支持亮暗主题自动适配。
+  - **流动延展宽度与背景色过渡动效（提升多端 UI 兼容性）**：引入了基于状态驱动的 `widthFraction`（0.65f 至 1.0f 渐变）与 `backgroundColor`（温暖沙色到卡片白/灰背景渐变）动画，配合 `animateContentSize()`。使得语音条在未展开时呈现为宽度仅 65% 的短小精致小胶囊，而在点击展开文本后像纸面舒展一般平滑拉宽至 100% 占满，完美兼顾了窄屏手机与平板/宽屏等多端设备的阅读舒适度与动效高级感。
+  - 为展开/收折箭头添加了优雅的旋转渐变动效（`arrowRotation`），并实现了三柱波形到四柱波形更加灵动的播放动效。
+  - 利用 `IntrinsicSize.Min` 布局机制实现了自适应文本高度的沙色竖引线（Quote Line），增强文字阅读的杂志感与排版品质感。
+  - 重新设计了极简的细边框复制图标及文本药丸按钮（"复制"），提供更精巧的交互细节。
+  - 增强了 `cleanVoiceText` 语气标签清洗规则，深度兼容对大括号（`{...}`）、尖括号（`<...>`）、小括号及中括号等多重语气/呼吸助词标签（如 `{吸气}`、`<叹气>`）的提取净化，确保文本转写呈现干净无杂质。
+
+
+  - 在 [PromptAssembler.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/PromptAssembler.kt) 中，当 `useSystemTime`（物理感知总开关）为 `false` 时，新增注入强力的 `[PHYSICAL PERCEPTION DISABLED / 物理感知功能已被禁用]` 心理钢印与行为指引系统 Prompt。
+  - 严厉规训大模型在收到“是否能调用外部工具/获取物理信息”时，必须诚实、温和地告知用户物理感知权限已被关闭、自己无法访问或触发相关工具。彻底杜绝了模型依靠基座常识脑补伪造身体参数、或者谎称自己拥有这些本地数据与工具调用权限的行为幻觉，实现了端侧控制与 AI 认知的一致性。
+- **侧边栏菜单隐藏参数与编译错误修复**：
+  - 修复并补全了 [ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt) 签名中的 `showMenuIcon: Boolean = true` 属性，解决了 [MainScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/main/MainScreen.kt) 界面中在双栏与单栏模式下调用 `ChatScreen` 时缺失参数导致的重大编译失败。
+  - 实现 TopAppBar 根据 `showMenuIcon` 的状态对侧栏导航菜单（Menu Icon）进行动态显隐，保证了双栏平板模式下自动隐藏菜单栏、防止多余侧边抽屉按钮干扰的优秀交互逻辑。
+- **物理感知总开关完全统筹限制**：
+  - 在 [PromptAssembler.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/PromptAssembler.kt) 中重构了系统提示词拼装逻辑，在 `useSystemTime`（物理感知总开关）为关闭状态时，彻底抹除时间戳（System Time）、物理上下文（Physical Context）的注入，且在可用工具列表中不再包含位置、天气、环境、设备、蓝牙、健康等物理外设/传感器工具声明。
+  - 在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中，当物理感知总开关关闭时，阻止向 `PromptAssembler` 传入最近工具调用缓存。并且在过滤 `availableMcpTools` 时，除了 `web_search` 和 `send_voice_reply` 之外，全面排除所有与物理传感器和定位相关的本地内置工具，实现全面的隐私阻断与权限统筹。
+- **实时 XML 工具调用流式截断与脑补消除（含防丢字补发优化）**：
+  - 修改 [LlmClient.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/LlmClient.kt) 中的流式解析，一旦在大模型正文流输出中发现已存在闭合的 XML 工具调用（即含有完成的 `</tool_call>` 或 `<tool_invocation />`），立即主动 `break` 截断响应流以提前终止输出，迫使大模型进入工具执行轮次并反馈结果，彻底解决了大模型因无法即时获取工具响应而在同一次输出中“反复生成 5~6 次相同工具”或“脑补伪造工具结果”的问题。
+  - 同时，在 [LlmClient.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/LlmClient.kt) 的 Done 状态发射前，增加了对流截断时可能滞留在缓冲区内的 thoughts 和 visibleContent 差量补发逻辑，彻底消除了流提前断开时极个别情况下的“丢字、漏字”隐患。
+- **API 多模态兼容与报文格式自愈（含多工具交替合并）**：
+  - 在 [LlmClient.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/LlmClient.kt) 中实现 `sanitizeMessages` 自愈转换函数。当本次发送的可用 `tools` 列表为空时（例如在传图等原生工具被关闭的模式下），自动将历史消息中包含的原生 `tool_calls` 消息降级序列化为文本中的 XML 格式。
+  - 特别优化了合并逻辑，在 `sanitizeMessages` 自愈翻译中，将可能连续出现的多个 `tool` 响应消息（如一次性发起多个工具并行调用时）压缩合并为一条单独的 `role = "user"` 环境感知输入。防止了因连续生成多条 `user` 角色消息导致某些对 Role 交替校验极其严格的第三方大模型 API 崩溃报错，提升了消息链路的健壮度。
+- **本地物理工具调用智能容错匹配**：
+  - 重构了 [McpManager.kt](file:///D:/CodingProjects/Android/Loyea/mcp/McpManager.kt) 中的 `callTool` 分发逻辑，优先在本地 `perceptionServer` 中查找匹配工具（忽略大小写，并兼容 `get_location` 和带 `BuiltinPerception__` 前缀的工具名形式）。这使得大模型即便因为拼写错误或漏写前缀时，依然可以被智能地匹配到本地正确的物理感知工具并正常执行。
+- **本地健康工具状态强一致性补全**：
+  - 重构了 [PerceptionMcpServer.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/perception/PerceptionMcpServer.kt) 中 `get_health_data` 工具调用的解析。将原本仅仅读取手机本地健康数据的逻辑，同步补全为**支持智能手表蓝牙睡眠数据与今日运动流数据的提取和降级支持**，从而使 AI 主动感知的 Context 内容与被动调用工具查询获取的数据状态实现 100% 的同步与强一致。
+- **自愈式反序列化防止旧消息空指针闪退**：
+  - 在 [ChatStorageManager.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatStorageManager.kt) 的 `loadSessionMessagesInternal` 消息加载逻辑中，增加了对 `versions` 和 `mcpCalls` 字段的 `null` 自愈清洗。彻底解决了由于旧版本聊天消息 JSON 中缺失 `versions` 新增字段，导致 Gson 反序列化绕过 Kotlin 默认值将该字段赋予运行时的 `null`，进而在主界面渲染消息列表（执行 `message.versions.size`）时引发的空指针崩溃（NullPointerException）闪退问题。
+
 ## [Unreleased] - 2026-06-13
+
+### Added (新增)
+- **手表连接健康数据全链路打通**：
+  - 在 [WatchBluetoothClient.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/bluetooth/WatchBluetoothClient.kt) 中扩展了睡眠数据流（`sleepDuration`、`sleepQuality`）和运动数据流（`exerciseDuration`、`exerciseCalories`、`exerciseType`）。
+  - 支持解析手表端上传的实时 `"SLEEP"` 与 `"EXERCISE"` 指标 JSON，并在拉取 `"RECENT_DATA"` 时完整反序列化睡眠和运动概要。
+- **经典蓝牙 RFCOMM 指数退避重连机制**：
+  - 在 [WatchBluetoothClient.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/bluetooth/WatchBluetoothClient.kt) 中实现了基于 Kotlin 协程和指数退避（5s、10s、20s）的 `triggerAutoReconnect` 后台自动重连机制。在 Socket 连接初建失败或中途意外断开时静默拉起重连，显著提升了物理设备的连接鲁棒性，并在用户主动点击“断开”时自动终止重连。
+
+### Changed (变更)
+- **AI 提示词多维健康状态物理注入**：
+  - 重构 [PhysicalContextManager.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/perception/PhysicalContextManager.kt) 中的 `buildPhysicalContextString()`。当蓝牙手表处于已连接状态时，**优先提取手表上传的历史睡眠时长/质量、今日运动时间/运动卡路里/运动状态** 并注入给 AI 提示词，摆脱对手机本地 Health Connect 的单一依赖，实现无感的数据生态互联。
+- **语音重合成期间调试气泡闪烁与消散 Bug 修复**：
+  - 修复了在程序一打开时，若本地缓存缺失，后台异步重新合成语音的等待过渡期间，因 `hasVoiceUrl == false` 导致语音消息错误地退化渲染为普通的绿色 MCP 调试气泡（如 `[send_voice_reply] Success`）在屏幕底端疯狂弹出并在合成完后又消散闪烁的 Bug。
+  - 重构了 [ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt#L1753-L1776) 中 `McpVoiceReplyItem` 成功但缺失 Url 分支下的渲染。在后台合成语音就绪期间展示为优雅平滑的“`语音加载中...`”占位加载条，彻底消除了界面闪烁与冗余调试气泡的弹出，极大净化了 UI 交互体验。
+
+
+
+
+### Added (新增)
+- **会话标题 AI 智能总结**：
+  - 在 [ChatStorageManager.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatStorageManager.kt) 的 `ChatSession` 模型中新增 `isTitleSummarized` 字段以判断标题是否已由 AI 总结。
+  - 在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中实现异步总结标题的函数 `summarizeSessionTitleAsync`，并在流式会话结束（`StreamEvent.Done` 且没有未完的工具流）时对未总结过的会话发送后台大模型总结请求，生成 4 到 8 字的精致精炼标题。
+
+### Added (新增)
+- **重新生成多版本回复与左右翻页查看功能**：
+  - **多版本数据模型升级**：在 [Message.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/Message.kt) 中定义了 `MessageVersion` 结构，并在 `Message` 中新增了 `versions: List<MessageVersion>` 以及 `activeVersionIndex: Int`，具备与 Gson 的无缝向后反序列化兼容性，保障了历史聊天记录的安全。
+  - **流式 ID 复用与重新生成逻辑**：在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中扩展了 `startAiResponseStream`，支持传入 `regenerateMessageId` 参数以复用已存在的 AI 消息 ID。当点击重新生成时，自动截断后面的对话并备份当前所有版本，将对应消息置为思考状态并发起 LLM 生成（上下文只包含该 AI 回复之前的历史）。
+  - **会话结束自动版本写入**：在流式生成彻底结束（`StreamEvent.Done`）时，自动将最新的顶层数据（文字、思考链、工具调用）写入或覆盖到 `versions` 的对应槽中并持久化。
+  - **多版本无缝切换与音频自愈**：在 ViewModel 中实现了 `switchMessageVersion` 接口，支持切换版本时自动停止正在播放的音频，并将对应版本的 `MessageVersion` 快照回写到顶层字段以在 UI 上实时无感渲染。
+  - **交互翻页器与点赞移除**：在 [ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt) 消息动作条最左侧嵌入了 `< 1 / 2 >` 的精致版本翻页器（仅在有多个回复版本时显现），并将点赞按钮删除，绑定了重新生成按钮的 `onRegenerate` 物理事件，实现了完美的现代化大模型客户端体验。
+
+### Added (新增)
+- **大模型实时工具调用积极性与语音合成自愈过滤算法大升级**：
+  - **禁止历史缓存复用提示词注入**：在 [PromptAssembler.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/PromptAssembler.kt) 的工具调用规范中新增硬性限制条件，明确指出对话历史中的工具结果仅为历史快照。严厉命令 AI 每当用户提问中出现“现在”、“当前”、“今天”或需使用对应数据回答时，**必须重新发起对应工具的实时查询调用**，严禁依赖或直接复读历史过期数据，以此大幅提升工具调用的积极性与新鲜度。
+  - **语音合成调用规范严密约束**：在 System Prompt 语音生成说明中注入强力排他约束。硬性要求大模型一旦调用 `BuiltinPerception__send_voice_reply` 语音工具，**必须把真正的发言文字直接且仅传入 `text` 参数**。常规正文文本必须留空（首选）或仅输出括号动作，严禁在常规文本正文中复读一遍或吐出诸如“语音回复已发送”等 placeholder 废话。
+  - **零垃圾标签自愈过滤算法 `cleanVoiceStateLabels`**：在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中实现基于正则表达式的 `cleanVoiceStateLabels` 正文净化过滤器。自适应剔除大模型在正文和 TTS 朗读中误带出的 `[发送语音中...]`、`(发送语音)`、`（发送语音）` 等全部形式的冗余动作状态标签，提供百分之百的纯净文本流展示与朗读。
+  - **全链路过滤自愈打通**：在流式临时 UI 展示、工具追加历史记忆、以及会话 Done 物理存档和朗读发声等全栈主要数据通道全部接入 `cleanVoiceStateLabels` 过滤，实现了完美的自愈闭环。
+
+### Changed (变更)
+- **移除普通 AI 文本回复朗读时的冗余语音条与合成状态条**：
+  - 在 [ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt) 中移除了当 `!message.audioUrl.isNullOrBlank()` 或 `message.isAudioSynthesizing` 时，在普通 assistant 文本消息下方额外渲染的 AI 语音条和合成状态占位条。
+  - 普通文本回复朗读时的播放状态完全收拢在消息动作栏底部的 **Speak（朗读）按钮** 本身（带内置的 14.dp 极细 CircularProgressIndicator 加载环以及三柱音频波形律动动画进行视觉指示）。
+  - 只有 AI 通过工具（如 `send_voice_reply`）主动发出的语音消息，才会在 AI 气泡底端展示专属的 [McpVoiceReplyItem](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt#L1722) 语音条，彻底理顺了两种语音展示的交互逻辑。
+- **侧边栏高度与折叠自适应重构（防止手机横屏强制双栏常驻）**：
+  - **精细化双栏门槛判定**：在 [MainScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/main/MainScreen.kt) 中将 `useTwoPane` 触发条件从单纯宽度判定升级为宽度和高度双重判定（`screenWidthDp >= 720 && screenHeightDp >= 500`）。这能智能区分“高宽充足的平板/折叠屏大屏”与“极矮局促的手机横屏”。
+  - **手机横屏降级抽屉模式**：现代矮胖手机在横屏状态下不再强行采用常驻双栏（从而避免了聊天内容被挤成细长窄缝且无法收回侧栏的顽疾），而是自适应降级为单栏抽屉（`ModalNavigationDrawer`）。
+  - **顶部显式折叠关闭按钮**：在 [SidebarContent](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/main/MainScreen.kt#L233-L247) 顶部用户信息右侧，专门针对抽屉模式（`!useTwoPane`）引入了一个精致且极度直观的 `ChevronLeft`（向左折叠）关闭按钮。支持点击通过 `onCloseDrawer` 直接把抽屉推回收起，彻底消除了横屏下不知道如何收回或觉得侧栏收不回去的体验困惑。
+- **侧边栏布局高度自适应重构（两全其美布局）**：
+  - 在 [MainScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/main/MainScreen.kt) 的 [SidebarContent](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/main/MainScreen.kt#L233-L247) 中引入基于屏幕高度的自适应布局判定（`androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp < 550`）。
+  - **高度受限（如手机横屏）时**：沿用单一滚动链 `LazyColumn`，让底部卡片（物理感知、人格舱、系统设置）流式排在历史列表最下方，随滚动条滚动。从而防止在手机横屏极矮高度下被强行顶死、无法展现历史列表的严重缺陷。
+  - **高度充足（如竖屏、所有平板模式）时**：采用置底固定设计，使用 `weight(1f)` 的 `LazyColumn` 让历史列表占满剩余可用高度，而控制面板卡片则常驻固定在屏幕底端。既防止了会话多时控制面板被挤到最底下的不便，又保障了高宽屏下极具品质感和实用性的操控体验。
+  - **代码去耦复用**：将用户信息 Row、底部控制面板、历史列表渲染范围提取为 `UserInfoBar`、`BottomControlPanel` 和 `LazyListScope.renderHistoryItems` 局部扩展组件。在避免任何代码冗余的前提下优雅达成了两套结构的无缝自愈路由。
+- **历史会话按最新活跃时间（lastActiveTime）排序**：
+  - 在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中，每当消息发送、接收并保存，或是新开对话时，动态更新 `ChatSession` 的 `lastActiveTime = System.currentTimeMillis()`。
+  - 列表在内存和持久化写入时一律通过 `sortedByDescending { it.lastActiveTime }` 按照最后活动时间重排，解决原版会话按首次创建时间死板排列的问题，确保活跃会话始终置顶。
 
 ### Fixed (修复)
 - **工具调用（如天气、搜索）失效与过度自我审查修复**：
@@ -12,6 +107,12 @@ All notable changes to this project will be documented in this file.
   - **加载工具授权状态**：在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt#L400) 的 `init` 阶段，补齐了从 SharedPreferences 中加载 `toolAuthWeather` 等全部 8 个工具权限值的缺失，彻底解决由于状态在重启后脱节导致实际运行权限未生效的 Bug。
 
 ### Added (新增)
+- **横屏与平板大屏自适应屏幕适配**：
+  - **MainScreen 双栏与单栏智能适配**：在 [MainScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/main/MainScreen.kt#L80) 中引入 `useTwoPane` 双栏自适应机制。当宽度门槛 `screenWidthDp >= 720.dp`（代表平板大屏或横屏折叠屏）时，采用 `Row` 双栏，左侧常驻 `SidebarContent` 列表，右侧隐藏顶栏汉堡菜单展示聊天区；在普通手机横屏（宽度 < 720dp）与窄屏下，降级为单栏抽屉设计，确保聊天气泡宽度足够而不被强行挤压。
+  - **手机/平板横屏软键盘弹起隐藏顶栏自愈**：在 [ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt#L100) 中对手机与平板在横屏下（`isLandscape && isKeyboardVisible`）且软键盘弹起时，智能隐藏 Scaffold 顶部的 TopAppBar。腾出宝贵的垂直高度以彻底解决横屏下键盘把输入框和消息列表挤扁成窄缝的体验痛点。
+  - **聊天流与输入控件自适应限宽居中**：在 [ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt#L210) 中，将聊天消息流 `LazyColumn`、已选图片预览区、正在录音控制面板以及底端的 `ChatInputBar` 全局在宽屏（`screenWidthDp >= 600.dp`）下限制最大显示宽度为 `720.dp` 并自动居中对齐，杜绝控件被横向无上限拉伸的问题。
+  - **TavernScreen 角色酒馆自适应网格化**：在 [TavernScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/TavernScreen.kt#L205) 中，根据屏幕宽度动态决定角色卡列表的列数（小于 600dp 显示 1 列，大于 600dp 显示 2 列，大于 900dp 显示 3 列），并自适应采用 `LazyVerticalGrid` 网格布局平铺展示，防止大屏下角色卡片严重被拉宽。
+  - **SettingsScreen 设置大屏自适应限宽**：在 [SettingsScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/settings/SettingsScreen.kt#L120) 顶层 `AnimatedContent` 容器外层增加居中 `Box` 并限制大屏下的最大宽度为 `720.dp`，改善设置选项在大屏横向无限拉伸导致操控困难的问题。
 - **多模态与媒体设置页彻底重构与多厂商 TTS API 深度对接模板设计**：
   - **高档卡片化模块布局**：彻底重构了多模态与媒体设置页（`MultimodalSettingsLayout`）的界面，将原先凌乱散落的表单重构为四个独立、精致的高档卡片式布局（语音合成 TTS、语音输入 STT、视觉图片理解、AI生图），每个卡片带有独特的图标和描边设计，极大提升了视觉和交互的美学标准。
   - **主流服务商 API 协议模板**：为主流的 TTS 服务商量身定制了底层的对接模板，支持“自动检测 (Auto)”、“OpenAI 官方”、“小米 MiMo”、“阿里百炼 (DashScope)”和“火山引擎 (豆包)”以及“完全自定义”等六大模板协议。UI 会根据用户选择自动渲染并提供相应的模型 and 音色快捷选择选项，完美防范了参数错配。

@@ -77,13 +77,20 @@ fun MainScreen(
     val scope = rememberCoroutineScope()
     var lastMenuClickTime by remember { mutableStateOf(0L) }
 
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    val screenWidthDp = configuration.screenWidthDp
+    val screenHeightDp = configuration.screenHeightDp
+    val useTwoPane = screenWidthDp >= 720 && screenHeightDp >= 500
+
     Box(modifier = Modifier.fillMaxSize()) {
-        ModalNavigationDrawer(
-            drawerState = drawerState,
-            drawerContent = {
-                ModalDrawerSheet(
-                    drawerContainerColor = MaterialTheme.colorScheme.surface,
-                    modifier = Modifier.width(300.dp)
+        if (useTwoPane) {
+            Row(modifier = Modifier.fillMaxSize()) {
+                Surface(
+                    modifier = Modifier
+                        .width(300.dp)
+                        .fillMaxHeight(),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 1.dp
                 ) {
                     SidebarContent(
                         userName = userName,
@@ -91,22 +98,11 @@ fun MainScreen(
                         sessions = sessions,
                         currentSessionId = currentSessionId,
                         onHistoryItemClick = { sessionId ->
-                            scope.launch { drawerState.close() }
                             onSessionSelect(sessionId)
                         },
                         onSessionDelete = onSessionDelete,
-                        onTavernClick = {
-                            scope.launch {
-                                drawerState.close()
-                                onTavernClick()
-                            }
-                        },
-                        onSettingsClick = {
-                            scope.launch {
-                                drawerState.close()
-                                onNavigateToSettings()
-                            }
-                        },
+                        onTavernClick = onTavernClick,
+                        onSettingsClick = onNavigateToSettings,
                         useSystemTime = useSystemTime,
                         onToggleSystemTime = onToggleSystemTime,
                         onUserNameSave = onUserNameChange,
@@ -114,49 +110,117 @@ fun MainScreen(
                         onTriggerManualMemorySummary = onTriggerManualMemorySummary
                     )
                 }
+                ChatScreen(
+                    apiConfig = apiConfig,
+                    apiConfigList = apiConfigList,
+                    onActiveConfigChange = onActiveConfigChange,
+                    appLanguage = appLanguage,
+                    userBubbleColor = userBubbleColor,
+                    messages = messages,
+                    isThinking = isThinking,
+                    isMcpRunning = isMcpRunning,
+                    onSendMessage = onSendMessage,
+                    onStopResponse = onStopResponse,
+                    onToggleThoughts = onToggleThoughts,
+                    onNewChatClick = onNewChatClick,
+                    currentSessionId = currentSessionId,
+                    getDraft = getDraft,
+                    saveDraft = saveDraft,
+                    clearDraft = clearDraft,
+                    onEditMessage = onEditMessage,
+                    onMenuClick = {},
+                    activeCharacterCard = activeCharacterCard,
+                    characterCardList = characterCardList,
+                    viewModel = viewModel,
+                    showMenuIcon = false,
+                    modifier = modifier.weight(1f)
+                )
             }
-        ) {
-            ChatScreen(
-                apiConfig = apiConfig,
-                apiConfigList = apiConfigList,
-                onActiveConfigChange = onActiveConfigChange,
-                appLanguage = appLanguage,
-                userBubbleColor = userBubbleColor,
-                messages = messages,
-                isThinking = isThinking,
-                isMcpRunning = isMcpRunning,
-                onSendMessage = onSendMessage,
-                onStopResponse = onStopResponse,
-                onToggleThoughts = onToggleThoughts,
-                onNewChatClick = onNewChatClick,
-                currentSessionId = currentSessionId,
-                getDraft = getDraft,
-                saveDraft = saveDraft,
-                clearDraft = clearDraft,
-                onEditMessage = onEditMessage,
-                onMenuClick = {
-                    val currentTime = System.currentTimeMillis()
-                    if (currentTime - lastMenuClickTime > 800L) {
-                        lastMenuClickTime = currentTime
-                        scope.launch {
-                            try {
-                                drawerState.open()
-                            } catch (e: Exception) {
-                                e.printStackTrace()
+        } else {
+            ModalNavigationDrawer(
+                drawerState = drawerState,
+                drawerContent = {
+                    ModalDrawerSheet(
+                        drawerContainerColor = MaterialTheme.colorScheme.surface,
+                        modifier = Modifier.width(300.dp)
+                    ) {
+                        SidebarContent(
+                            userName = userName,
+                            appLanguage = appLanguage,
+                            sessions = sessions,
+                            currentSessionId = currentSessionId,
+                            onHistoryItemClick = { sessionId ->
+                                scope.launch { drawerState.close() }
+                                onSessionSelect(sessionId)
+                            },
+                            onSessionDelete = onSessionDelete,
+                            onCloseDrawer = {
+                                scope.launch { drawerState.close() }
+                            },
+                            onTavernClick = {
+                                scope.launch {
+                                    drawerState.close()
+                                    onTavernClick()
+                                }
+                            },
+                            onSettingsClick = {
+                                scope.launch {
+                                    drawerState.close()
+                                    onNavigateToSettings()
+                                }
+                            },
+                            useSystemTime = useSystemTime,
+                            onToggleSystemTime = onToggleSystemTime,
+                            onUserNameSave = onUserNameChange,
+                            onUpdateCoreMemories = onUpdateCoreMemories,
+                            onTriggerManualMemorySummary = onTriggerManualMemorySummary
+                        )
+                    }
+                }
+            ) {
+                ChatScreen(
+                    apiConfig = apiConfig,
+                    apiConfigList = apiConfigList,
+                    onActiveConfigChange = onActiveConfigChange,
+                    appLanguage = appLanguage,
+                    userBubbleColor = userBubbleColor,
+                    messages = messages,
+                    isThinking = isThinking,
+                    isMcpRunning = isMcpRunning,
+                    onSendMessage = onSendMessage,
+                    onStopResponse = onStopResponse,
+                    onToggleThoughts = onToggleThoughts,
+                    onNewChatClick = onNewChatClick,
+                    currentSessionId = currentSessionId,
+                    getDraft = getDraft,
+                    saveDraft = saveDraft,
+                    clearDraft = clearDraft,
+                    onEditMessage = onEditMessage,
+                    onMenuClick = {
+                        val currentTime = System.currentTimeMillis()
+                        if (currentTime - lastMenuClickTime > 800L) {
+                            lastMenuClickTime = currentTime
+                            scope.launch {
+                                try {
+                                    drawerState.open()
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                }
                             }
                         }
-                    }
-                },
-                activeCharacterCard = activeCharacterCard,
-                characterCardList = characterCardList,
-                viewModel = viewModel,
-                modifier = modifier
-            )
+                    },
+                    activeCharacterCard = activeCharacterCard,
+                    characterCardList = characterCardList,
+                    viewModel = viewModel,
+                    showMenuIcon = true,
+                    modifier = modifier
+                )
+            }
         }
 
         // 核心交互优化：在侧栏滑出（打开）或缩回（关闭）动画运行期间，在最上层覆盖透明拦截层，
         // 拦截并消费一切快速点击，彻底杜绝连击事件落入 Scrim 导致抽屉半路缩回或反复震荡的缺陷。
-        if (drawerState.isAnimationRunning) {
+        if (!useTwoPane && drawerState.isAnimationRunning) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -183,7 +247,8 @@ fun SidebarContent(
     onToggleSystemTime: () -> Unit,
     onUserNameSave: (String) -> Unit,
     onUpdateCoreMemories: (String, List<String>) -> Unit = { _, _ -> },
-    onTriggerManualMemorySummary: () -> Unit = {}
+    onTriggerManualMemorySummary: () -> Unit = {},
+    onCloseDrawer: () -> Unit = {}
 ) {
     val isEn = appLanguage == "en"
     var sessionToDelete by remember { mutableStateOf<String?>(null) }
@@ -232,12 +297,12 @@ fun SidebarContent(
         groups
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-    ) {
-        // 1. 顶部用户信息栏
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    val isHeightConstrained = configuration.screenHeightDp < 550
+    val useTwoPane = configuration.screenWidthDp >= 720 && configuration.screenHeightDp >= 500
+
+    @Composable
+    fun UserInfoBar() {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
@@ -278,137 +343,25 @@ fun SidebarContent(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                 modifier = Modifier.size(16.dp)
             )
-        }
-
-        // 修改用户名的对话框
-        if (showEditNameDialog) {
-            AlertDialog(
-                onDismissRequest = { showEditNameDialog = false },
-                title = {
-                    Text(
-                        text = if (isEn) "Edit Display Name" else "修改称呼",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
+            if (!useTwoPane) {
+                Spacer(modifier = Modifier.width(8.dp))
+                IconButton(
+                    onClick = { onCloseDrawer() },
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ChevronLeft,
+                        contentDescription = "Close Drawer",
+                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                        modifier = Modifier.size(20.dp)
                     )
-                },
-                text = {
-                    Column {
-                        OutlinedTextField(
-                            value = tempName,
-                            onValueChange = { tempName = it },
-                            label = { Text(if (isEn) "User Name" else "用户名称") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            if (tempName.isNotBlank()) {
-                                onUserNameSave(tempName.trim())
-                                showEditNameDialog = false
-                            }
-                        }
-                    ) {
-                        Text(if (isEn) "Save" else "保存")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showEditNameDialog = false }) {
-                        Text(if (isEn) "Cancel" else "取消")
-                    }
-                }
-            )
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // 2. 历史会话列表 (带滑动)
-        LazyColumn(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            items(historyGroups) { group ->
-                Column {
-                    // 分组标题
-                    Text(
-                        text = group.timeLabel,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-                    // 会话项
-                    group.items.forEach { session ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(if (session.id == currentSessionId) MaterialTheme.colorScheme.primary.copy(alpha = 0.1f) else Color.Transparent)
-                                .clickable { onHistoryItemClick(session.id) }
-                                .padding(vertical = 6.dp, horizontal = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.ChatBubbleOutline,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(
-                                text = session.title,
-                                fontSize = 14.sp,
-                                maxLines = 1,
-                                color = MaterialTheme.colorScheme.onBackground,
-                                modifier = Modifier.weight(1f)
-                            )
-                            var menuExpanded by remember { mutableStateOf(false) }
-                            Box {
-                                IconButton(
-                                    onClick = { menuExpanded = true },
-                                    modifier = Modifier.size(28.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.MoreVert,
-                                        contentDescription = "Options",
-                                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                                DropdownMenu(
-                                    expanded = menuExpanded,
-                                    onDismissRequest = { menuExpanded = false },
-                                    modifier = Modifier.background(MaterialTheme.colorScheme.surface)
-                                ) {
-                                    DropdownMenuItem(
-                                        text = { Text("查看核心记忆", fontSize = 13.sp) },
-                                        leadingIcon = { Icon(Icons.Default.Psychology, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                                        onClick = {
-                                            menuExpanded = false
-                                            activeMemorySessionId = session.id
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("删除会话", color = MaterialTheme.colorScheme.error, fontSize = 13.sp) },
-                                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp)) },
-                                        onClick = {
-                                            menuExpanded = false
-                                            sessionToDelete = session.id
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
                 }
             }
         }
+    }
 
-        // 3. 底部控制面板卡片 (物理感知、人格酒馆、设置的优雅融合)
+    @Composable
+    fun BottomControlPanel() {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -544,65 +497,216 @@ fun SidebarContent(
                 )
             }
         }
+    }
 
-        // 删除确认弹窗 (多语言兼容 & Loyea 燕麦沙黄主题风格)
-        if (sessionToDelete != null) {
-            val targetSessionId = sessionToDelete!!
-            AlertDialog(
-                onDismissRequest = { sessionToDelete = null },
-                title = {
-                    Text(
-                        text = if (isEn) "Delete Chat?" else "确认删除会话？",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp
-                    )
-                },
-                text = {
-                    Text(
-                        text = if (isEn) "This will permanently delete this conversation." else "此操作将永久删除此会话历史记录。",
-                        fontSize = 14.sp
-                    )
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            onSessionDelete(targetSessionId)
-                            sessionToDelete = null
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.error
-                        )
-                    ) {
-                        Text(text = if (isEn) "Delete" else "删除")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { sessionToDelete = null }) {
-                        Text(
-                            text = if (isEn) "Cancel" else "取消",
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                        )
-                    }
-                },
-                shape = RoundedCornerShape(16.dp),
-                containerColor = MaterialTheme.colorScheme.surface
-            )
-        }
-
-        // 核心事实记忆 Dialog
-        activeMemorySessionId?.let { sessionId ->
-            val memorySession = sessions.find { it.id == sessionId }
-            if (memorySession != null) {
-                CoreMemoryDialog(
-                    session = memorySession,
-                    onDismissRequest = { activeMemorySessionId = null },
-                    onUpdateMemories = onUpdateCoreMemories,
-                    onTriggerSummary = onTriggerManualMemorySummary
+    fun androidx.compose.foundation.lazy.LazyListScope.renderHistoryItems() {
+        historyGroups.forEach { group ->
+            item {
+                Text(
+                    text = group.timeLabel,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                    modifier = Modifier.padding(bottom = 4.dp)
                 )
+            }
+            items(group.items, key = { it.id }) { session: ChatSession ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (session.id == currentSessionId) MaterialTheme.colorScheme.primary.copy(alpha = 0.1f) else Color.Transparent)
+                        .clickable { onHistoryItemClick(session.id) }
+                        .padding(vertical = 6.dp, horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.ChatBubbleOutline,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = session.title,
+                        fontSize = 14.sp,
+                        maxLines = 1,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        modifier = Modifier.weight(1f)
+                    )
+                    var menuExpanded by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(
+                            onClick = { menuExpanded = true },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = "Options",
+                                tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = menuExpanded,
+                            onDismissRequest = { menuExpanded = false },
+                            modifier = Modifier.background(MaterialTheme.colorScheme.surface)
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("查看核心记忆", fontSize = 13.sp) },
+                                leadingIcon = { Icon(Icons.Default.Psychology, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                                onClick = {
+                                    menuExpanded = false
+                                    activeMemorySessionId = session.id
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("删除会话", color = MaterialTheme.colorScheme.error, fontSize = 13.sp) },
+                                leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp)) },
+                                onClick = {
+                                    menuExpanded = false
+                                    sessionToDelete = session.id
+                                }
+                            )
+                        }
+                    }
+                }
             }
         }
     }
-}
+
+    if (isHeightConstrained) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            item { UserInfoBar() }
+            renderHistoryItems()
+            item { BottomControlPanel() }
+        }
+    } else {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp)
+        ) {
+            UserInfoBar()
+            Spacer(modifier = Modifier.height(16.dp))
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                renderHistoryItems()
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+            BottomControlPanel()
+        }
+    }
+
+    // 修改用户名的对话框
+    if (showEditNameDialog) {
+        AlertDialog(
+            onDismissRequest = { showEditNameDialog = false },
+            title = {
+                Text(
+                    text = if (isEn) "Edit Display Name" else "修改称呼",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = tempName,
+                        onValueChange = { tempName = it },
+                        label = { Text(if (isEn) "User Name" else "用户名称") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (tempName.isNotBlank()) {
+                            onUserNameSave(tempName.trim())
+                            showEditNameDialog = false
+                        }
+                    }
+                ) {
+                    Text(if (isEn) "Save" else "保存")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEditNameDialog = false }) {
+                    Text(if (isEn) "Cancel" else "取消")
+                }
+            }
+        )
+    }
+
+    // 删除确认弹窗 (多语言兼容 & Loyea 燕麦沙黄主题风格)
+    if (sessionToDelete != null) {
+        val targetSessionId = sessionToDelete!!
+        AlertDialog(
+            onDismissRequest = { sessionToDelete = null },
+            title = {
+                Text(
+                    text = if (isEn) "Delete Chat?" else "确认删除会话？",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp
+                )
+            },
+            text = {
+                Text(
+                    text = if (isEn) "This will permanently delete this conversation." else "此操作将永久删除此会话历史记录。",
+                    fontSize = 14.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onSessionDelete(targetSessionId)
+                        sessionToDelete = null
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text(text = if (isEn) "Delete" else "删除")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { sessionToDelete = null }) {
+                    Text(
+                        text = if (isEn) "Cancel" else "取消",
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                }
+            },
+            shape = RoundedCornerShape(16.dp),
+            containerColor = MaterialTheme.colorScheme.surface
+        )
+    }
+
+    // 核心事实记忆 Dialog
+    activeMemorySessionId?.let { sessionId ->
+        val memorySession = sessions.find { it.id == sessionId }
+        if (memorySession != null) {
+            CoreMemoryDialog(
+                session = memorySession,
+                onDismissRequest = { activeMemorySessionId = null },
+                onUpdateMemories = onUpdateCoreMemories,
+                onTriggerSummary = onTriggerManualMemorySummary
+            )
+        }
+    }
+    }
+
 
 data class HistoryGroup(
     val timeLabel: String,

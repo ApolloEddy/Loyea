@@ -17,7 +17,8 @@ data class ChatSession(
     val lastActiveTime: Long = System.currentTimeMillis(), // 最后活动时间，用于排序
     val characterId: String = "char_loyea_default", // 新增角色人格绑定
     val useSystemTime: Boolean? = false, // 是否在此会话中使用真实系统时间
-    val coreMemories: List<String> = emptyList() // 会话核心记忆列表
+    val coreMemories: List<String> = emptyList(), // 会话核心记忆列表
+    val isTitleSummarized: Boolean? = false // 是否已由AI总结了标题
 )
 
 /**
@@ -58,7 +59,8 @@ class ChatStorageManager(private val context: Context) {
                     lastActiveTime = raw.lastActiveTime,
                     characterId = raw.characterId ?: "char_loyea_default",
                     useSystemTime = raw.useSystemTime ?: false,
-                    coreMemories = raw.coreMemories ?: emptyList()
+                    coreMemories = raw.coreMemories ?: emptyList(),
+                    isTitleSummarized = raw.isTitleSummarized ?: false
                 )
             }
         } catch (e: Exception) {
@@ -84,9 +86,16 @@ class ChatStorageManager(private val context: Context) {
             val json = file.readText()
             val type = object : TypeToken<List<Message>>() {}.type
             val list = gson.fromJson<List<Message>>(json, type)
-            // 确保 mcpCalls 不会因为反序列化可能出现的 null 而崩溃
+            // 确保 mcpCalls 和 versions 不会因为反序列化可能出现的 null 而崩溃
             list?.map { msg ->
-                if (msg.mcpCalls == null) msg.copy(mcpCalls = emptyList()) else msg
+                var cleaned = msg
+                if (cleaned.mcpCalls == null) {
+                    cleaned = cleaned.copy(mcpCalls = emptyList())
+                }
+                if (cleaned.versions == null) {
+                    cleaned = cleaned.copy(versions = emptyList())
+                }
+                cleaned
             } ?: emptyList()
         } catch (e: Exception) {
             e.printStackTrace()

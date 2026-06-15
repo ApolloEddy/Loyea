@@ -247,29 +247,37 @@ class McpManager(private val context: Context) {
     }
 
     suspend fun callTool(prefixedToolName: String, arguments: Map<String, Any>?): JsonRpcResponse {
-        // 1. Try to split by prefix
-        if (prefixedToolName.contains("__")) {
-            val parts = prefixedToolName.split("__", limit = 2)
+        val cleanName = prefixedToolName.trim()
+
+        // 1. 优先在本地内置工具中进行首要匹配（忽略大小写，且兼容带前缀或缺省前缀的纯名字形式）
+        val localTools = perceptionServer.getTools()
+        val matchedLocal = localTools.find { 
+            it.name.equals(cleanName, ignoreCase = true) || 
+            "${LOCAL_SERVER_NAME}__${it.name}".equals(cleanName, ignoreCase = true)
+        }
+        if (matchedLocal != null) {
+            return perceptionServer.callTool(matchedLocal.name, arguments)
+        }
+
+        // 2. 根据前缀进行分发匹配
+        if (cleanName.contains("__")) {
+            val parts = cleanName.split("__", limit = 2)
             val serverPrefix = parts[0]
             val toolName = parts[1]
 
-            if (serverPrefix == LOCAL_SERVER_NAME) {
-                return perceptionServer.callTool(toolName, arguments)
-            }
-
             val client = activeClients.values.find {
-                it.config.name.replace(Regex("[^a-zA-Z0-9_]"), "_") == serverPrefix
+                it.config.name.replace(Regex("[^a-zA-Z0-9_]"), "_").equals(serverPrefix, ignoreCase = true)
             }
             if (client != null) {
                 return client.callTool(toolName, arguments)
             }
         }
 
-        // 2. Fallback: Search all active clients
+        // 3. 兜底：在所有连接成功的远程服务器的可用工具中搜索匹配
         for (client in activeClients.values) {
-            val hasTool = client.discoveredTools.value.any { it.name == prefixedToolName }
+            val hasTool = client.discoveredTools.value.any { it.name.equals(cleanName, ignoreCase = true) }
             if (hasTool) {
-                return client.callTool(prefixedToolName, arguments)
+                return client.callTool(cleanName, arguments)
             }
         }
 

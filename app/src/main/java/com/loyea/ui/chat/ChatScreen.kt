@@ -89,6 +89,7 @@ fun ChatScreen(
     clearDraft: (String) -> Unit,
     onEditMessage: (String, String) -> Unit,
     viewModel: ChatViewModel? = null,
+    showMenuIcon: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -153,12 +154,14 @@ fun ChatScreen(
                     )
                 },
                 navigationIcon = {
-                    IconButton(onClick = onMenuClick) {
-                        Icon(
-                            imageVector = Icons.Default.Menu,
-                            contentDescription = "Menu",
-                            tint = MaterialTheme.colorScheme.onBackground
-                        )
+                    if (showMenuIcon) {
+                        IconButton(onClick = onMenuClick) {
+                            Icon(
+                                imageVector = Icons.Default.Menu,
+                                contentDescription = "Menu",
+                                tint = MaterialTheme.colorScheme.onBackground
+                            )
+                        }
                     }
                 },
                 actions = {
@@ -1675,6 +1678,10 @@ fun McpVoiceReplyItem(
 ) {
     val context = LocalContext.current
     val isPlaying = currentlyPlayingAudioId == call.id
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+
+    val cleanedText = remember(call.input) { cleanVoiceText(call.input) }
+    var isTextExpanded by remember { mutableStateOf(false) }
 
     var duration = 0
     var hasVoiceUrl = false
@@ -1693,8 +1700,6 @@ fun McpVoiceReplyItem(
             e.printStackTrace()
         }
     }
-
-
 
     when (call.status) {
         McpStatus.RUNNING -> {
@@ -1723,68 +1728,260 @@ fun McpVoiceReplyItem(
         }
         McpStatus.SUCCESS -> {
             if (hasVoiceUrl) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth(0.7f)
-                        .padding(bottom = 6.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
-                        .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), RoundedCornerShape(16.dp))
-                        .clickable { 
-                            onPlayClick(call.id)
-                        }
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                val isDark = androidx.compose.foundation.isSystemInDarkTheme()
+                val claudeCardBg = if (isDark) Color(0xFF1E1E1C) else Color(0xFFFBFBFA)
+                val claudeCardBorder = if (isDark) Color(0xFF323230) else Color(0xFFECEAE2)
+                val claudeText = if (isDark) Color(0xFFE4E2DC) else Color(0xFF2A2926)
+                val claudeSubText = if (isDark) Color(0xFF9E9C95) else Color(0xFF7D7C75)
+                val claudePrimary = if (isDark) Color(0xFFD6CFC7) else Color(0xFF8C7A6B) // 沙色
+                val claudePrimaryBg = if (isDark) Color(0xFF2B2925) else Color(0xFFF4EFEA) // 温暖沙色背景
+
+                // 旋转动画控制展开箭头
+                val arrowRotation by animateFloatAsState(
+                    targetValue = if (isTextExpanded) 180f else 0f,
+                    animationSpec = tween(durationMillis = 250, easing = FastOutSlowInEasing),
+                    label = "arrowRotation_${call.id}"
+                )
+
+                // 宽度渐变动画：未展开时占 AI 气泡的 65%，展开时平滑拉宽至 100% 占满
+                val widthFraction by animateFloatAsState(
+                    targetValue = if (isTextExpanded) 1.0f else 0.65f,
+                    animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing),
+                    label = "widthFraction_${call.id}"
+                )
+
+                // 背景色平滑渐变：未展开时为浅沙色，展开后为极简卡片白色/深灰背景
+                val backgroundColor by animateColorAsState(
+                    targetValue = if (isTextExpanded) claudeCardBg else claudePrimaryBg,
+                    animationSpec = tween(durationMillis = 300),
+                    label = "bgColor_${call.id}"
+                )
+
+                Column(
+                    modifier = modifier
+                        .fillMaxWidth(widthFraction)
+                        .padding(bottom = 8.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(backgroundColor)
+                        .border(1.dp, claudeCardBorder, RoundedCornerShape(14.dp))
+                        .animateContentSize(animationSpec = tween(300, easing = FastOutSlowInEasing))
                 ) {
-                    if (isPlaying) {
-                        Row(
-                            modifier = Modifier.height(16.dp).padding(end = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(2.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            for (j in 0 until 3) {
-                                val infiniteTransition = rememberInfiniteTransition(label = "audioPlayingMcpCall_${call.id}_$j")
-                                val heightPercent by infiniteTransition.animateFloat(
-                                    initialValue = 0.2f,
-                                    targetValue = 1.0f,
-                                    animationSpec = infiniteRepeatable(
-                                        animation = tween(400 + j * 120, easing = LinearEasing),
-                                        repeatMode = RepeatMode.Reverse
-                                    ),
-                                    label = "AudioHeightMcpCall_${call.id}_$j"
-                                )
-                                Box(
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onPlayClick(call.id) }
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (isPlaying) {
+                            Row(
+                                modifier = Modifier.height(16.dp).padding(end = 10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(2.5.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                for (j in 0 until 4) {
+                                    val infiniteTransition = rememberInfiniteTransition(label = "audioPlayingMcpCall_${call.id}_$j")
+                                    val heightPercent by infiniteTransition.animateFloat(
+                                        initialValue = 0.25f,
+                                        targetValue = 1.0f,
+                                        animationSpec = infiniteRepeatable(
+                                            animation = tween(350 + j * 100, easing = LinearEasing),
+                                            repeatMode = RepeatMode.Reverse
+                                        ),
+                                        label = "AudioHeightMcpCall_${call.id}_$j"
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .width(2.5.dp)
+                                            .fillMaxHeight(heightPercent)
+                                            .clip(CircleShape)
+                                            .background(claudePrimary)
+                                    )
+                                }
+                            }
+                        } else {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                                contentDescription = "Play Voice",
+                                tint = claudePrimary,
+                                modifier = Modifier.size(20.dp).padding(end = 10.dp)
+                            )
+                        }
+                        
+                        Text(
+                            text = "${duration}\"",
+                            color = claudePrimary,
+                            style = MaterialTheme.typography.bodyLarge.copy(
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.5.sp
+                            ),
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        if (cleanedText.isNotEmpty()) {
+                            IconButton(
+                                onClick = { isTextExpanded = !isTextExpanded },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.KeyboardArrowDown,
+                                    contentDescription = if (isTextExpanded) "折叠文本" else "展开文本",
+                                    tint = claudeSubText,
                                     modifier = Modifier
-                                        .width(2.5.dp)
-                                        .fillMaxHeight(heightPercent)
-                                        .clip(CircleShape)
-                                        .background(MaterialTheme.colorScheme.primary)
+                                        .size(20.dp)
+                                        .graphicsLayer(rotationZ = arrowRotation)
                                 )
                             }
                         }
-                    } else {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.VolumeUp,
-                            contentDescription = "Play Voice",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp).padding(end = 8.dp)
-                        )
                     }
-                    Text(
-                        text = "${duration}\"",
-                        color = MaterialTheme.colorScheme.primary,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Bold
-                    )
+
+                    AnimatedVisibility(
+                        visible = isTextExpanded && cleanedText.isNotEmpty(),
+                        enter = expandVertically(animationSpec = tween(250, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(200)),
+                        exit = shrinkVertically(animationSpec = tween(250, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(200))
+                    ) {
+                        Column {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(0.5.dp)
+                                    .background(claudeCardBorder.copy(alpha = 0.8f))
+                                    .padding(horizontal = 16.dp)
+                            )
+
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(claudePrimaryBg.copy(alpha = 0.2f))
+                                    .padding(horizontal = 16.dp, vertical = 14.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(IntrinsicSize.Min),
+                                    verticalAlignment = Alignment.Top
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .width(2.5.dp)
+                                            .fillMaxHeight()
+                                            .padding(vertical = 2.dp)
+                                            .clip(CircleShape)
+                                            .background(claudePrimary.copy(alpha = 0.4f))
+                                    )
+                                    
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    
+                                    Text(
+                                        text = cleanedText,
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            lineHeight = 22.sp,
+                                            letterSpacing = 0.3.sp
+                                        ),
+                                        color = claudeText,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                                
+                                Spacer(modifier = Modifier.height(10.dp))
+                                
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .border(0.5.dp, claudePrimary.copy(alpha = 0.25f), RoundedCornerShape(6.dp))
+                                            .background(claudePrimaryBg.copy(alpha = 0.6f))
+                                            .clickable {
+                                                clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(cleanedText))
+                                                android.widget.Toast.makeText(context, "已复制语音文本", android.widget.Toast.LENGTH_SHORT).show()
+                                            }
+                                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.ContentCopy,
+                                            contentDescription = null,
+                                            tint = claudePrimary,
+                                            modifier = Modifier.size(11.dp)
+                                        )
+                                        Text(
+                                            text = "复制",
+                                            color = claudePrimary,
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             } else {
-                McpCallItem(mcpCall = call, modifier = modifier)
+                // 如果是 SUCCESS 状态但还没有获取到音频路径，
+                // 渲染为优雅的“语音加载中...”占位态，避免退回到普通的调试用 McpCallItem 绿色卡片造成界面闪烁。
+                Row(
+                    modifier = modifier
+                        .fillMaxWidth(0.7f)
+                        .padding(bottom = 6.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.04f))
+                        .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.1f), RoundedCornerShape(16.dp))
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "语音加载中...",
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
             }
         }
         McpStatus.FAILED -> {
             McpCallItem(mcpCall = call, modifier = modifier)
         }
     }
+}
+
+private fun cleanVoiceText(inputJson: String?): String {
+    if (inputJson.isNullOrBlank()) return ""
+    val text = try {
+        val regex = Regex("""\"text\"\s*:\s*\"([\s\S]*?)\"""")
+        val match = regex.find(inputJson)
+        match?.groupValues?.get(1) ?: ""
+    } catch (e: Exception) {
+        ""
+    }
+    
+    if (text.isBlank()) return ""
+    
+    // 净化Style语气标签和吸气等呼吸音标签 (支持小括号、中括号、大括号、尖括号)
+    var result = text.replace(Regex("\\([\\s\\S]*?\\)"), "")
+    result = result.replace(Regex("（[\\s\\S]*?）"), "")
+    result = result.replace(Regex("\\[[\\s\\S]*?\\]"), "")
+    result = result.replace(Regex("【[\\s\\S]*?】"), "")
+    result = result.replace(Regex("\\{[\\s\\S]*?\\}"), "")
+    result = result.replace(Regex("<[\\s\\S]*?>"), "")
+    
+    // 还原JSON转义
+    result = result.replace("\\\"", "\"")
+        .replace("\\n", "\n")
+        .replace("\\t", "    ")
+        .replace("\\\\", "\\")
+        
+    return result.trim()
 }
 
 private fun formatTime(timestamp: Long): String {

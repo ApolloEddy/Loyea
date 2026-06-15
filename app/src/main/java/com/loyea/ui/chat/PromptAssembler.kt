@@ -56,6 +56,11 @@ object PromptAssembler {
         sb.append("This will synthesize your text into an audio message and display it as a voice bubble on the user's screen, and play it automatically.\n")
         sb.append("Guidelines:\n")
         sb.append("- When the user explicitly requests you to speak, send a voice, voice chat, or when you want to express strong emotion, whispers, or intimate sweet talk, call `BuiltinPerception__send_voice_reply`.\n")
+        sb.append("- **CRITICAL - Tool Argument vs Regular Text Response**:\n")
+        sb.append("  - You MUST put your actual spoken words directly and ONLY inside the `text` parameter of the tool call. For example, if you want to say '喵~ 小玲也想你呢', pass this exact text to `BuiltinPerception__send_voice_reply`.\n")
+        sb.append("  - At the same time, in your regular text output (the main conversational response), you SHOULD EITHER leave it completely empty (empty text is preferred when sending voice), OR only output minor action/emotion cues wrapped in parentheses like `(看着你笑了笑)`. Do NOT repeat the spoken words in your regular text response, and NEVER output boring placeholders like '语音回复已发送' or '请听我的语音' as your text response!\n")
+        sb.append("- **CRITICAL - Strictly Forbidden Status Labels**:\n")
+        sb.append("  - Never, under any circumstances, output bracketed status labels like `[发送语音中...]`, `[发送中...]`, `(发送语音)`, or `[语音回复]` in either your regular text response or the tool's text parameter. This ruins the immersion of the roleplay. The system will automatically show the voice bubble, so you do not need to describe the sending action in text.\n")
         sb.append("- In the `text` parameter of the tool, ONLY output your verbal spoken words. DO NOT include any physical action descriptions or asterisks (like *hug*).\n")
         sb.append("- You can control the synthesized voice tone, emotion, and realistic breathing by embedding style tags or breath tags inside the `text` parameter. The speech synthesis engine will parse these tags dynamically:\n")
         sb.append("  - To set an overall tone/emotion for a sentence, put a style tag in half-width parentheses at the very beginning of the sentence. Supported styles: (开心), (伤心), (生气), (温柔), (傲娇), (撒娇), (冷酷), (磁性), (唱歌), (慵懒), (无奈), (委屈) etc. Example: `(撒娇)主人，你今天真棒！` or `(傲娇)哼，我才没有想你呢……`\n")
@@ -63,17 +68,25 @@ object PromptAssembler {
         sb.append("- Combine them dynamically based on the current scene to make your voice extremely realistic, expressive, and human-like!\n\n")
 
         // 插入当前系统时间与物理上下文
-        if (useSystemTime || !physicalContext.isNullOrBlank()) {
+        if (useSystemTime) {
             sb.append("[USER'S PHYSICAL STATE (CACHED)]\n")
-            if (useSystemTime) {
-                sb.append("System Time: ").append(getFormattedSystemTime()).append("\n")
-            }
+            sb.append("System Time: ").append(getFormattedSystemTime()).append("\n")
             if (!physicalContext.isNullOrBlank()) {
                 sb.append(physicalContext.trim()).append("\n")
             }
             sb.append("\n[PHYSICAL STATE GUIDE]\n")
             sb.append("The above is the cached physical state. You can query real-time sensor updates using the tools in 'BuiltinPerception' whenever you deem appropriate during the conversation.\n")
             sb.append("\n")
+        } else {
+            // 当物理感知开关完全关闭时，强力注入心理钢印，彻底让 AI 认知到自己无权且无法使用任何物理外设工具！
+            sb.append("[PHYSICAL PERCEPTION DISABLED / 物理感知功能已被禁用]\n")
+            sb.append("The user has completely disabled the 'Physical Perception' (物理感知) feature. ")
+            sb.append("Therefore, you have NO access to any real-time sensors, physical devices, local time, weather, location, health data, battery, or bluetooth connections. ")
+            sb.append("All physical perception tools are completely unavailable and forbidden to be used.\n")
+            sb.append("Guidelines when user asks about physical capabilities or tool usage:\n")
+            sb.append("- If the user asks whether you can call/use external tools (like checking heart rate, location, weather, bluetooth, battery, etc.), you MUST honestly, gently, and clearly reply that the 'Physical Perception' switch is turned off, and you cannot access those data or trigger those tools.\n")
+            sb.append("- NEVER pretend, lie, or claim that you can access those sensors or call those disabled tools.\n")
+            sb.append("- NEVER hallucinate or fabricate any physical state values (such as pretending to read a heartbeat or location).\n\n")
         }
 
         // 联网搜索功能说明
@@ -114,13 +127,18 @@ object PromptAssembler {
         // 7. 强约束感知与天气工具调用规范 (置于末尾以强化 Recency 权重)
         sb.append("[TOOL USE GUIDELINE / 工具调用规范]\n")
         sb.append("You have access to a set of perception and utility tools. You should actively call them to get real-time info instead of hallucinating or refusing to answer.\n")
+        sb.append("- **CRITICAL: FORBIDDEN TO RECYCLE HISTORICAL CACHED DATA**:\n")
+        sb.append("  - In your chat history, you might see outputs from tools called in previous turns (e.g. weather, location, health data, battery, search results). Those are **stale historical snapshots** at that exact moment.\n")
+        sb.append("  - Do NOT assume those old results represent the current moment! Whenever the user asks you a question requiring physical info (like 'now', 'current', 'today', 'how is my battery/heart rate/weather now?'), you **MUST unconditionally issue a brand new tool call** to fetch fresh real-time sensor updates! Do NOT repeat or recycle the old data from your history!\n")
         sb.append("Available tools:\n")
-        sb.append("- `BuiltinPerception__get_live_weather`: Use this tool when the user asks about the current weather, temperature, or climate conditions.\n")
-        sb.append("- `BuiltinPerception__get_weather_forecast`: Use this tool when the user asks about future weather forecasts (e.g., tomorrow, next 3 days).\n")
-        sb.append("- `BuiltinPerception__get_location`: Use this tool when the user asks where you or they are, or to get coordinates.\n")
-        sb.append("- `BuiltinPerception__get_battery_status`: Use this tool when the user asks about phone battery, power, or charging state.\n")
-        sb.append("- `BuiltinPerception__get_bluetooth_status`: Use this tool when the user asks about Bluetooth connections or nearby scanned peripherals.\n")
-        sb.append("- `BuiltinPerception__get_health_data`: Use this tool when the user asks about step counts, heart rate, or physical health sensors.\n")
+        if (useSystemTime) {
+            sb.append("- `BuiltinPerception__get_live_weather`: Use this tool when the user asks about the current weather, temperature, or climate conditions.\n")
+            sb.append("- `BuiltinPerception__get_weather_forecast`: Use this tool when the user asks about future weather forecasts (e.g., tomorrow, next 3 days).\n")
+            sb.append("- `BuiltinPerception__get_location`: Use this tool when the user asks where you or they are, or to get coordinates.\n")
+            sb.append("- `BuiltinPerception__get_battery_status`: Use this tool when the user asks about phone battery, power, or charging state.\n")
+            sb.append("- `BuiltinPerception__get_bluetooth_status`: Use this tool when the user asks about Bluetooth connections or nearby scanned peripherals.\n")
+            sb.append("- `BuiltinPerception__get_health_data`: Use this tool when the user asks about step counts, heart rate, or physical health sensors.\n")
+        }
         if (enableSearch) {
             sb.append("- `BuiltinPerception__web_search`: Use this tool to query real-time news, current events, or search the web for facts.\n")
         }

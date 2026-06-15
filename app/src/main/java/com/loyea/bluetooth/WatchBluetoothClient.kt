@@ -13,6 +13,7 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -46,6 +47,30 @@ object WatchBluetoothClient {
 
     private val _steps = MutableStateFlow(0)
     val steps: StateFlow<Int> = _steps
+
+    // 新增睡眠数据流
+    private val _sleepDuration = MutableStateFlow(0)
+    val sleepDuration: StateFlow<Int> = _sleepDuration
+
+    private val _sleepQuality = MutableStateFlow("Unknown")
+    val sleepQuality: StateFlow<String> = _sleepQuality
+
+    // 新增运动数据流
+    private val _exerciseDuration = MutableStateFlow(0)
+    val exerciseDuration: StateFlow<Int> = _exerciseDuration
+
+    private val _exerciseCalories = MutableStateFlow(0)
+    val exerciseCalories: StateFlow<Int> = _exerciseCalories
+
+    private val _exerciseType = MutableStateFlow("Resting")
+    val exerciseType: StateFlow<String> = _exerciseType
+
+    // 自动重连管理变量
+    private var lastConnectedDevice: BluetoothDevice? = null
+    private var contextRef: Context? = null
+    private var isReconnecting = false
+    private var isUserInitiatedDisconnect = false
+    private var reconnectJob: kotlinx.coroutines.Job? = null
 
     private var bluetoothAdapter: BluetoothAdapter? = null
     private var connectThread: ConnectThread? = null
@@ -89,14 +114,32 @@ object WatchBluetoothClient {
      */
     @Synchronized
     fun connect(context: Context, device: BluetoothDevice) {
-        Log.d(TAG, "connect: Initiating connection to ${device.name ?: "Unknown"}")
+        connectInternal(context, device, isRetry = false)
+    }
+
+    @Synchronized
+    private fun connectInternal(context: Context, device: BluetoothDevice, isRetry: Boolean) {
+        Log.d(TAG, "connectInternal: Initiating connection to ${device.name ?: "Unknown"} (isRetry=$isRetry)")
         if (!hasBtPermission(context)) {
-            Log.e(TAG, "connect: Missing BLUETOOTH_CONNECT permission")
+            Log.e(TAG, "connectInternal: Missing BLUETOOTH_CONNECT permission")
             return
         }
 
-        // 停止之前的连接
-        disconnect()
+        // 如果是全新连接（非重试），重置重连状态与用户标志
+        if (!isRetry) {
+            isUserInitiatedDisconnect = false
+            lastConnectedDevice = device
+            contextRef = context.applicationContext
+            reconnectJob?.cancel()
+            isReconnecting = false
+        }
+
+        // 停止之前的连接线程（重连或新连都需要清理旧线程）
+        connectThread?.cancel()
+        connectThread = null
+        
+        connectedThread?.cancel()
+        connectedThread = null
 
         _connectionState.value = ConnectionState.CONNECTING
         connectThread = ConnectThread(device, context)
@@ -108,7 +151,10 @@ object WatchBluetoothClient {
      */
     @Synchronized
     fun disconnect() {
-        Log.d(TAG, "disconnect: Stopping all threads")
+        Log.d(TAG, "disconnect: Stopping all threads and cancelling auto-reconnect")
+        isUserInitiatedDisconnect = true
+        reconnectJob?.cancel()
+        isReconnecting = false
         
         connectThread?.cancel()
         connectThread = null
@@ -193,6 +239,7 @@ object WatchBluetoothClient {
                     Log.e(TAG, "ConnectThread: Could not close socket: ${closeException.message}")
                 }
                 _connectionState.value = ConnectionState.DISCONNECTED
+                triggerAutoReconnect()
                 return
             }
 
@@ -240,6 +287,7 @@ object WatchBluetoothClient {
             // 循环退出说明连接断开了
             closeSocket()
             _connectionState.value = ConnectionState.DISCONNECTED
+            triggerAutoReconnect()
         }
 
         fun write(bytes: ByteArray) {
@@ -264,6 +312,42 @@ object WatchBluetoothClient {
         }
     }
 
+    private fun triggerAutoReconnect() {
+        val device = lastConnectedDevice ?: return
+        val context = contextRef ?: return
+        if (isReconnecting || isUserInitiatedDisconnect) return
+        
+        isReconnecting = true
+        reconnectJob?.cancel()
+        reconnectJob = clientScope.launch {
+            val delays = listOf(5000L, 10000L, 20000L) // 5s, 10s, 20s
+            for ((index, delayMs) in delays.withIndex()) {
+                if (isUserInitiatedDisconnect || _connectionState.value == ConnectionState.CONNECTED) break
+                Log.d(TAG, "AutoReconnect: Attempt ${index + 1} of ${delays.size} in ${delayMs / 1000}s...")
+                delay(delayMs)
+                if (isUserInitiatedDisconnect || _connectionState.value == ConnectionState.CONNECTED) break
+                
+                // 发起重连
+                connectInternal(context, device, isRetry = true)
+                
+                // 等待连接结果，最多等待 10 秒
+                var checkCount = 0
+                while (_connectionState.value == ConnectionState.CONNECTING && checkCount < 20) {
+                    delay(500)
+                    checkCount++
+                }
+                
+                if (_connectionState.value == ConnectionState.CONNECTED) {
+                    Log.i(TAG, "AutoReconnect: Reconnected successfully!")
+                    isReconnecting = false
+                    return@launch
+                }
+            }
+            Log.w(TAG, "AutoReconnect: All attempts failed.")
+            isReconnecting = false
+        }
+    }
+
     private fun parseWatchData(payload: String) {
         try {
             val json = JSONObject(payload)
@@ -282,11 +366,43 @@ object WatchBluetoothClient {
                         _steps.value = value
                     }
                 }
+                "SLEEP" -> {
+                    val duration = json.optInt("duration", 0)
+                    val quality = json.optString("quality", "Good")
+                    if (duration > 0) {
+                        _sleepDuration.value = duration
+                        _sleepQuality.value = quality
+                    }
+                }
+                "EXERCISE" -> {
+                    val duration = json.optInt("duration", 0)
+                    val calories = json.optInt("calories", 0)
+                    val exType = json.optString("exerciseType", "Resting")
+                    _exerciseDuration.value = duration
+                    _exerciseCalories.value = calories
+                    _exerciseType.value = exType
+                }
                 "RECENT_DATA", "MOCK_DATA" -> {
                     val hr = json.optInt("heartRate", 0)
                     val stepsVal = json.optInt("steps", 0)
                     if (hr > 0) _heartRate.value = hr
                     if (stepsVal >= 0) _steps.value = stepsVal
+                    
+                    val sleepDur = json.optInt("sleepDuration", 0)
+                    val sleepQual = json.optString("sleepQuality", "")
+                    if (sleepDur > 0) {
+                        _sleepDuration.value = sleepDur
+                        _sleepQuality.value = sleepQual
+                    }
+                    
+                    val exeDur = json.optInt("exerciseDuration", 0)
+                    val exeCal = json.optInt("exerciseCalories", 0)
+                    val exeTyp = json.optString("exerciseType", "Resting")
+                    if (exeDur > 0 || exeCal > 0) {
+                        _exerciseDuration.value = exeDur
+                        _exerciseCalories.value = exeCal
+                        _exerciseType.value = exeTyp
+                    }
                 }
             }
         } catch (e: Exception) {

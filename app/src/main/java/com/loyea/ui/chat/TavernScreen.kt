@@ -11,6 +11,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -202,20 +205,47 @@ fun TavernScreen(
                 }
             }
 
-            // 角色卡瀑布流/列表
-            LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                items(characterCardList) { card ->
-                    TavernCardItem(
-                        card = card,
-                        appLanguage = appLanguage,
-                        onExportPng = { shareCharacterCardPng(context, card) },
-                        onExportJson = { shareCharacterCardJson(context, card) },
-                        onEdit = { cardToEdit = card },
-                        onDelete = { cardToDelete = card }
-                    )
+            val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+            val screenWidthDp = configuration.screenWidthDp
+            val columns = when {
+                screenWidthDp >= 900 -> 3
+                screenWidthDp >= 600 -> 2
+                else -> 1
+            }
+
+            if (columns > 1) {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(columns),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(characterCardList) { card ->
+                        TavernCardItem(
+                            card = card,
+                            appLanguage = appLanguage,
+                            onExportPng = { shareCharacterCardPng(context, card) },
+                            onExportJson = { shareCharacterCardJson(context, card) },
+                            onEdit = { cardToEdit = card },
+                            onDelete = { cardToDelete = card }
+                        )
+                    }
+                }
+            } else {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(characterCardList) { card ->
+                        TavernCardItem(
+                            card = card,
+                            appLanguage = appLanguage,
+                            onExportPng = { shareCharacterCardPng(context, card) },
+                            onExportJson = { shareCharacterCardJson(context, card) },
+                            onEdit = { cardToEdit = card },
+                            onDelete = { cardToDelete = card }
+                        )
+                    }
                 }
             }
         }

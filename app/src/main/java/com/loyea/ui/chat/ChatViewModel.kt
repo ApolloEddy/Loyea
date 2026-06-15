@@ -989,9 +989,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             var toolOutput: String
                             var success: Boolean
 
+                            val useSystemTime = activeSession.value?.useSystemTime ?: false
+                            val isWebSearch = toolCall.name.equals("web_search", ignoreCase = true) || 
+                                              toolCall.name.endsWith("__web_search", ignoreCase = true) || 
+                                              toolCall.name.endsWith(".web_search", ignoreCase = true)
+
                             if (isVoiceReply) {
                                 toolOutput = "语音回复已发送"
                                 success = true
+                            } else if (!useSystemTime && !isWebSearch) {
+                                toolOutput = "Permission Denied: Physical perception is globally disabled by the user."
+                                success = false
                             } else {
                                 try {
                                     val result = mcpManager.callTool(

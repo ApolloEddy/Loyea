@@ -117,111 +117,124 @@ fun SettingsScreen(
         subPage = SettingsSubPage.MAIN
     }
 
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    val isWideScreen = configuration.screenWidthDp >= 600
+
     // 使用 AnimatedContent 实现极具滑移动画质感的左右推拉过场
-    AnimatedContent(
-        targetState = subPage,
-        transitionSpec = {
-            if (targetState == SettingsSubPage.MAIN) {
-                // 返回一级页：左进右出
-                (slideInHorizontally { -it } + fadeIn()).togetherWith(slideOutHorizontally { it } + fadeOut())
-            } else {
-                // 进入二级页：右进左出
-                (slideInHorizontally { it } + fadeIn()).togetherWith(slideOutHorizontally { -it } + fadeOut())
-            }
-        },
-        label = "SubPageTransition",
-        modifier = modifier.fillMaxSize()
-    ) { currentPage ->
-        when (currentPage) {
-            SettingsSubPage.MAIN -> {
-                SettingsMainLayout(
-                    currentTheme = currentTheme,
-                    userName = userName,
-                    onUserNameSave = onUserNameSave,
-                    apiConfigList = apiConfigList,
-                    activeConfigId = activeConfigId,
-                    appLanguage = appLanguage,
-                    userBubbleColor = userBubbleColor,
-                    mcpConfigs = mcpConfigs,
-                    mcpStates = mcpStates,
-                    onNavigateToApi = { subPage = SettingsSubPage.API_CONFIG },
-                    onNavigateToTheme = { subPage = SettingsSubPage.THEME_SETTINGS },
-                    onNavigateToMcp = { subPage = SettingsSubPage.MCP_CONFIG },
-                    onNavigateToSensor = { subPage = SettingsSubPage.PHYSICAL_SENSOR },
-                    onNavigateToMemory = { subPage = SettingsSubPage.MEMORY_SETTINGS },
-                    onNavigateToToolAuth = { subPage = SettingsSubPage.TOOL_AUTHORIZATION },
-                    onNavigateToMultimodal = { subPage = SettingsSubPage.MULTIMODAL_SETTINGS },
-                    onBackClick = onBackClick
-                )
-            }
-            SettingsSubPage.MEMORY_SETTINGS -> {
-                MemorySettingsLayout(
-                    apiConfigList = apiConfigList,
-                    activeConfigId = activeConfigId,
-                    appLanguage = appLanguage,
-                    onBackClick = { subPage = SettingsSubPage.MAIN }
-                )
-            }
-            SettingsSubPage.API_CONFIG -> {
-                ApiConfigLayout(
-                    apiConfigList = apiConfigList,
-                    activeConfigId = activeConfigId,
-                    appLanguage = appLanguage,
-                    onApiConfigListSave = onApiConfigListSave,
-                    onActiveConfigSelect = onActiveConfigSelect,
-                    onBackClick = { subPage = SettingsSubPage.MAIN }
-                )
-            }
-            SettingsSubPage.THEME_SETTINGS -> {
-                ThemeSettingsLayout(
-                    currentTheme = currentTheme,
-                    onThemeChange = onThemeChange,
-                    appLanguage = appLanguage,
-                    onAppLanguageChange = onAppLanguageChange,
-                    userBubbleColor = userBubbleColor,
-                    onUserBubbleColorChange = onUserBubbleColorChange,
-                    onBackClick = { subPage = SettingsSubPage.MAIN }
-                )
-            }
-            SettingsSubPage.MCP_CONFIG -> {
-                McpConfigLayout(
-                    mcpConfigs = mcpConfigs,
-                    mcpStates = mcpStates,
-                    onMcpConfigsSave = onMcpConfigsSave,
-                    getMcpToolsForServer = getMcpToolsForServer,
-                    appLanguage = appLanguage,
-                    onBackClick = { subPage = SettingsSubPage.MAIN }
-                )
-            }
-            SettingsSubPage.PHYSICAL_SENSOR -> {
-                PhysicalSensorLayout(
-                    isWatchConnected = isWatchConnected,
-                    onWatchConnectedChange = onWatchConnectedChange,
-                    onWatchReconnect = onWatchReconnect,
-                    isWatchMoving = isWatchMoving,
-                    onWatchMovingChange = onWatchMovingChange,
-                    useRealLocation = useRealLocation,
-                    onUseRealLocationChange = onUseRealLocationChange,
-                    mockLocation = mockLocation,
-                    onMockLocationSave = onMockLocationSave,
-                    appLanguage = appLanguage,
-                    onHealthConnectClick = onHealthConnectClick,
-                    onBackClick = { subPage = SettingsSubPage.MAIN }
-                )
-            }
-            SettingsSubPage.TOOL_AUTHORIZATION -> {
-                ToolAuthorizationLayout(
-                    viewModel = viewModel,
-                    appLanguage = appLanguage,
-                    onBackClick = { subPage = SettingsSubPage.MAIN }
-                )
-            }
-            SettingsSubPage.MULTIMODAL_SETTINGS -> {
-                MultimodalSettingsLayout(
-                    viewModel = viewModel,
-                    appLanguage = appLanguage,
-                    onBackClick = { subPage = SettingsSubPage.MAIN }
-                )
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+        contentAlignment = Alignment.TopCenter
+    ) {
+        AnimatedContent(
+            targetState = subPage,
+            transitionSpec = {
+                if (targetState == SettingsSubPage.MAIN) {
+                    // 返回一级页：左进右出
+                    (slideInHorizontally { -it } + fadeIn()).togetherWith(slideOutHorizontally { it } + fadeOut())
+                } else {
+                    // 进入二级页：右进左出
+                    (slideInHorizontally { it } + fadeIn()).togetherWith(slideOutHorizontally { -it } + fadeOut())
+                }
+            },
+            label = "SubPageTransition",
+            modifier = modifier
+                .fillMaxHeight()
+                .fillMaxWidth(if (isWideScreen) 0.85f else 1f)
+                .widthIn(max = 720.dp)
+        ) { currentPage ->
+            when (currentPage) {
+                SettingsSubPage.MAIN -> {
+                    SettingsMainLayout(
+                        currentTheme = currentTheme,
+                        userName = userName,
+                        onUserNameSave = onUserNameSave,
+                        apiConfigList = apiConfigList,
+                        activeConfigId = activeConfigId,
+                        appLanguage = appLanguage,
+                        userBubbleColor = userBubbleColor,
+                        mcpConfigs = mcpConfigs,
+                        mcpStates = mcpStates,
+                        onNavigateToApi = { subPage = SettingsSubPage.API_CONFIG },
+                        onNavigateToTheme = { subPage = SettingsSubPage.THEME_SETTINGS },
+                        onNavigateToMcp = { subPage = SettingsSubPage.MCP_CONFIG },
+                        onNavigateToSensor = { subPage = SettingsSubPage.PHYSICAL_SENSOR },
+                        onNavigateToMemory = { subPage = SettingsSubPage.MEMORY_SETTINGS },
+                        onNavigateToToolAuth = { subPage = SettingsSubPage.TOOL_AUTHORIZATION },
+                        onNavigateToMultimodal = { subPage = SettingsSubPage.MULTIMODAL_SETTINGS },
+                        onBackClick = onBackClick
+                    )
+                }
+                SettingsSubPage.MEMORY_SETTINGS -> {
+                    MemorySettingsLayout(
+                        apiConfigList = apiConfigList,
+                        activeConfigId = activeConfigId,
+                        appLanguage = appLanguage,
+                        onBackClick = { subPage = SettingsSubPage.MAIN }
+                    )
+                }
+                SettingsSubPage.API_CONFIG -> {
+                    ApiConfigLayout(
+                        apiConfigList = apiConfigList,
+                        activeConfigId = activeConfigId,
+                        appLanguage = appLanguage,
+                        onApiConfigListSave = onApiConfigListSave,
+                        onActiveConfigSelect = onActiveConfigSelect,
+                        onBackClick = { subPage = SettingsSubPage.MAIN }
+                    )
+                }
+                SettingsSubPage.THEME_SETTINGS -> {
+                    ThemeSettingsLayout(
+                        currentTheme = currentTheme,
+                        onThemeChange = onThemeChange,
+                        appLanguage = appLanguage,
+                        onAppLanguageChange = onAppLanguageChange,
+                        userBubbleColor = userBubbleColor,
+                        onUserBubbleColorChange = onUserBubbleColorChange,
+                        onBackClick = { subPage = SettingsSubPage.MAIN }
+                    )
+                }
+                SettingsSubPage.MCP_CONFIG -> {
+                    McpConfigLayout(
+                        mcpConfigs = mcpConfigs,
+                        mcpStates = mcpStates,
+                        onMcpConfigsSave = onMcpConfigsSave,
+                        getMcpToolsForServer = getMcpToolsForServer,
+                        appLanguage = appLanguage,
+                        onBackClick = { subPage = SettingsSubPage.MAIN }
+                    )
+                }
+                SettingsSubPage.PHYSICAL_SENSOR -> {
+                    PhysicalSensorLayout(
+                        isWatchConnected = isWatchConnected,
+                        onWatchConnectedChange = onWatchConnectedChange,
+                        onWatchReconnect = onWatchReconnect,
+                        isWatchMoving = isWatchMoving,
+                        onWatchMovingChange = onWatchMovingChange,
+                        useRealLocation = useRealLocation,
+                        onUseRealLocationChange = onUseRealLocationChange,
+                        mockLocation = mockLocation,
+                        onMockLocationSave = onMockLocationSave,
+                        appLanguage = appLanguage,
+                        onHealthConnectClick = onHealthConnectClick,
+                        onBackClick = { subPage = SettingsSubPage.MAIN }
+                    )
+                }
+                SettingsSubPage.TOOL_AUTHORIZATION -> {
+                    ToolAuthorizationLayout(
+                        viewModel = viewModel,
+                        appLanguage = appLanguage,
+                        onBackClick = { subPage = SettingsSubPage.MAIN }
+                    )
+                }
+                SettingsSubPage.MULTIMODAL_SETTINGS -> {
+                    MultimodalSettingsLayout(
+                        viewModel = viewModel,
+                        appLanguage = appLanguage,
+                        onBackClick = { subPage = SettingsSubPage.MAIN }
+                    )
+                }
             }
         }
     }

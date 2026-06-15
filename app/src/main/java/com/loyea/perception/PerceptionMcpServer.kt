@@ -122,8 +122,31 @@ class PerceptionMcpServer(private val context: Context) {
     }
 
     suspend fun callTool(name: String, arguments: Map<String, Any>?): JsonRpcResponse = withContext(Dispatchers.IO) {
+        val prefs = context.getSharedPreferences("loyea_prefs", Context.MODE_PRIVATE)
         try {
-            val resultText = when (name) {
+            val cleanName = name.substringAfterLast("__").substringAfterLast(".")
+            
+            // 进行细粒度权限校验
+            val authErrorText = when (cleanName) {
+                "get_location" -> if (!prefs.getBoolean("tool_auth_location", true)) "Permission Denied: Location access is unauthorized by the user." else null
+                "get_live_weather", "get_weather_forecast" -> if (!prefs.getBoolean("tool_auth_weather", true)) "Permission Denied: Weather access is unauthorized by the user." else null
+                "get_environment_light" -> if (!prefs.getBoolean("tool_auth_environment", true)) "Permission Denied: Environment light access is unauthorized by the user." else null
+                "get_battery_status" -> if (!prefs.getBoolean("tool_auth_device", true)) "Permission Denied: Device battery/power access is unauthorized by the user." else null
+                "get_bluetooth_status" -> if (!prefs.getBoolean("tool_auth_bluetooth_activity", true)) "Permission Denied: Bluetooth status access is unauthorized by the user." else null
+                "get_activity_state" -> if (!prefs.getBoolean("tool_auth_bluetooth_activity", true)) "Permission Denied: Activity state access is unauthorized by the user." else null
+                "get_health_data" -> if (!prefs.getBoolean("tool_auth_health", true)) "Permission Denied: Health data access is unauthorized by the user." else null
+                else -> null
+            }
+
+            if (authErrorText != null) {
+                return@withContext JsonRpcResponse(
+                    jsonrpc = "2.0",
+                    idStr = null,
+                    error = JsonRpcError(code = -32602, message = authErrorText)
+                )
+            }
+
+            val resultText = when (cleanName) {
                 "get_location" -> {
                     "Location: ${perceptionManager.locationProvider.getCurrentLocation()}"
                 }
@@ -152,6 +175,7 @@ class PerceptionMcpServer(private val context: Context) {
                 "get_health_data" -> {
                     val sb = StringBuilder()
                     val isRealWatchConnected = com.loyea.bluetooth.WatchBluetoothClient.connectionState.value == com.loyea.bluetooth.WatchBluetoothClient.ConnectionState.CONNECTED
+                    val isWatchSyncEnabled = prefs.getBoolean("sim_watch_connected", false)
                     
                     // --- 心率获取 ---
                     if (isRealWatchConnected) {
@@ -162,10 +186,9 @@ class PerceptionMcpServer(private val context: Context) {
                         } else {
                             sb.append("Heart Rate: Waiting for sensor... [Smartwatch Bluetooth]\n")
                         }
-                    } else {
+                    } else if (isWatchSyncEnabled) {
                         val hrStatus = healthProvider.getHeartRateStatus()
-                        if ((hrStatus == "Permission Denied" || hrStatus == "No Data (Check OHealth Sync)" || hrStatus == "Service Unavailable" || hrStatus == "No Sample Data") 
-                            && perceptionManager.watchProvider.isWatchConnected()) {
+                        if (hrStatus == "Permission Denied" || hrStatus == "No Data (Check OHealth Sync)" || hrStatus == "Service Unavailable" || hrStatus == "No Sample Data") {
                             val mockHR = perceptionManager.watchProvider.getHeartRateBpm()
                             val state = perceptionManager.watchProvider.getMovementState()
                             if (mockHR > 0) {
@@ -176,27 +199,31 @@ class PerceptionMcpServer(private val context: Context) {
                         } else {
                             sb.append("Heart Rate: $hrStatus\n")
                         }
+                    } else {
+                        val hrStatus = healthProvider.getHeartRateStatus()
+                        sb.append("Heart Rate: $hrStatus\n")
                     }
                     
                     // --- 步数获取 ---
                     if (isRealWatchConnected) {
                         val realSteps = com.loyea.bluetooth.WatchBluetoothClient.steps.value
                         sb.append("Today's Steps: $realSteps [Smartwatch Bluetooth]\n")
-                    } else {
+                    } else if (isWatchSyncEnabled) {
                         val stepsStatus = healthProvider.getStepsStatus()
                         if (stepsStatus != "Permission Denied" && stepsStatus != "Service Unavailable") {
                             val mockSteps = com.loyea.bluetooth.WatchBluetoothClient.steps.value
-                            if ((stepsStatus == "No Data" || stepsStatus == "0") && perceptionManager.watchProvider.isWatchConnected() && mockSteps > 0) {
+                            if ((stepsStatus == "No Data" || stepsStatus == "0") && mockSteps > 0) {
                                 sb.append("Today's Steps: $mockSteps [Simulated]\n")
                             } else {
                                 sb.append("Today's Steps: $stepsStatus\n")
                             }
-                        } else if (perceptionManager.watchProvider.isWatchConnected()) {
+                        } else {
                             val mockSteps = com.loyea.bluetooth.WatchBluetoothClient.steps.value
                             sb.append("Today's Steps: $mockSteps [Simulated]\n")
-                        } else {
-                            sb.append("Today's Steps: $stepsStatus\n")
                         }
+                    } else {
+                        val stepsStatus = healthProvider.getStepsStatus()
+                        sb.append("Today's Steps: $stepsStatus\n")
                     }
                     
                     val bp = healthProvider.getBloodPressureStatus()

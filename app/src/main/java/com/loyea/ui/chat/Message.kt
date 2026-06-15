@@ -41,6 +41,20 @@ data class Message(
     val audioUrl: String? = null,
     val audioDuration: Int = 0,
     val isAudioPlaying: Boolean = false,
-    val isAudioSynthesizing: Boolean = false
+    val isAudioSynthesizing: Boolean = false,
+
+    // AI 多版本回复与重新生成支持
+    val versions: List<MessageVersion> = emptyList(),
+    val activeVersionIndex: Int = 0
 )
+
+@Immutable
+data class MessageVersion(
+    val content: String,
+    val thoughts: String? = null,
+    val mcpCalls: List<McpCall> = emptyList(),
+    val audioUrl: String? = null,
+    val audioDuration: Int = 0
+)
+
 

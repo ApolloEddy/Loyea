@@ -29,8 +29,9 @@ class BluetoothWatchProvider(private val context: Context) : WatchProvider {
             if (realHr > 0) return realHr
         }
         
-        // 2. 如果真实蓝牙未连接，则读取模拟数据（若模拟连接开启）
-        if (isWatchConnected()) {
+        // 2. 如果真实蓝牙未连接，则读取模拟数据（仅在模拟连接开关开启时）
+        val isMockConnected = prefs.getBoolean("sim_watch_connected", false)
+        if (isMockConnected) {
             val isMoving = prefs.getBoolean("sim_watch_moving", false)
             val mockHr = if (isMoving) {
                 (100..140).random()
