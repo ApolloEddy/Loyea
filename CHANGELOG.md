@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased] - 2026-06-15
 
 ### Added (新增)
+- **多厂商 ASR (STT) 协议模板选择与自定义参数自愈**：
+  - 在 [SettingsScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/settings/SettingsScreen.kt) 的“语音输入 (STT)”卡片中引入了“语音输入协议模板”下拉选择器，与 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中的 `sttProviderTemplate` 变量实现双向绑定。
+  - 支持“自动判定服务商协议 (Auto)”、“OpenAI / Whisper 标准 (Multipart)”、“小米 MiMo / 多模态 ASR (ChatCompletions)”以及“完全自定义 (Custom)”等四种模板协议。
+  - 在 [LlmClient.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/LlmClient.kt) 的 `transcribeAudio` 音频转写中，底层根据所选模板执行针对性格式封包。当用户在中转网关中遇到 MiMo 多模态 JSON ASR 校验报 400 错时，可一键切换为 OpenAI/Whisper 的标准 Multipart (Form-data) 接口，直接使用 `/v1/audio/transcriptions` 绕过校验屏障，彻底实现协议兼容自愈。
 - **全局功能描述 README.md 彻底重构**：
   - 彻底重构了根目录下的 [README.md](file:///D:/CodingProjects/Android/Loyea/README.md) 描述文档，将其从原先的增量“新特性记录”改版为对物理感知、脑内存档与 Graph RAG、智能手表蓝牙生态、Compose 纸张交互美学等四大系统模块的全面架构与功能说明书，极大提升了项目对外的产品力展示。
 - **动态音轨波形图与声音指纹系统**：

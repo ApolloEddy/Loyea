@@ -3608,6 +3608,7 @@ fun MultimodalSettingsLayout(
     val isUpdatingTemplates = viewModel?.isUpdatingTemplates?.value ?: false
     val updateTemplatesStatus = viewModel?.updateTemplatesStatus?.value ?: ""
     val ttsProviderTemplate = viewModel?.ttsProviderTemplate?.value ?: "Auto"
+    val sttProviderTemplate = viewModel?.sttProviderTemplate?.value ?: "Auto"
     val ttsTemplates = viewModel?.ttsTemplates?.value ?: emptyList()
 
     val apiConfigList = viewModel?.apiConfigList?.value ?: emptyList()
@@ -4177,6 +4178,67 @@ fun MultimodalSettingsLayout(
 
                         if (sttEnabled) {
                             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
+                            
+                            // 1. 协议模板选择
+                            var sttProtocolDropdownExpanded by remember { mutableStateOf(false) }
+                            val sttProtocolText = when (sttProviderTemplate) {
+                                "Auto" -> if (isEn) "Auto Detect" else "自动判定服务商协议"
+                                "OpenAI" -> "OpenAI / Whisper 标准 (Multipart)"
+                                "MiMo" -> "小米 MiMo / 多模态 ASR (ChatCompletions)"
+                                "Custom" -> if (isEn) "Custom / Others" else "完全自定义 / 其他中转"
+                                else -> sttProviderTemplate
+                            }
+
+                            Column {
+                                Text(
+                                    text = if (isEn) "STT Protocol Template" else "语音输入协议模板",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                                        .clickable { sttProtocolDropdownExpanded = true }
+                                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(text = sttProtocolText, fontSize = 13.sp)
+                                        Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(20.dp))
+                                    }
+                                    DropdownMenu(
+                                        expanded = sttProtocolDropdownExpanded,
+                                        onDismissRequest = { sttProtocolDropdownExpanded = false }
+                                    ) {
+                                        val options = listOf(
+                                            Pair("Auto", if (isEn) "Auto Detect" else "自动判定服务商协议"),
+                                            Pair("OpenAI", "OpenAI / Whisper 标准 (Multipart)"),
+                                            Pair("MiMo", "小米 MiMo / 多模态 ASR (ChatCompletions)"),
+                                            Pair("Custom", if (isEn) "Custom / Others" else "完全自定义 / 其他中转")
+                                        )
+                                        options.forEach { (key, name) ->
+                                            DropdownMenuItem(
+                                                text = { Text(name, fontSize = 13.sp) },
+                                                onClick = {
+                                                    viewModel?.updateMultimodalSetting("stt_provider_template", key)
+                                                    sttProtocolDropdownExpanded = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(10.dp))
+
                             MultimodalConfigForm(
                                 configId = sttConfigId,
                                 modelName = sttModelName,

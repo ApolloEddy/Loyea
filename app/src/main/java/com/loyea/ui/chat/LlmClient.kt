@@ -1250,7 +1250,8 @@ class LlmClient {
     suspend fun transcribeAudio(
         config: com.loyea.ui.settings.ApiConfig,
         audioFile: java.io.File,
-        model: String
+        model: String,
+        providerTemplate: String = "Auto"
     ): String? = withContext(Dispatchers.IO) {
         lastAsrError = null
         if (config.apiKey.isBlank()) {
@@ -1258,7 +1259,12 @@ class LlmClient {
             return@withContext null
         }
         try {
-            val isMiMo = config.provider.equals("MiMo", ignoreCase = true)
+            val effectiveProvider = if (providerTemplate == "Auto") {
+                config.provider
+            } else {
+                providerTemplate
+            }
+            val isMiMo = effectiveProvider.equals("MiMo", ignoreCase = true)
             val targetModel = if (isMiMo) {
                 if (model.isBlank() || model.equals("whisper-1", ignoreCase = true) || model.contains("default", ignoreCase = true)) {
                     "mimo-v2.5-asr"

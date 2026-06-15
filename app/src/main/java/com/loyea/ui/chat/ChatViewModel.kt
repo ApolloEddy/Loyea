@@ -201,6 +201,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     var ttsProviderTemplate = mutableStateOf("Auto")
         private set
+    var sttProviderTemplate = mutableStateOf("Auto")
+        private set
     
     var ttsTemplates = mutableStateOf<List<TtsTemplate>>(emptyList())
         private set
@@ -430,6 +432,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         imageGenConfigId.value = prefs.getString("image_gen_config_id", "") ?: ""
         
         ttsProviderTemplate.value = prefs.getString("tts_provider_template", "Auto") ?: "Auto"
+        sttProviderTemplate.value = prefs.getString("stt_provider_template", "Auto") ?: "Auto"
         
         val savedJson = prefs.getString("multimodal_templates_json", "") ?: ""
         if (savedJson.isNotBlank()) {
@@ -1589,6 +1592,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 ttsProviderTemplate.value = v
                 prefs.edit().putString("tts_provider_template", v).apply()
             }
+            "stt_provider_template" -> {
+                val v = value as String
+                sttProviderTemplate.value = v
+                prefs.edit().putString("stt_provider_template", v).apply()
+            }
         }
     }
 
@@ -2366,8 +2374,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             activeApiConfig.value
         }
-        val rawText = llmClient.transcribeAudio(targetSttConfig, file, sttModelName.value)
-        return if (targetSttConfig.provider.equals("MiMo", ignoreCase = true)) {
+        val rawText = llmClient.transcribeAudio(targetSttConfig, file, sttModelName.value, sttProviderTemplate.value)
+        return if (targetSttConfig.provider.equals("MiMo", ignoreCase = true) || sttProviderTemplate.value.equals("MiMo", ignoreCase = true)) {
             cleanVoiceText(rawText)
         } else {
             rawText
@@ -2389,9 +2397,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 activeApiConfig.value
             }
-            val text = llmClient.transcribeAudio(targetSttConfig, file, sttModelName.value)
+            val text = llmClient.transcribeAudio(targetSttConfig, file, sttModelName.value, sttProviderTemplate.value)
             
-            val cleanedText = if (targetSttConfig.provider.equals("MiMo", ignoreCase = true)) {
+            val cleanedText = if (targetSttConfig.provider.equals("MiMo", ignoreCase = true) || sttProviderTemplate.value.equals("MiMo", ignoreCase = true)) {
                 cleanVoiceText(text)
             } else {
                 text
