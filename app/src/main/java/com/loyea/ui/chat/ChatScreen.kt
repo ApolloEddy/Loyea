@@ -64,6 +64,12 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.compose.foundation.Image
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.foundation.combinedClickable
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -98,6 +104,12 @@ fun ChatScreen(
 
     val isEn = appLanguage == "en"
     val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    
+    val coroutineScope = rememberCoroutineScope()
+    val haptic = LocalHapticFeedback.current
+    var dragOffsetX by remember { mutableStateOf(0f) }
+    var dragOffsetY by remember { mutableStateOf(0f) }
+    var recordDragState by remember { mutableStateOf("IDLE") }
 
     var inputText by remember { mutableStateOf(TextFieldValue("")) }
     var showPersonaSelector by remember { mutableStateOf(false) }
@@ -142,7 +154,8 @@ fun ChatScreen(
         }
     }
 
-    Scaffold(
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
                 title = {
@@ -221,6 +234,7 @@ fun ChatScreen(
                         message = message,
                         userBubbleColor = userBubbleColor,
                         currentlyPlayingAudioId = viewModel?.currentlyPlayingAudioId?.value,
+                        currentlyPlayingAudioProgress = viewModel?.currentlyPlayingAudioProgress?.value ?: 0f,
                         onCopy = {
                             clipboardManager.setText(AnnotatedString(message.content))
                             Toast.makeText(context, if (isEn) "Copied to clipboard" else "已复制到剪贴板", Toast.LENGTH_SHORT).show()
@@ -232,13 +246,45 @@ fun ChatScreen(
                             onEditMessage(message.id, newText)
                         },
                         onSpeak = {
-                            viewModel?.playTts(message.id, message.content)
+                            if (!message.audioUrl.isNullOrBlank()) {
+                                viewModel?.playAudioUrl(message.id, message.audioUrl)
+                            } else {
+                                viewModel?.playTts(message.id, message.content)
+                            }
                         },
                         onMcpVoicePlay = { mcpCallId ->
                             viewModel?.playMcpVoice(mcpCallId)
                         },
                         onImageClick = { path ->
                             lightboxImagePath = path
+                        },
+                        onTranscribe = { msg ->
+                            val audioPath = msg.audioUrl
+                            if (!audioPath.isNullOrBlank() && viewModel != null) {
+                                val audioFile = File(audioPath)
+                                if (audioFile.exists()) {
+                                    Toast.makeText(context, "正在重新转写语音...", Toast.LENGTH_SHORT).show()
+                                    coroutineScope.launch {
+                                        val transcribedText = viewModel.transcribeAudio(audioFile)
+                                        if (transcribedText != null) {
+                                            viewModel.updateMessageContent(msg.id, transcribedText)
+                                            Toast.makeText(context, "转写成功", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            val rawError = viewModel.lastAsrError ?: ""
+                                            val formatted = when {
+                                                rawError.contains("429") -> "服务商额度已耗尽或被限流 (HTTP 429)，请检查余额"
+                                                rawError.contains("401") -> "API Key 无效或过期 (HTTP 401)"
+                                                rawError.contains("400") -> "接口参数错误 (HTTP 400)，请确保模型名称可用"
+                                                rawError.isNotBlank() -> rawError
+                                                else -> "请稍后重试"
+                                            }
+                                            Toast.makeText(context, "转写失败：$formatted", Toast.LENGTH_LONG).show()
+                                        }
+                                    }
+                                } else {
+                                    Toast.makeText(context, "语音文件已丢失，无法转写", Toast.LENGTH_SHORT).show()
+                                }
+                            }
                         }
                     )
                 }
@@ -418,8 +464,14 @@ fun ChatScreen(
                                 onClick = {
                                     viewModel?.stopRecording { file, duration ->
                                         if (file != null && duration > 0) {
-                                            viewModel.transcribeAndSendAudio(file, duration) {
-                                                Toast.makeText(context, if (isEn) "Speech recognition failed" else "语音识别失败，未提取到有效文字", Toast.LENGTH_SHORT).show()
+                                            viewModel.transcribeAndSendAudio(file, duration) { errorMsg ->
+                                                val formatted = when {
+                                                    errorMsg.contains("429") -> "服务商额度已耗尽或被限流 (HTTP 429)，请检查余额"
+                                                    errorMsg.contains("401") -> "API Key 无效或过期 (HTTP 401)"
+                                                    errorMsg.contains("400") -> "接口参数错误 (HTTP 400)，请确保模型名称可用"
+                                                    else -> errorMsg
+                                                }
+                                                Toast.makeText(context, if (isEn) "Speech recognition failed: $formatted" else "语音识别失败：$formatted", Toast.LENGTH_LONG).show()
                                             }
                                         }
                                     }
@@ -471,14 +523,86 @@ fun ChatScreen(
                 onAttach = {
                     pickMediaLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                 },
-                onVoiceClick = {
+                onRecordStart = {
                     val isSttEnabled = viewModel?.enableStt?.value ?: true
-                    if (isSttEnabled) {
-                        viewModel?.startRecording()
+                    if (isSttEnabled && viewModel != null) {
+                        recordDragState = "RECORDING"
+                        viewModel.startRecording()
                     } else {
                         Toast.makeText(context, if (isEn) "STT is disabled in settings" else "语音输入功能在设置中已被关闭", Toast.LENGTH_SHORT).show()
                     }
                 },
+                onRecordDrag = { x, y ->
+                    dragOffsetX = x
+                    dragOffsetY = y
+                    if (y < -150f) {
+                        if (recordDragState != "CANCEL") {
+                            recordDragState = "CANCEL"
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        }
+                    } else if (x > 120f && y < -50f) {
+                        if (recordDragState != "TRANSCRIBE") {
+                            recordDragState = "TRANSCRIBE"
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        }
+                    } else {
+                        if (recordDragState != "RECORDING") {
+                            recordDragState = "RECORDING"
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        }
+                    }
+                },
+                onRecordEnd = { _, _ ->
+                    if (viewModel != null) {
+                        val finalState = recordDragState
+                        recordDragState = "IDLE"
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        
+                        when (finalState) {
+                            "CANCEL" -> {
+                                viewModel.stopRecording { file, _ ->
+                                    if (file != null) {
+                                        try { file.delete() } catch (e: Exception) {}
+                                    }
+                                    Toast.makeText(context, "录音已取消", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                            "TRANSCRIBE" -> {
+                                Toast.makeText(context, "正在转写并发送...", Toast.LENGTH_SHORT).show()
+                                viewModel.stopRecording { file, _ ->
+                                    if (file != null) {
+                                        coroutineScope.launch {
+                                            val text = viewModel.transcribeAudio(file)
+                                            if (!text.isNullOrBlank()) {
+                                                onSendMessage(text, null, file.absolutePath, 0)
+                                            } else {
+                                                val errorReason = viewModel.lastAsrError ?: ""
+                                                val formatted = when {
+                                                    errorReason.contains("429") -> "服务商额度已耗尽或被限流 (HTTP 429)，请检查余额"
+                                                    errorReason.contains("401") -> "API Key 无效或过期 (HTTP 401)"
+                                                    errorReason.contains("400") -> "接口参数错误 (HTTP 400)，请确保模型名称可用"
+                                                    errorReason.isNotBlank() -> errorReason
+                                                    else -> "未提取到有效文字"
+                                                }
+                                                Toast.makeText(context, "转写失败：$formatted", Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            else -> {
+                                viewModel.stopRecording { file, duration ->
+                                    if (file != null) {
+                                        viewModel.transcribeAndSendAudio(file, duration) { errorMsg ->
+                                            Toast.makeText(context, if (isEn) "Speech recognition failed: $errorMsg" else "语音识别失败：$errorMsg", Toast.LENGTH_LONG).show()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                haptic = haptic,
                 isThinking = isThinking,
                 isMcpRunning = isMcpRunning
             )
@@ -525,8 +649,16 @@ fun ChatScreen(
                 }
             }
         }
+    } // 闭合 Scaffold
+    
+    if (viewModel?.isRecording?.value == true) {
+        RecordingOverlay(
+            dragState = recordDragState,
+            amplitude = viewModel.recordingAmplitude.value
+        )
     }
-}
+} // 闭合 Box
+} // 闭合 ChatScreen
 
 // 1:1 复刻 Claude 顶部模型选择胶囊 (增强角色卡头像及双行文本解耦设计)
 @Composable
@@ -808,20 +940,31 @@ fun SelectPersonaContent(
     }
 }
 
-// 消息卡片项 (带上浮淡入级联微动效)
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun MessageItem(
     message: Message,
     userBubbleColor: String,
     currentlyPlayingAudioId: String?,
+    currentlyPlayingAudioProgress: Float = 0f,
     onCopy: () -> Unit,
     onToggleThoughts: () -> Unit,
     onEdit: (String) -> Unit,
     onSpeak: () -> Unit,
     onMcpVoicePlay: (String) -> Unit,
-    onImageClick: (String) -> Unit
+    onImageClick: (String) -> Unit,
+    onTranscribe: (Message) -> Unit
 ) {
     val isUser = message.sender == Sender.USER
+
+    var showTranscribedText by remember { mutableStateOf(false) }
+    var lastContent by remember { mutableStateOf(message.content) }
+    if (message.content != lastContent) {
+        if (lastContent.isBlank() && message.content.isNotBlank()) {
+            showTranscribedText = true
+        }
+        lastContent = message.content
+    }
 
     val animatableAlpha = remember { Animatable(0f) }
     val animatableOffsetY = remember { Animatable(30f) }
@@ -928,64 +1071,130 @@ fun MessageItem(
                 }
             }
 
-            // 2. 用户语音条展示 (带播放中三柱实时波形动效)
+            // 2. 用户语音条展示 (带播放中三柱实时波形动效，并支持点击播放原声，双击/长按/点击折叠展开转文字)
+            // 2. 用户语音条展示 (带播放中音轨进度与平滑正弦波跳动动效，并支持点击播放/暂停，双击/长按/点击译字图标折叠展开转文字)
             if (!message.audioUrl.isNullOrBlank()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth(0.85f)
-                        .padding(bottom = 6.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(bubbleBgColor ?: MaterialTheme.colorScheme.secondaryContainer)
-                        .clickable { onSpeak() }
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    Text(
-                        text = "${message.audioDuration}\"",
-                        color = bubbleTextColor,
-                        style = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier.padding(end = 8.dp)
+                val durationRatio = (message.audioDuration.toFloat() / 60f).coerceIn(0f, 1f)
+                val bubbleWidth = 140.dp + 100.dp * durationRatio
+                val baseModifier = Modifier
+                    .padding(bottom = 6.dp)
+                    .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 4.dp))
+                    .background(bubbleBgColor ?: MaterialTheme.colorScheme.secondaryContainer)
+                    .animateContentSize()
+                    .combinedClickable(
+                        onClick = { onSpeak() },
+                        onDoubleClick = {
+                            if (message.content.isBlank()) {
+                                onTranscribe(message)
+                            } else {
+                                showTranscribedText = !showTranscribedText
+                            }
+                        },
+                        onLongClick = {
+                            if (message.content.isBlank()) {
+                                onTranscribe(message)
+                            } else {
+                                showTranscribedText = !showTranscribedText
+                            }
+                        }
                     )
-                    if (message.isAudioPlaying) {
-                        Row(
-                            modifier = Modifier.height(16.dp).padding(start = 2.dp),
-                            horizontalArrangement = Arrangement.spacedBy(2.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                val bubbleModifier = if (!showTranscribedText || message.content.isBlank()) {
+                    baseModifier.width(bubbleWidth)
+                } else {
+                    baseModifier.widthIn(min = bubbleWidth).fillMaxWidth(0.85f)
+                }
+                Column(
+                    modifier = bubbleModifier
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        // 播放/暂停控制按钮
+                        val isPlaying = message.isAudioPlaying && currentlyPlayingAudioId == message.id
+                        val playIcon = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow
+                        Box(
+                            modifier = Modifier
+                                .size(28.dp)
+                                .clip(CircleShape)
+                                .background(bubbleTextColor.copy(alpha = 0.15f))
+                                .clickable { onSpeak() },
+                            contentAlignment = Alignment.Center
                         ) {
-                            for (j in 0 until 3) {
-                                val infiniteTransition = rememberInfiniteTransition(label = "audioPlayingUser_${message.id}_$j")
-                                val heightPercent by infiniteTransition.animateFloat(
-                                    initialValue = 0.2f,
-                                    targetValue = 1.0f,
-                                    animationSpec = infiniteRepeatable(
-                                        animation = tween(400 + j * 120, easing = LinearEasing),
-                                        repeatMode = RepeatMode.Reverse
-                                    ),
-                                    label = "AudioHeight_${message.id}_$j"
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .width(2.5.dp)
-                                        .fillMaxHeight(heightPercent)
-                                        .clip(CircleShape)
-                                        .background(bubbleTextColor)
+                            Icon(
+                                imageVector = playIcon,
+                                contentDescription = if (isPlaying) "Pause" else "Play",
+                                tint = bubbleTextColor,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+
+                        // 音轨进度与正弦波形
+                        val progress = if (isPlaying) currentlyPlayingAudioProgress else 0f
+                        VoicePlayTrack(
+                            messageId = message.id,
+                            isPlaying = isPlaying,
+                            progress = progress,
+                            tintColor = bubbleTextColor,
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        // 时长与极简转写按钮
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "${message.audioDuration}\"",
+                                color = bubbleTextColor,
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+
+                            Box(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .clip(CircleShape)
+                                    .background(bubbleTextColor.copy(alpha = 0.08f))
+                                    .clickable {
+                                        if (message.content.isBlank()) {
+                                            onTranscribe(message)
+                                        } else {
+                                            showTranscribedText = !showTranscribedText
+                                        }
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Translate,
+                                    contentDescription = "Transcribe",
+                                    tint = bubbleTextColor.copy(alpha = 0.8f),
+                                    modifier = Modifier.size(13.dp)
                                 )
                             }
                         }
-                    } else {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.VolumeUp,
-                            contentDescription = "Play Voice",
-                            tint = bubbleTextColor,
-                            modifier = Modifier.size(20.dp)
+                    }
+                    
+                    if (showTranscribedText && message.content.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        androidx.compose.material3.HorizontalDivider(
+                            color = bubbleTextColor.copy(alpha = 0.15f),
+                            thickness = 0.5.dp
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = message.content,
+                            color = bubbleTextColor.copy(alpha = 0.9f),
+                            style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Default),
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
                 }
             }
 
-            // 3. 用户文本展示
-            if (message.content.isNotBlank()) {
+            // 3. 用户文本展示 (仅在无语音时展示，防止双气泡)
+            if (message.content.isNotBlank() && message.audioUrl.isNullOrBlank()) {
                 if (isEditing) {
                     Column(
                         modifier = Modifier
@@ -1228,63 +1437,59 @@ fun MessageItem(
 
                 // AI 语音条展示
                 if (!message.audioUrl.isNullOrBlank()) {
+                    val durationRatio = (message.audioDuration.toFloat() / 60f).coerceIn(0f, 1f)
+                    val bubbleWidth = 140.dp + 100.dp * durationRatio
                     Row(
                         modifier = Modifier
-                            .fillMaxWidth(0.7f)
+                            .width(bubbleWidth)
                             .padding(bottom = 6.dp)
                             .clip(RoundedCornerShape(16.dp))
                             .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
                             .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), RoundedCornerShape(16.dp))
                             .clickable { onSpeak() }
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        if (message.isAudioPlaying) {
-                            Row(
-                                modifier = Modifier.height(16.dp).padding(end = 8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(2.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                for (j in 0 until 3) {
-                                    val infiniteTransition = rememberInfiniteTransition(label = "audioPlayingAiBubble_${message.id}_$j")
-                                    val heightPercent by infiniteTransition.animateFloat(
-                                        initialValue = 0.2f,
-                                        targetValue = 1.0f,
-                                        animationSpec = infiniteRepeatable(
-                                            animation = tween(400 + j * 120, easing = LinearEasing),
-                                            repeatMode = RepeatMode.Reverse
-                                        ),
-                                        label = "AudioHeightAiBubble_${message.id}_$j"
-                                    )
-                                    Box(
-                                        modifier = Modifier
-                                            .width(2.5.dp)
-                                            .fillMaxHeight(heightPercent)
-                                            .clip(CircleShape)
-                                            .background(MaterialTheme.colorScheme.primary)
-                                    )
-                                }
-                            }
-                        } else {
+                        val isPlaying = message.isAudioPlaying && currentlyPlayingAudioId == message.id
+                        val playIcon = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow
+                        Box(
+                            modifier = Modifier
+                                .size(24.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+                            contentAlignment = Alignment.Center
+                        ) {
                             Icon(
-                                imageVector = Icons.AutoMirrored.Filled.VolumeUp,
-                                contentDescription = "Play Voice",
+                                imageVector = playIcon,
+                                contentDescription = if (isPlaying) "Pause" else "Play",
                                 tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(20.dp).padding(end = 8.dp)
+                                modifier = Modifier.size(14.dp)
                             )
                         }
+
+                        val progress = if (isPlaying) currentlyPlayingAudioProgress else 0f
+                        VoicePlayTrack(
+                            messageId = message.id,
+                            isPlaying = isPlaying,
+                            progress = progress,
+                            tintColor = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.weight(1f)
+                        )
+
                         Text(
                             text = "${message.audioDuration}\"",
                             color = MaterialTheme.colorScheme.primary,
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.Bold
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
                         )
                     }
                 } else if (message.isAudioSynthesizing) {
                     // 正在合成中的占位长条
+                    val durationRatio = (message.audioDuration.toFloat() / 60f).coerceIn(0f, 1f)
+                    val bubbleWidth = 80.dp + 160.dp * durationRatio
                     Row(
                         modifier = Modifier
-                            .fillMaxWidth(0.7f)
+                            .width(bubbleWidth)
                             .padding(bottom = 6.dp)
                             .clip(RoundedCornerShape(16.dp))
                             .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.04f))
@@ -1330,6 +1535,7 @@ fun MessageItem(
                             McpVoiceReplyItem(
                                 call = call,
                                 currentlyPlayingAudioId = currentlyPlayingAudioId,
+                                currentlyPlayingAudioProgress = currentlyPlayingAudioProgress,
                                 onPlayClick = onMcpVoicePlay
                             )
                         }
@@ -1431,7 +1637,7 @@ fun MessageItem(
     }
 }
 
-// 1:1 复刻 Claude 输入框
+// 1:1 复刻 Claude 输入框 (集成微信式语音录制交互及震动反馈)
 @Composable
 fun ChatInputBar(
     value: TextFieldValue,
@@ -1440,7 +1646,10 @@ fun ChatInputBar(
     onSend: () -> Unit,
     onStop: () -> Unit,
     onAttach: () -> Unit,
-    onVoiceClick: () -> Unit,
+    onRecordStart: () -> Unit,
+    onRecordDrag: (Float, Float) -> Unit,
+    onRecordEnd: (Boolean, Boolean) -> Unit,
+    haptic: androidx.compose.ui.hapticfeedback.HapticFeedback,
     isThinking: Boolean = false,
     isMcpRunning: Boolean = false,
     characterName: String = "Loyea"
@@ -1448,6 +1657,7 @@ fun ChatInputBar(
     val isTextEmpty = value.text.isBlank()
     val isEn = appLanguage == "en"
     val isActive = isThinking || isMcpRunning
+    var isVoiceMode by remember { mutableStateOf(false) }
 
     Row(
         modifier = Modifier
@@ -1480,114 +1690,175 @@ fun ChatInputBar(
                 )
             }
 
-            // 自定义 BasicTextField
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 8.dp, vertical = 8.dp)
+            // 键盘/语音切换按钮
+            IconButton(
+                onClick = { isVoiceMode = !isVoiceMode },
+                modifier = Modifier.size(36.dp)
             ) {
-                if (isTextEmpty) {
+                Icon(
+                    imageVector = if (isVoiceMode) Icons.Default.Keyboard else Icons.Outlined.Mic,
+                    contentDescription = "Switch Mode",
+                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+
+            if (isVoiceMode) {
+                var isPressed by remember { mutableStateOf(false) }
+                val buttonBg by animateColorAsState(
+                    targetValue = if (isPressed) MaterialTheme.colorScheme.onBackground.copy(alpha = 0.15f)
+                                  else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.05f),
+                    label = "VoiceButtonBg"
+                )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(36.dp)
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(buttonBg)
+                        .pointerInput(Unit) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val down = awaitFirstDown()
+                                    isPressed = true
+                                    onRecordStart()
+                                    
+                                    var pointerId = down.id
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val pointerChange = event.changes.find { it.id == pointerId }
+                                        if (pointerChange == null || !pointerChange.pressed) {
+                                            isPressed = false
+                                            onRecordEnd(false, false)
+                                            break
+                                        }
+                                        
+                                        val position = pointerChange.position
+                                        val downPosition = down.position
+                                        val offsetX = position.x - downPosition.x
+                                        val offsetY = position.y - downPosition.y
+                                        
+                                        onRecordDrag(offsetX, offsetY)
+                                        pointerChange.consume()
+                                    }
+                                }
+                            }
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
                     Text(
-                        text = if (isEn) "Talk to $characterName" else "与 $characterName 对话",
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
-                        style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Default)
+                        text = if (isPressed) "松开 发送" else "按住 说话",
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+                        style = MaterialTheme.typography.bodyLarge.copy(
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                            fontFamily = FontFamily.Default
+                        )
                     )
                 }
-                BasicTextField(
-                    value = value,
-                    onValueChange = onValueChange,
-                    textStyle = TextStyle(
-                        fontFamily = FontFamily.Default,
-                        fontSize = 16.sp,
-                        color = MaterialTheme.colorScheme.onBackground
-                    ),
-                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                    maxLines = 6,
+            } else {
+                // 自定义 BasicTextField
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .onPreviewKeyEvent { keyEvent ->
-                            if (keyEvent.key == Key.Enter) {
-                                if (isActive) {
-                                    true
+                        .weight(1f)
+                        .padding(horizontal = 4.dp, vertical = 6.dp)
+                ) {
+                    if (isTextEmpty) {
+                        Text(
+                            text = if (isEn) "Talk to $characterName" else "与 $characterName 对话",
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                            style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Default)
+                        )
+                    }
+                    BasicTextField(
+                        value = value,
+                        onValueChange = onValueChange,
+                        textStyle = TextStyle(
+                            fontFamily = FontFamily.Default,
+                            fontSize = 16.sp,
+                            color = MaterialTheme.colorScheme.onBackground
+                        ),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                        maxLines = 6,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .onPreviewKeyEvent { keyEvent ->
+                                if (keyEvent.key == Key.Enter) {
+                                    if (isActive) {
+                                        true
+                                    } else {
+                                        false
+                                    }
                                 } else {
                                     false
                                 }
-                            } else {
-                                    false
+                            },
+                        keyboardOptions = KeyboardOptions(
+                            imeAction = ImeAction.Send
+                        ),
+                        keyboardActions = KeyboardActions(
+                            onSend = {
+                                if (!isTextEmpty && !isActive) {
+                                    onSend()
+                                }
                             }
-                        },
-                    keyboardOptions = KeyboardOptions(
-                        imeAction = ImeAction.Send
-                    ),
-                    keyboardActions = KeyboardActions(
-                        onSend = {
-                            if (!isTextEmpty && !isActive) {
-                                onSend()
-                            }
-                        }
+                        )
                     )
-                )
+                }
             }
         }
 
-        Spacer(modifier = Modifier.width(8.dp))
+        val showRightButton = isActive || (!isVoiceMode && !isTextEmpty)
+        if (showRightButton) {
+            Spacer(modifier = Modifier.width(8.dp))
 
-        // 发送、停止或语音按钮
-        val buttonColor by animateColorAsState(
-            targetValue = if (isActive) {
-                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.8f)
-            } else if (isTextEmpty) {
-                MaterialTheme.colorScheme.onBackground.copy(alpha = 0.05f)
-            } else {
-                MaterialTheme.colorScheme.primary
-            },
-            animationSpec = tween(300),
-            label = "ButtonColor"
-        )
+            val buttonColor by animateColorAsState(
+                targetValue = if (isActive) {
+                    MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.8f)
+                } else {
+                    MaterialTheme.colorScheme.primary
+                },
+                animationSpec = tween(300),
+                label = "ButtonColor"
+            )
 
-        Box(
-            modifier = Modifier
-                .size(48.dp)
-                .clip(CircleShape)
-                .background(buttonColor)
-                .clickable { 
-                    if (isActive) {
-                        onStop()
-                    } else if (!isTextEmpty) {
-                        onSend()
-                    } else {
-                        onVoiceClick()
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(buttonColor)
+                    .clickable { 
+                        if (isActive) {
+                            onStop()
+                        } else {
+                            onSend()
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                AnimatedContent(
+                    targetState = if (isActive) "stop" else "send",
+                    transitionSpec = {
+                        (scaleIn(initialScale = 0.8f) + fadeIn(animationSpec = tween(220)))
+                            .togetherWith(scaleOut(targetScale = 0.8f) + fadeOut(animationSpec = tween(90)))
+                    },
+                    label = "InputButtonTransition"
+                ) { target ->
+                    when (target) {
+                        "stop" -> Icon(
+                            imageVector = Icons.Default.Stop,
+                            contentDescription = "Stop",
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        else -> Icon(
+                            imageVector = Icons.Default.ArrowUpward,
+                            contentDescription = "Send",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
-                },
-            contentAlignment = Alignment.Center
-        ) {
-            AnimatedContent(
-                targetState = if (isActive) "stop" else if (isTextEmpty) "mic" else "send",
-                transitionSpec = {
-                    (scaleIn(initialScale = 0.8f) + fadeIn(animationSpec = tween(220)))
-                        .togetherWith(scaleOut(targetScale = 0.8f) + fadeOut(animationSpec = tween(90)))
-                },
-                label = "InputButtonTransition"
-            ) { target ->
-                when (target) {
-                    "stop" -> Icon(
-                        imageVector = Icons.Default.Stop,
-                        contentDescription = "Stop",
-                        tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    "mic" -> Icon(
-                        imageVector = Icons.Outlined.Mic,
-                        contentDescription = "Record",
-                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-                        modifier = Modifier.size(24.dp)
-                    )
-                    else -> Icon(
-                        imageVector = Icons.Default.ArrowUpward,
-                        contentDescription = "Send",
-                        tint = Color.White,
-                        modifier = Modifier.size(22.dp)
-                    )
                 }
             }
         }
@@ -1673,6 +1944,7 @@ fun ChatScreenPreview() {
 fun McpVoiceReplyItem(
     call: McpCall,
     currentlyPlayingAudioId: String?,
+    currentlyPlayingAudioProgress: Float = 0f,
     onPlayClick: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1771,51 +2043,41 @@ fun McpVoiceReplyItem(
                             .fillMaxWidth()
                             .clickable { onPlayClick(call.id) }
                             .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        if (isPlaying) {
-                            Row(
-                                modifier = Modifier.height(16.dp).padding(end = 10.dp),
-                                horizontalArrangement = Arrangement.spacedBy(2.5.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                for (j in 0 until 4) {
-                                    val infiniteTransition = rememberInfiniteTransition(label = "audioPlayingMcpCall_${call.id}_$j")
-                                    val heightPercent by infiniteTransition.animateFloat(
-                                        initialValue = 0.25f,
-                                        targetValue = 1.0f,
-                                        animationSpec = infiniteRepeatable(
-                                            animation = tween(350 + j * 100, easing = LinearEasing),
-                                            repeatMode = RepeatMode.Reverse
-                                        ),
-                                        label = "AudioHeightMcpCall_${call.id}_$j"
-                                    )
-                                    Box(
-                                        modifier = Modifier
-                                            .width(2.5.dp)
-                                            .fillMaxHeight(heightPercent)
-                                            .clip(CircleShape)
-                                            .background(claudePrimary)
-                                    )
-                                }
-                            }
-                        } else {
+                        val playIcon = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow
+                        Box(
+                            modifier = Modifier
+                                .size(24.dp)
+                                .clip(CircleShape)
+                                .background(claudePrimary.copy(alpha = 0.12f)),
+                            contentAlignment = Alignment.Center
+                        ) {
                             Icon(
-                                imageVector = Icons.AutoMirrored.Filled.VolumeUp,
-                                contentDescription = "Play Voice",
+                                imageVector = playIcon,
+                                contentDescription = if (isPlaying) "Pause" else "Play",
                                 tint = claudePrimary,
-                                modifier = Modifier.size(20.dp).padding(end = 10.dp)
+                                modifier = Modifier.size(14.dp)
                             )
                         }
-                        
+
+                        val progress = if (isPlaying) currentlyPlayingAudioProgress else 0f
+                        VoicePlayTrack(
+                            messageId = call.id,
+                            isPlaying = isPlaying,
+                            progress = progress,
+                            tintColor = claudePrimary,
+                            modifier = Modifier.weight(1f)
+                        )
+
                         Text(
                             text = "${duration}\"",
                             color = claudePrimary,
-                            style = MaterialTheme.typography.bodyLarge.copy(
+                            style = MaterialTheme.typography.bodyMedium.copy(
                                 fontWeight = FontWeight.Bold,
                                 letterSpacing = 0.5.sp
-                            ),
-                            modifier = Modifier.weight(1f)
+                            )
                         )
 
                         if (cleanedText.isNotEmpty()) {
@@ -1987,4 +2249,175 @@ private fun cleanVoiceText(inputJson: String?): String {
 private fun formatTime(timestamp: Long): String {
     val sdf = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
     return sdf.format(java.util.Date(timestamp))
+}
+
+@Composable
+fun RecordingOverlay(
+    dragState: String,
+    amplitude: Float,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.25f)),
+        contentAlignment = Alignment.Center
+    ) {
+        val overlayBgColor = if (dragState == "CANCEL") {
+            Color(0xFF8B2626).copy(alpha = 0.85f)
+        } else {
+            Color(0xFF2C2C2C).copy(alpha = 0.85f)
+        }
+        
+        Column(
+            modifier = Modifier
+                .size(160.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(overlayBgColor)
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            when (dragState) {
+                "CANCEL" -> {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = "Cancel",
+                        tint = Color.White,
+                        modifier = Modifier.size(52.dp)
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text(
+                        text = "松开手指 取消发送",
+                        color = Color.White.copy(alpha = 0.9f),
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Default
+                        )
+                    )
+                }
+                "TRANSCRIBE" -> {
+                    Icon(
+                        imageVector = Icons.Default.Translate,
+                        contentDescription = "Transcribe",
+                        tint = Color.White,
+                        modifier = Modifier.size(52.dp)
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text(
+                        text = "松开手指 转写发送",
+                        color = Color.White.copy(alpha = 0.9f),
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Default
+                        )
+                    )
+                }
+                else -> { // RECORDING
+                    Row(
+                        modifier = Modifier.height(48.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val ampRatio = (amplitude / 32767f).coerceIn(0f, 1f)
+                        for (i in 0 until 7) {
+                            val infiniteTransition = rememberInfiniteTransition(label = "amplitudeBar_$i")
+                            val randomFactor by infiniteTransition.animateFloat(
+                                initialValue = 0.3f,
+                                targetValue = 1.0f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(250 + i * 50, easing = LinearEasing),
+                                    repeatMode = RepeatMode.Reverse
+                                ),
+                                label = "RandomFactor_$i"
+                            )
+                            val heightRatio = (ampRatio * 0.7f + 0.3f) * randomFactor
+                            Box(
+                                modifier = Modifier
+                                    .width(4.dp)
+                                    .fillMaxHeight(heightRatio.coerceIn(0.15f, 1.0f))
+                                    .clip(CircleShape)
+                                    .background(Color.White)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(18.dp))
+                    Text(
+                        text = "手指上滑取消，右滑转文字",
+                        color = Color.White.copy(alpha = 0.8f),
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Default
+                        )
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun VoicePlayTrack(
+    messageId: String,
+    isPlaying: Boolean,
+    progress: Float,
+    tintColor: Color,
+    modifier: Modifier = Modifier
+) {
+    val count = 15
+    val heights = remember(messageId) {
+        val random = java.util.Random(messageId.hashCode().toLong())
+        List(count) {
+            0.15f + random.nextFloat() * 0.85f
+        }
+    }
+
+    val infiniteTransition = rememberInfiniteTransition(label = "voice_wave_$messageId")
+    val waveAnimValue by if (isPlaying) {
+        infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 2f * Math.PI.toFloat(),
+            animationSpec = infiniteRepeatable(
+                animation = tween(1200, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "wave_anim"
+        )
+    } else {
+        remember { mutableStateOf(0f) }
+    }
+
+    Row(
+        modifier = modifier.height(20.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        heights.forEachIndexed { index, baseHeight ->
+            val fraction = index.toFloat() / count.toFloat()
+            val isHighlighted = progress >= fraction
+
+            val bounceFactor = if (isPlaying) {
+                0.7f + 0.3f * kotlin.math.sin(waveAnimValue + index * 0.45f)
+            } else {
+                1.0f
+            }
+
+            val finalHeightPercent = (baseHeight * bounceFactor).coerceIn(0.1f, 1.0f)
+            val barColor = if (isHighlighted) {
+                tintColor
+            } else {
+                tintColor.copy(alpha = 0.25f)
+            }
+
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .fillMaxHeight(finalHeightPercent)
+                    .clip(RoundedCornerShape(1.5.dp))
+                    .background(barColor)
+            )
+        }
+    }
 }

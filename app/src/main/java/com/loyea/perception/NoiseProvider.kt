@@ -31,6 +31,11 @@ class NoiseProvider(private val context: Context) {
      */
     @SuppressLint("MissingPermission")
     fun getAmbientNoiseDb(): Int {
+        if (com.loyea.ui.chat.ChatViewModel.isRecordingActive) {
+            Log.d(TAG, "getAmbientNoiseDb: Voice recording is active, skipping hardware MIC to avoid conflict.")
+            return 35 // 方案1：返回预设底噪，规避麦克风抢占冲突
+        }
+
         if (!hasAudioPermission()) {
             Log.w(TAG, "getAmbientNoiseDb: Missing RECORD_AUDIO permission")
             return -1 // 代表权限缺失

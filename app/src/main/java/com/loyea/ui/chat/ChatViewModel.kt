@@ -19,6 +19,7 @@ import com.loyea.mcp.McpTool
 import com.loyea.perception.HapticManager
 import com.loyea.perception.PhysicalContextManager
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -170,6 +171,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var enableStt = mutableStateOf(true)
         private set
+    var enableAudioUnderstanding = mutableStateOf(false)
+        private set
     var enableTts = mutableStateOf(true)
         private set
     var ttsVoice = mutableStateOf("mimo-v2.5-tts-default")
@@ -209,7 +212,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         private set
 
     // 13. 媒体录制与播放状态
-    private var mediaRecorder: MediaRecorder? = null
+    companion object {
+        @Volatile
+        var isRecordingActive = false
+    }
+    private var audioRecord: android.media.AudioRecord? = null
+    private var isRecordingWav = false
+    private var recordingThread: Thread? = null
     private var audioFile: File? = null
     var isRecording = mutableStateOf(false)
         private set
@@ -218,6 +227,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     var recordingAmplitude = mutableStateOf(0f)
         private set
     private var recordingTimer: Timer? = null
+    private val amplitudeList = java.util.Collections.synchronizedList(mutableListOf<Int>())
 
     private var mediaPlayer: MediaPlayer? = null
     private var currentFocusRequest: AudioFocusRequest? = null
@@ -234,6 +244,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     
     var currentlyPlayingAudioId = mutableStateOf<String?>(null)
         private set
+
+    var currentlyPlayingAudioProgress = mutableStateOf(0f)
+        private set
+
+    private var audioProgressJob: kotlinx.coroutines.Job? = null
 
     // 图谱记忆管理器
     private val graphMemoryManager = com.loyea.perception.memory.GraphMemoryManager(context)
@@ -399,6 +414,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // 加载多模态设置
         enableMultimodal.value = prefs.getBoolean("enable_multimodal", true)
         enableStt.value = prefs.getBoolean("enable_stt", true)
+        enableAudioUnderstanding.value = prefs.getBoolean("enable_audio_understanding", false)
         enableTts.value = prefs.getBoolean("enable_tts", true)
         ttsVoice.value = prefs.getString("tts_voice", "mimo-v2.5-tts-default") ?: "mimo-v2.5-tts-default"
         enableAutoTts.value = prefs.getBoolean("enable_auto_tts", false)
@@ -1236,17 +1252,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             list.add(LlmChatMessage(role = "system", content = systemPrompt))
         }
         val filteredHistory = history.filter {
-            (it.content.isNotBlank() || !it.imageUrl.isNullOrBlank()) && !it.content.startsWith("[错误]") && !it.content.startsWith("[Error]")
+            (it.content.isNotBlank() || !it.imageUrl.isNullOrBlank() || !it.audioUrl.isNullOrBlank()) && !it.content.startsWith("[错误]") && !it.content.startsWith("[Error]")
         }
         // 线性滑动窗口只取最新 20 条消息
         val recentHistory = filteredHistory.takeLast(20)
-        recentHistory.forEach { msg ->
+        recentHistory.forEachIndexed { index, msg ->
             val decoratedContent = msg.content
+            val includeAudio = enableAudioUnderstanding.value && index == recentHistory.lastIndex
             list.add(
                 LlmChatMessage(
                     role = if (msg.sender == Sender.USER) "user" else "assistant",
                     content = decoratedContent,
-                    imageUrl = msg.imageUrl
+                    imageUrl = msg.imageUrl,
+                    audioUrl = if (includeAudio) msg.audioUrl else null
                 )
             )
         }
@@ -1501,6 +1519,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 enableStt.value = v
                 prefs.edit().putBoolean("enable_stt", v).apply()
             }
+            "enable_audio_understanding" -> {
+                val v = value as Boolean
+                enableAudioUnderstanding.value = v
+                prefs.edit().putBoolean("enable_audio_understanding", v).apply()
+            }
             "enable_tts" -> {
                 val v = value as Boolean
                 enableTts.value = v
@@ -1668,29 +1691,67 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun startRecording() {
         if (isRecording.value) return
+        isRecordingActive = true
+        amplitudeList.clear()
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val cacheDir = context.cacheDir
-                audioFile = File(cacheDir, "record_${System.currentTimeMillis()}.m4a")
+                // 延迟 200ms 避让可能正在运行的 NoiseProvider 背景录音
+                kotlinx.coroutines.delay(200)
                 
-                val recorder = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                    MediaRecorder(context)
-                } else {
-                    @Suppress("DEPRECATION")
-                    MediaRecorder()
+                val cacheDir = context.cacheDir
+                audioFile = File(cacheDir, "record_${System.currentTimeMillis()}.wav")
+                
+                val sampleRate = 16000
+                val channelConfig = android.media.AudioFormat.CHANNEL_IN_MONO
+                val audioFormat = android.media.AudioFormat.ENCODING_PCM_16BIT
+                val minBufferSize = android.media.AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
+                
+                if (minBufferSize == android.media.AudioRecord.ERROR || minBufferSize == android.media.AudioRecord.ERROR_BAD_VALUE) {
+                    throw IllegalStateException("AudioRecord min buffer size error")
                 }
                 
-                recorder.setAudioSource(MediaRecorder.AudioSource.MIC)
-                recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                recorder.setAudioSamplingRate(44100)
-                recorder.setAudioEncodingBitRate(96000)
-                recorder.setOutputFile(audioFile!!.absolutePath)
+                val record = android.media.AudioRecord(
+                    android.media.MediaRecorder.AudioSource.MIC,
+                    sampleRate,
+                    channelConfig,
+                    audioFormat,
+                    minBufferSize
+                )
                 
-                recorder.prepare()
-                recorder.start()
+                if (record.state != android.media.AudioRecord.STATE_INITIALIZED) {
+                    throw IllegalStateException("AudioRecord initialization failed")
+                }
                 
-                mediaRecorder = recorder
+                audioRecord = record
+                record.startRecording()
+                isRecordingWav = true
+                
+                // 开启后台录音写入线程
+                val rawPcmFile = File(cacheDir, "temp_${System.currentTimeMillis()}.pcm")
+                recordingThread = Thread {
+                    val buffer = ShortArray(minBufferSize / 2)
+                    try {
+                        java.io.FileOutputStream(rawPcmFile).use { fos ->
+                            while (isRecordingWav) {
+                                val readSize = record.read(buffer, 0, buffer.size)
+                                if (readSize > 0) {
+                                    val byteBuffer = java.nio.ByteBuffer.allocate(readSize * 2)
+                                    byteBuffer.order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                                    for (i in 0 until readSize) {
+                                        byteBuffer.putShort(buffer[i])
+                                        val amp = kotlin.math.abs(buffer[i].toInt())
+                                        if (amp > recordingAmplitude.value) {
+                                            recordingAmplitude.value = amp.toFloat()
+                                        }
+                                    }
+                                    fos.write(byteBuffer.array())
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e("ChatViewModel", "Error in recording thread", e)
+                    }
+                }.apply { start() }
                 
                 withContext(Dispatchers.Main) {
                     isRecording.value = true
@@ -1702,44 +1763,161 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         override fun run() {
                             viewModelScope.launch(Dispatchers.Main) {
                                 recordingDuration.value += 1
-                                try {
-                                    val amp = mediaRecorder?.maxAmplitude ?: 0
-                                    recordingAmplitude.value = amp.toFloat()
-                                } catch (e: Exception) {}
+                                amplitudeList.add(recordingAmplitude.value.toInt())
+                                recordingAmplitude.value = 0f
                             }
                         }
                     }, 0, 100)
                 }
             } catch (e: Exception) {
-                Log.e("ChatViewModel", "Failed to start recording", e)
+                isRecordingActive = false
+                Log.e("ChatViewModel", "Failed to start recording with AudioRecord", e)
             }
         }
     }
 
     fun stopRecording(onFinished: (File?, Int) -> Unit) {
-        if (!isRecording.value) return
+        isRecordingActive = false
+        if (!isRecording.value) {
+            recordingTimer?.cancel()
+            recordingTimer = null
+            isRecordingWav = false
+            try {
+                audioRecord?.stop()
+                audioRecord?.release()
+            } catch (e: Exception) {}
+            audioRecord = null
+            recordingThread = null
+            onFinished(null, 0)
+            return
+        }
+        
         recordingTimer?.cancel()
         recordingTimer = null
+        isRecordingWav = false
         
         viewModelScope.launch(Dispatchers.IO) {
-            var durationSec = 0
             try {
-                mediaRecorder?.stop()
-                mediaRecorder?.release()
-                mediaRecorder = null
-                
-                durationSec = recordingDuration.value / 10
+                audioRecord?.stop()
+                audioRecord?.release()
             } catch (e: Exception) {
-                Log.e("ChatViewModel", "Failed to stop recording", e)
+                Log.e("ChatViewModel", "Error stopping AudioRecord", e)
+            }
+            audioRecord = null
+            
+            try {
+                recordingThread?.join(1000)
+            } catch (e: Exception) {}
+            recordingThread = null
+            
+            var durationSec = recordingDuration.value / 10
+            var isQuiet = false
+            
+            val pcmFiles = context.cacheDir.listFiles { _, name -> name.startsWith("temp_") && name.endsWith(".pcm") }
+            val rawPcmFile = pcmFiles?.maxByOrNull { it.lastModified() }
+            
+            val finalWav = audioFile
+            if (rawPcmFile != null && rawPcmFile.exists() && finalWav != null) {
+                try {
+                    val pcmLen = rawPcmFile.length()
+                    java.io.FileOutputStream(finalWav).use { fos ->
+                        writeWavHeader(
+                            fos,
+                            pcmLen,
+                            pcmLen + 36,
+                            16000L,
+                            1,
+                            16000L * 2
+                        )
+                        java.io.FileInputStream(rawPcmFile).use { fis ->
+                            val buffer = ByteArray(4096)
+                            var read: Int
+                            while (fis.read(buffer).also { read = it } != -1) {
+                                fos.write(buffer, 0, read)
+                            }
+                        }
+                    }
+                    try { rawPcmFile.delete() } catch (e: Exception) {}
+                } catch (e: Exception) {
+                    Log.e("ChatViewModel", "Error converting PCM to WAV", e)
+                }
+            }
+            
+            val maxAmp = amplitudeList.maxOrNull() ?: 0
+            if (amplitudeList.isNotEmpty() && maxAmp < 150) {
+                isQuiet = true
             }
             
             withContext(Dispatchers.Main) {
+                isRecordingActive = false
                 isRecording.value = false
                 val file = audioFile
                 audioFile = null
-                onFinished(file, durationSec)
+                if (isQuiet && file != null) {
+                    try { file.delete() } catch (e: Exception) {}
+                    android.widget.Toast.makeText(context, "未检测到说话声音，请检查麦克风权限或设备硬件", android.widget.Toast.LENGTH_LONG).show()
+                    onFinished(null, 0)
+                } else {
+                    onFinished(file, durationSec)
+                }
             }
         }
+    }
+
+    private fun writeWavHeader(
+        out: java.io.FileOutputStream,
+        totalAudioLen: Long,
+        totalDataLen: Long,
+        longSampleRate: Long,
+        channels: Int,
+        byteRate: Long
+    ) {
+        val header = ByteArray(44)
+        header[0] = 'R'.toByte() // RIFF
+        header[1] = 'I'.toByte()
+        header[2] = 'F'.toByte()
+        header[3] = 'F'.toByte()
+        header[4] = (totalDataLen and 0xff).toByte()
+        header[5] = ((totalDataLen shr 8) and 0xff).toByte()
+        header[6] = ((totalDataLen shr 16) and 0xff).toByte()
+        header[7] = ((totalDataLen shr 24) and 0xff).toByte()
+        header[8] = 'W'.toByte() // WAVE
+        header[9] = 'A'.toByte()
+        header[10] = 'V'.toByte()
+        header[11] = 'E'.toByte()
+        header[12] = 'f'.toByte() // fmt
+        header[13] = 'm'.toByte()
+        header[14] = 't'.toByte()
+        header[15] = ' '.toByte()
+        header[16] = 16 // Subchunk1Size
+        header[17] = 0
+        header[18] = 0
+        header[19] = 0
+        header[20] = 1 // AudioFormat (1 for PCM)
+        header[21] = 0
+        header[22] = channels.toByte()
+        header[23] = 0
+        header[24] = (longSampleRate and 0xff).toByte()
+        header[25] = ((longSampleRate shr 8) and 0xff).toByte()
+        header[26] = ((longSampleRate shr 16) and 0xff).toByte()
+        header[27] = ((longSampleRate shr 24) and 0xff).toByte()
+        header[28] = (byteRate and 0xff).toByte()
+        header[29] = ((byteRate shr 8) and 0xff).toByte()
+        header[30] = ((byteRate shr 16) and 0xff).toByte()
+        header[31] = ((byteRate shr 24) and 0xff).toByte()
+        header[32] = (channels * 2).toByte() // BlockAlign
+        header[33] = 0
+        header[34] = 16 // BitsPerSample
+        header[35] = 0
+        header[36] = 'd'.toByte() // data
+        header[37] = 'a'.toByte()
+        header[38] = 't'.toByte()
+        header[39] = 'a'.toByte()
+        header[40] = (totalAudioLen and 0xff).toByte()
+        header[41] = ((totalAudioLen shr 8) and 0xff).toByte()
+        header[42] = ((totalAudioLen shr 16) and 0xff).toByte()
+        header[43] = ((totalAudioLen shr 24) and 0xff).toByte()
+        out.write(header, 0, 44)
     }
 
     private fun cleanTextForTts(rawText: String): String {
@@ -2052,6 +2230,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun playAudioUrl(messageId: String, audioUrl: String) {
+        if (currentlyPlayingAudioId.value == messageId) {
+            stopAudio()
+            return
+        }
+        val file = File(audioUrl)
+        if (file.exists()) {
+            playAudioFile(messageId, file)
+        } else {
+            Log.e("ChatViewModel", "Audio file not found: $audioUrl")
+            android.widget.Toast.makeText(context, "音频文件不存在或已损坏", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private fun playAudioFile(messageId: String, file: File) {
         // 在播放新音频前，必须强制同步清理掉旧的播放器和状态，保障互斥防冲
         stopAudio()
@@ -2076,6 +2268,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             currentlyPlayingAudioId.value = messageId
+            currentlyPlayingAudioProgress.value = 0f
+            audioProgressJob = viewModelScope.launch(Dispatchers.Main) {
+                while (isActive) {
+                    val player = mediaPlayer
+                    if (player != null && player.isPlaying && player.duration > 0) {
+                        currentlyPlayingAudioProgress.value = player.currentPosition.toFloat() / player.duration.toFloat()
+                    }
+                    kotlinx.coroutines.delay(50)
+                }
+            }
             // 更新消息列表里的正在播放状态
             messages.value = messages.value.map { msg ->
                 if (msg.id == messageId) msg.copy(isAudioPlaying = true) else msg
@@ -2089,6 +2291,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun stopAudio() {
         val playingId = currentlyPlayingAudioId.value
+        
+        audioProgressJob?.cancel()
+        audioProgressJob = null
+        currentlyPlayingAudioProgress.value = 0f
         
         // 释放播放器资源
         try {
@@ -2117,7 +2323,64 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun transcribeAndSendAudio(file: File, duration: Int, onFailed: () -> Unit = {}) {
+    val lastAsrError: String?
+        get() = llmClient.lastAsrError
+
+    private fun cleanVoiceText(inputJson: String?): String {
+        if (inputJson.isNullOrBlank()) return ""
+        val isJsonLike = inputJson.contains("\"text\"") && inputJson.contains(":")
+        val text = if (isJsonLike) {
+            try {
+                val regex = Regex("""\"text\"\s*:\s*\"([\s\S]*?)\"""")
+                val match = regex.find(inputJson)
+                val extracted = match?.groupValues?.get(1)
+                if (!extracted.isNullOrBlank()) extracted else inputJson
+            } catch (e: Exception) {
+                inputJson
+            }
+        } else {
+            inputJson
+        }
+        
+        if (text.isBlank()) return ""
+        
+        var result = text.replace(Regex("\\([\\s\\S]*?\\)"), "")
+        result = result.replace(Regex("（[\\s\\S]*?）"), "")
+        result = result.replace(Regex("\\[[\\s\\SLock]*?\\]"), "")
+        result = result.replace(Regex("【[\\s\\S]*?】"), "")
+        result = result.replace(Regex("\\{[\\s\\S]*?\\}"), "")
+        result = result.replace(Regex("<[\\s\\S]*?>"), "")
+        
+        result = result.replace("\\\"", "\"")
+            .replace("\\n", "\n")
+            .replace("\\t", "    ")
+            .replace("\\\\", "\\")
+            
+        return result.trim()
+    }
+
+    suspend fun transcribeAudio(file: File): String? {
+        val sttCfgId = sttConfigId.value
+        val targetSttConfig = if (sttCfgId.isNotBlank()) {
+            apiConfigList.value.find { it.id == sttCfgId } ?: activeApiConfig.value
+        } else {
+            activeApiConfig.value
+        }
+        val rawText = llmClient.transcribeAudio(targetSttConfig, file, sttModelName.value)
+        return if (targetSttConfig.provider.equals("MiMo", ignoreCase = true)) {
+            cleanVoiceText(rawText)
+        } else {
+            rawText
+        }
+    }
+
+    fun transcribeAndSendAudio(file: File, duration: Int, onFailed: (String) -> Unit = {}) {
+        if (enableAudioUnderstanding.value) {
+            // 开启音频理解时直接发送语音，无需进行 STT 转文本
+            sendMessage("", null, file.absolutePath, duration)
+            return
+        }
+
         isThinking.value = true
         viewModelScope.launch(Dispatchers.IO) {
             val sttCfgId = sttConfigId.value
@@ -2128,9 +2391,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
             val text = llmClient.transcribeAudio(targetSttConfig, file, sttModelName.value)
             
+            val cleanedText = if (targetSttConfig.provider.equals("MiMo", ignoreCase = true)) {
+                cleanVoiceText(text)
+            } else {
+                text
+            }
+            
             // 开启了声学情绪感知时，根据语音输入识别一个模拟的语气/情绪状态
-            if (enableVoiceEmotionPerception.value && !text.isNullOrBlank()) {
-                val lowerText = text.lowercase()
+            if (enableVoiceEmotionPerception.value && !cleanedText.isNullOrBlank()) {
+                val lowerText = cleanedText.lowercase()
                 val detectedEmotion = when {
                     lowerText.contains("难过") || lowerText.contains("伤心") || lowerText.contains("哭") || lowerText.contains("委屈") -> "伤心"
                     lowerText.contains("生气") || lowerText.contains("愤怒") || lowerText.contains("讨厌") || lowerText.contains("烦") -> "生气"
@@ -2150,11 +2419,30 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             withContext(Dispatchers.Main) {
                 isThinking.value = false
-                if (!text.isNullOrBlank()) {
-                    sendMessage(text, null, file.absolutePath, duration)
+                if (!cleanedText.isNullOrBlank()) {
+                    sendMessage(cleanedText, null, file.absolutePath, duration)
                 } else {
-                    onFailed()
+                    val errorReason = llmClient.lastAsrError ?: "未提取到有效文字"
+                    onFailed(errorReason)
                 }
+            }
+        }
+    }
+
+    fun updateMessageContent(messageId: String, newContent: String) {
+        val sessionId = currentSessionId.value
+        if (sessionId.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            var updatedMsgs = emptyList<Message>()
+            storageManager.updateSessionMessages(sessionId) { diskMsgs ->
+                val updated = diskMsgs.map { msg ->
+                    if (msg.id == messageId) msg.copy(content = newContent) else msg
+                }
+                updatedMsgs = updated
+                updated
+            }
+            withContext(Dispatchers.Main) {
+                messages.value = updatedMsgs
             }
         }
     }
@@ -2280,12 +2568,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
+        isRecordingActive = false
         mcpManager.stop()
         stopPerceptionSensors()
         stopAudio()
+        isRecordingWav = false
         try {
-            mediaRecorder?.release()
+            audioRecord?.stop()
         } catch (e: Exception) {}
+        try {
+            audioRecord?.release()
+        } catch (e: Exception) {}
+        audioRecord = null
     }
 
     private fun loadTemplatesFromJson(json: String) {

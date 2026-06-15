@@ -3589,6 +3589,7 @@ fun MultimodalSettingsLayout(
     // 读取 ViewModel 中响应式的 State
     val multimodalEnabled = viewModel?.enableMultimodal?.value ?: true
     val sttEnabled = viewModel?.enableStt?.value ?: true
+    val audioUnderstandingEnabled = viewModel?.enableAudioUnderstanding?.value ?: false
     val ttsEnabled = viewModel?.enableTts?.value ?: true
     val selectedVoice = viewModel?.ttsVoice?.value ?: "茉莉"
     val autoTtsEnabled = viewModel?.enableAutoTts?.value ?: false
@@ -4185,6 +4186,31 @@ fun MultimodalSettingsLayout(
                                 onModelNameChange = { viewModel?.updateMultimodalSetting("stt_model_name", it) },
                                 modelPlaceholder = "e.g. whisper-1"
                             )
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                    Text(
+                                        text = if (isEn) "Direct Audio Understanding" else "大模型直接音频理解",
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onBackground
+                                    )
+                                    Text(
+                                        text = if (isEn) "Send voice directly to LLM without STT translation (Requires audio multimodal model)" else "不经文字翻译，将语音直接发给大模型，供其感知语气与背景声（需底层模型支持多模态音频）",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                                        lineHeight = 14.sp
+                                    )
+                                }
+                                Switch(
+                                    checked = audioUnderstandingEnabled,
+                                    onCheckedChange = { viewModel?.updateMultimodalSetting("enable_audio_understanding", it) }
+                                )
+                            }
                         }
                     }
                 }

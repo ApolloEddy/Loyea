@@ -53,13 +53,17 @@ data class LlmChatMessage(
     val toolCallId: String? = null,
     val name: String? = null,
     val toolCalls: List<LlmToolCall> = emptyList(),
-    val imageUrl: String? = null
+    val imageUrl: String? = null,
+    val audioUrl: String? = null
 )
 
 /**
  * 大模型 API 网络通信客户端
  */
 class LlmClient {
+    @Volatile
+    var lastAsrError: String? = null
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
@@ -563,6 +567,28 @@ class LlmClient {
                             }
                             addProperty("url", "data:$mimeType;base64,$base64")
                         })
+                    })
+                    add("content", contentArray)
+                } else if (!msg.audioUrl.isNullOrBlank()) {
+                    val contentArray = JsonArray()
+                    contentArray.add(JsonObject().apply {
+                        addProperty("type", "text")
+                        addProperty("text", msg.content ?: "")
+                    })
+                    contentArray.add(JsonObject().apply {
+                        addProperty("type", "input_audio")
+                        val inputAudioObj = JsonObject().apply {
+                            val base64 = encodeFileToBase64(msg.audioUrl)
+                            val format = when (msg.audioUrl.substringAfterLast(".").lowercase()) {
+                                "mp3" -> "mp3"
+                                "wav" -> "wav"
+                                "m4a" -> "m4a"
+                                else -> "wav"
+                            }
+                            addProperty("data", base64)
+                            addProperty("format", format)
+                        }
+                        add("input_audio", inputAudioObj)
                     })
                     add("content", contentArray)
                 } else {
@@ -1226,7 +1252,11 @@ class LlmClient {
         audioFile: java.io.File,
         model: String
     ): String? = withContext(Dispatchers.IO) {
-        if (config.apiKey.isBlank()) return@withContext null
+        lastAsrError = null
+        if (config.apiKey.isBlank()) {
+            lastAsrError = "API Key 不能为空，请在设置中配置"
+            return@withContext null
+        }
         try {
             val isMiMo = config.provider.equals("MiMo", ignoreCase = true)
             val targetModel = if (isMiMo) {
@@ -1242,13 +1272,19 @@ class LlmClient {
             if (isMiMo) {
                 val url = resolveChatCompletionsUrl(config)
                 val audioBytes = audioFile.readBytes()
-                val base64Data = android.util.Base64.encodeToString(audioBytes, android.util.Base64.NO_WRAP)
+                val base64DataBare = android.util.Base64.encodeToString(audioBytes, android.util.Base64.NO_WRAP)
                 val format = when (audioFile.extension.lowercase()) {
                     "mp3" -> "mp3"
                     "wav" -> "wav"
-                    "m4a" -> "m4a"
-                    else -> "wav"
+                    "m4a" -> "mp3" // 强制伪装为 mp3 绕过 MiMo 严格网关的 m4a 校验拦截限制
+                    else -> "mp3"
                 }
+                val mimeType = when (format) {
+                    "mp3" -> "audio/mpeg"
+                    "wav" -> "audio/wav"
+                    else -> "audio/mpeg"
+                }
+                val base64Data = "data:$mimeType;base64,$base64DataBare"
 
                 val requestJson = JsonObject().apply {
                     addProperty("model", targetModel)
@@ -1256,6 +1292,10 @@ class LlmClient {
                         add(JsonObject().apply {
                             addProperty("role", "user")
                             val contentArray = JsonArray().apply {
+                                add(JsonObject().apply {
+                                    addProperty("type", "text")
+                                    addProperty("text", "请将这段语音转写为文字")
+                                })
                                 add(JsonObject().apply {
                                     addProperty("type", "input_audio")
                                     val inputAudioObj = JsonObject().apply {
@@ -1286,29 +1326,39 @@ class LlmClient {
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
                         val errorMsg = response.body?.string() ?: ""
+                        lastAsrError = "ASR 请求失败 HTTP ${response.code}: $errorMsg"
                         android.util.Log.e("LlmClient", "ASR failed! HTTP ${response.code}, response body: $errorMsg")
                         return@withContext null
                     }
                     val resBody = response.body?.string() ?: ""
                     val resJson = gson.fromJson(resBody, JsonObject::class.java)
                     val choices = resJson.getAsJsonArray("choices")
-                    if (choices == null || choices.size() == 0) return@withContext null
+                    if (choices == null || choices.size() == 0) {
+                        lastAsrError = "ASR 接口返回数据结构为空 choices"
+                        return@withContext null
+                    }
                     val content = choices.get(0).asJsonObject.getAsJsonObject("message")?.get("content")?.asString
+                    if (content.isNullOrBlank()) {
+                        lastAsrError = "ASR 识别文本 content 解析为空"
+                    }
                     return@withContext content
                 }
             } else {
                 val url = resolveAudioTranscriptionsUrl(config)
-                val mimeType = when (audioFile.extension.lowercase()) {
-                    "m4a" -> "audio/m4a"
-                    "mp4" -> "audio/mp4"
-                    "wav" -> "audio/wav"
-                    else -> "audio/m4a"
+                val (mimeType, ext) = when (audioFile.extension.lowercase()) {
+                    "m4a" -> "audio/mp4" to "m4a"
+                    "mp4" -> "audio/mp4" to "mp4"
+                    "wav" -> "audio/wav" to "wav"
+                    "mp3" -> "audio/mpeg" to "mp3"
+                    else -> "audio/mp4" to "m4a"
                 }
                 val fileBody = audioFile.asRequestBody(mimeType.toMediaType())
+                val finalModel = if (targetModel.isBlank()) "whisper-1" else targetModel
+                
                 val requestBody = okhttp3.MultipartBody.Builder()
                     .setType(okhttp3.MultipartBody.FORM)
-                    .addFormDataPart("file", audioFile.name, fileBody)
-                    .addFormDataPart("model", targetModel)
+                    .addFormDataPart("file", "audio.$ext", fileBody)
+                    .addFormDataPart("model", finalModel)
                     .build()
 
                 val request = Request.Builder()
@@ -1316,15 +1366,27 @@ class LlmClient {
                     .addHeader("Authorization", "Bearer ${config.apiKey}")
                     .post(requestBody)
                     .build()
+                
+                android.util.Log.d("LlmClient", "ASR request to $url (isMiMo=false): model=$finalModel, mime=$mimeType")
 
                 client.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) return@withContext null
+                    if (!response.isSuccessful) {
+                        val errorMsg = response.body?.string() ?: ""
+                        lastAsrError = "ASR 请求失败 HTTP ${response.code}: $errorMsg"
+                        android.util.Log.e("LlmClient", "ASR failed! HTTP ${response.code}, response body: $errorMsg")
+                        return@withContext null
+                    }
                     val resBody = response.body?.string() ?: ""
                     val jsonObj = gson.fromJson(resBody, JsonObject::class.java)
-                    return@withContext jsonObj.get("text")?.asString
+                    val text = jsonObj.get("text")?.asString
+                    if (text.isNullOrBlank()) {
+                        lastAsrError = "ASR 识别文本 text 解析为空"
+                    }
+                    return@withContext text
                 }
             }
         } catch (e: Exception) {
+            lastAsrError = "ASR 发生异常: ${e.localizedMessage ?: e.message ?: e.toString()}"
             e.printStackTrace()
             null
         }

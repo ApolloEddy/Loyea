@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased] - 2026-06-15
 
 ### Added (新增)
+- **全局功能描述 README.md 彻底重构**：
+  - 彻底重构了根目录下的 [README.md](file:///D:/CodingProjects/Android/Loyea/README.md) 描述文档，将其从原先的增量“新特性记录”改版为对物理感知、脑内存档与 Graph RAG、智能手表蓝牙生态、Compose 纸张交互美学等四大系统模块的全面架构与功能说明书，极大提升了项目对外的产品力展示。
+- **动态音轨波形图与声音指纹系统**：
+  - 在 [ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt) 中引入了全新的通用的 `@Composable VoicePlayTrack` 语音音轨渲染组件。根据消息 ID 唯一哈希计算“声音指纹”波形高度数组，播放时启动平滑起伏的正弦波能量跳动，并通过 `currentlyPlayingAudioProgress` 实现实时的渐进高亮进度同步。
+- **语音播放进度实时同步系统**：
+  - 在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中引入 `currentlyPlayingAudioProgress` 状态与定时轮询 Job，在 MediaPlayer 播放语音时实时计算并刷新播放比例，且在 `stopAudio` 时安全销毁重置，打通了播放进度状态流。
+- **用户语音条折叠展开与交互重构**：
+  - 重构了 [ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt) 中的用户语音气泡组件。默认将转文字（译文）组件设为折叠隐藏状态，保持聊天界面的纯净整洁。
+  - 点击语音气泡依然直接触发本地原声播放，不再受 TTS 语音朗读的逻辑污染。
+  - 语音气泡左侧新增了半透明的“译”字（Translate）图标作为快捷切换按钮，点击该图标，或者双击/长按语音气泡即可展开/收起文字。
+  - 展开时气泡宽度自适应拓宽以完美包裹译文，收起时自动回缩成原本的音频时长比例。
+  - 精准设计了自愈式状态检测，当用户点击“转文字”或双击/长按从未转写过的语音时，ASR 网络转写成功后会自动将该语音气泡设为展开状态。
+- **微信式按住说话与手势录音交互**：
+  - 在 [ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt) 的 [ChatInputBar](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt#L1575-L1804) 中，通过 `pointerInput` 结合 `awaitPointerEventScope` 实现了无延迟的“按下录音、松开发送、上滑取消、右滑转文字”微信同款手势。
+  - 集成了 Android 物理震动反馈（`LocalHapticFeedback`），在开始录音、以及在“正常录音/取消发送/转文字”三种状态之间滑入切变时，触发细微的物理震动震感。
+  - **全屏磨砂录音悬浮框 (RecordingOverlay)**：当录音激活时，屏幕正中央展示精致的半透明磨砂反馈框。背景配色在触发上滑取消时自动切变为磨砂暗红（`#8B2626`）。框内结合拖拽判定，实时渲染代表取消的红色垃圾桶、代表转文字的翻译（A 字母）图标，以及在正常录音时根据麦克风真实瞬时振幅（`amplitude`）动态跳动的 7 柱物理波动音轨，极具视觉排版品质感与声学动效高级感。
+- **语音译文一体化气泡与 ASR 转写原位愈合**：
+  - 重构了用户发送的语音气泡。合并了原先语音条和文本消息的分开渲染方案，将译文在语音条下方以紧凑分割线样式一体化收拢，彻底杜绝了双消息气泡冗余展示的问题。
+  - 语音气泡宽度可根据时长（0~60s）在 `80.dp` 至 `240.dp` 之间随录音时长动态平滑延展，若带有译文则支持自适应宽度展开；AI 发来的语音条同样适配动态宽度缩放，且两者配色对比鲜明，发出者与主题气泡色完美同步。
+  - 实现了语音气泡的双击与长按动作。双击/长按气泡即可重新触发语音 ASR 转写（`transcribeAudio`），成功后调用 `updateMessageContent` 原位无感刷新译文并重新持久化，完成原位愈合刷新。
 - **长程知识图谱关系记忆 (Graph RAG) 系统**：
   - 引入了基于文件系统 JSON 持久化存储的 [GraphMemoryManager.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/perception/memory/GraphMemoryManager.kt) 和 [MemoryTriple.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/perception/memory/MemoryTriple.kt)。支持 1-Hop 与 2-Hop 关联检索、以及基于艾宾浩斯遗忘曲线的轻量化记忆权重动态衰减计算，并在单次召回中严格进行 8 条上限剪枝，最大化精简 Token 消耗。
   - **基于 WorkManager 加急任务的切后台提炼保活**：重构了记忆汇总与关系图谱的后台提取架构。将重型的 API 请求和本地读写动作移入新建的 [MemoryConsolidationWorker.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/worker/MemoryConsolidationWorker.kt) 中，由 WorkManager 的 `setExpedited()` 即时前台加急任务承载。即使聊天中途将应用切入后台或退回桌面，也能保证 5~15 秒的提取作业在系统高优先级配额下强制、完整跑完，彻底杜绝了因协程或进程被系统杀死引发的存盘冲突。
@@ -18,6 +38,24 @@ All notable changes to this project will be documented in this file.
   - **长程关系图谱可视化管理弹窗**：在图谱记忆开关下方增加了“管理记忆网络”入口。点击后以精美的“主语 ──(谓语)──> 宾语”双色圆角标签卡片展示当前会话物理隔离的所有提取记忆三元组。提供单条删除与一键清空操作，不仅展示了各三元组的历史提及频次与艾宾浩斯即时记忆权重，更把记忆的绝对掌控权完整还给用户。
 
 ### Fixed (修复)
+- **录音底层 AudioRecord WAV 无损转换重构 (彻底终结 API 400 校验错)**：
+  - 将 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 原来的 `MediaRecorder` 录音全面替换为使用原生 `AudioRecord` 机制，自研后台 PCM 实时流式写入文件及最大振幅折算算法，并在录音结束后自动为 PCM 文件追加 44 字节的标准 RIFF-WAVE 头生成标准的无损 `.wav` 文件。
+  - 从根本上解决了 MiMo 等大模型 ASR 在 `/v1/chat/completions` 音频多模态输入中，因强制对 Base64 数据特征码进行二进制探测并拒绝 `.m4a` (AAC) 格式而引发的 `400 Bad Request` 校验报错。
+- **用户语音播放中途无法打断与重新播放 Bug 修复**：
+  - 修复了在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) [playAudioUrl](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt#L2121-L2130) 方法中未对“正在播放同一语音”的情况执行打断，导致点击正在播放的语音气泡反而会“重新从头播放”的反人类交互缺陷。现在已引入 messageId 互斥校验，若点击正在播放的语音则直接调用 `stopAudio()` 执行优雅打断。
+- **ASR 报错 Toast 人性化汉化翻译与非标 Content-Type 纠错**：
+  - 修复了在非 MiMo 分支下，m4a 音频上传 Content-Type 被错误设为非标准的 `audio/m4a` 从而在某些 API 平台中抛出 `400 Bad Request` 校验错的隐患。现在已将其纠正为国际标准的 `audio/mp4` 类型。
+  - 在 [ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt) 所有的 ASR 网络调用 Toast 报错中，加入了对 HTTP 429（限流与额度用尽）、HTTP 401（Key 无效）和 HTTP 400（参数异常）等底层代码字串的汉化语义转化。当发生这类由于 API 提供商欠费或被限流引起的接口错误时，会向用户显示极其通俗易懂的中文 Toast 引导，摆脱了以前黑盒 JSON 的用户困扰。
+  - 在 [LlmClient.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/LlmClient.kt) 非 MiMo 接口分支中，补全了 ASR 出错时的 `Log.e` 日志打印，打通了错误链路分析的盲区。
+- **ASR 纯文本识别结果误杀过滤修复**：
+  - 修复了 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt#L2194-L2219) 中 `cleanVoiceText` 方法对非 JSON 纯文本进行强制正则匹配提取，导致正常识别文本被误杀为空字符串 `""` 并抛出“未检测到文字”报错的严重 Bug。现在新增了 `isJsonLike` 自愈判断，仅在真正包含 JSON 属性字段时执行提取，其它情况直接作为有效纯文本传递，使得整个 ASR 识别发送以及“译”字交互状态恢复了 100% 完整闭环。
+- **MiMo 多模态语音识别 400 校验报错修复**：
+  - 在 [LlmClient.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/LlmClient.kt) 的 MiMo ASR `/v1/chat/completions` 主端点请求中，补全了 `type: "text"` 引导文本块，对齐了大模型音频输入的多模态规范，解决了 API 兼容网关因缺少 text prompt 而抛出的 `400 Bad Request` 校验报错。
+- **微信式语音录制瞬间松手竞态死锁与 ASR 错误透传自愈**：
+  - 修复了在 [ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt) 微信式按键手势交互中，由于 `startRecording` 的 200ms 避让延迟导致在瞬间点按松手时，`isRecording.value` 尚未变为 `true` 而锁死 `stopRecording` 触发逻辑，引发的“长按完以后松手无动静且录音卡死”的严重竞态故障。
+  - 重构了 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中的 `stopRecording` 方法。在 `!isRecording.value`（即避让期内）状态下，依然无条件释放 `MediaRecorder` 并将 `isRecordingActive` 重置为 `false`，彻底打通了录音启动避让的死锁清理链路。
+  - 在 [LlmClient.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/LlmClient.kt) 的 ASR 网络模块中增加了 `lastAsrError` 属性，发生 HTTP 错误或解析异常时进行实时记录，并提供 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 只读代理。
+  - 将 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 的 `transcribeAndSendAudio` 的 `onFailed` 参数升级为携带 String 参数，发生转写失败时，能够将底层最真实的 HTTP 错误细节、反序列化结构异常或者 API 参数问题以 Toast 可视化抛出在界面上，终结了之前转写失败时无动静、无任何反馈的用户困惑。
 - **WorkManager 加急任务元数据编译错误修复**：
   - 修复了在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中由于 Kotlin 编译器对库元数据不兼容所引发的 `Unresolved reference: RUN_AS_FOREGROUND_SERVICE` 编译报错。
   - 通过将 `OutOfQuotaPolicy.RUN_AS_FOREGROUND_SERVICE` 替换为以反射方式加载的 `androidx.work.OutOfQuotaPolicy.valueOf("RUN_AS_FOREGROUND_SERVICE")` 全路径形式，彻底绕过了编译器的元数据解析障碍，在保持相同加急防杀特性的前提下实现了成功编译。
