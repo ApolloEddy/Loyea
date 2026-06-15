@@ -13,7 +13,8 @@ All notable changes to this project will be documented in this file.
   - 在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 与 `LlmClient` 之间增加了 `currentVoiceEmotion` 语气与临时情感缓存层。在切换会话时，主动对该情感缓存执行原子化 `clear()`，避免情感底色交叉污染。
   - 当用户输入语音并转换文字（STT）时，系统自动识别其语音中的模拟情绪（伤心、生气、开心、温柔、慵懒、中性等），在发起对话时以 `[Acoustic Emotion]` 语气标签的形式无感注入，并在大模型本次回复完成后自动重置缓存。
 - **脑内心智与共情系统 UI 二级控制卡片**：
-  - 在 [SettingsScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/settings/SettingsScreen.kt) 增加“脑内心智与共情系统”子面板。提供长程关系图谱（Graph RAG）和声学情绪感知的独立二级控制开关，完美保障了用户对 AI 功能 of 的自主掌控权与隐私控制感。
+  - 在 [SettingsScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/settings/SettingsScreen.kt) 增加“脑内心智与共情系统”子面板。提供长程关系图谱（Graph RAG）和声学情绪感知的独立二级控制开关，完美保障了用户对 AI 功能的自主掌控权与隐私控制感。
+  - **长程关系图谱可视化管理弹窗**：在图谱记忆开关下方增加了“管理记忆网络”入口。点击后以精美的“主语 ──(谓语)──> 宾语”双色圆角标签卡片展示当前会话物理隔离的所有提取记忆三元组。提供单条删除与一键清空操作，不仅展示了各三元组的历史提及频次与艾宾浩斯即时记忆权重，更把记忆的绝对掌控权完整还给用户。
 
 ### Fixed (修复)
 - **物理手表模拟健康数据越权泄漏拦截**：

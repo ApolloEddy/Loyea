@@ -242,6 +242,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     var currentVoiceEmotion = mutableStateOf<String?>(null)
         private set
 
+    // 长程图谱关系记忆列表数据（仅用于 UI 列表展现，每个会话物理隔离）
+    var graphMemories = mutableStateOf<List<com.loyea.perception.memory.MemoryTriple>>(emptyList())
+        private set
+
     private val ttsWriteMutex = kotlinx.coroutines.sync.Mutex()
 
 
@@ -1680,6 +1684,52 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         prefs.edit().putBoolean("enable_voice_emotion_perception", enabled).apply()
         if (!enabled) {
             currentVoiceEmotion.value = null
+        }
+    }
+
+    /**
+     * 加载当前会话隔离的长程三元组（UI 列表管理）
+     */
+    fun loadGraphMemoriesForCurrentSession() {
+        val sessionId = currentSessionId.value
+        val characterId = activeCharacterCard.value?.id ?: "char_loyea_default"
+        if (sessionId.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val filtered = graphMemoryManager.getTriplesForSession(characterId, sessionId)
+            withContext(Dispatchers.Main) {
+                graphMemories.value = filtered
+            }
+        }
+    }
+
+    /**
+     * 删除单条图谱三元组记录，确保当前会话的物理隔离
+     */
+    fun deleteGraphMemoryTriple(tripleId: Long) {
+        val sessionId = currentSessionId.value
+        val characterId = activeCharacterCard.value?.id ?: "char_loyea_default"
+        if (sessionId.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            graphMemoryManager.deleteTriple(tripleId)
+            val filtered = graphMemoryManager.getTriplesForSession(characterId, sessionId)
+            withContext(Dispatchers.Main) {
+                graphMemories.value = filtered
+            }
+        }
+    }
+
+    /**
+     * 一键清空当前会话隔离的所有关系图谱三元组
+     */
+    fun clearAllGraphMemoriesForCurrentSession() {
+        val sessionId = currentSessionId.value
+        val characterId = activeCharacterCard.value?.id ?: "char_loyea_default"
+        if (sessionId.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            graphMemoryManager.clearMemoriesForSession(characterId, sessionId)
+            withContext(Dispatchers.Main) {
+                graphMemories.value = emptyList()
+            }
         }
     }
 

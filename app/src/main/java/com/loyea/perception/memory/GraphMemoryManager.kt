@@ -76,8 +76,10 @@ class GraphMemoryManager(private val context: Context) {
                 mentionCount = existing.mentionCount + 1
             )
         } else {
+            val newId = (currentList.maxOfOrNull { it.id } ?: 0L) + 1L
             currentList.add(
                 MemoryTriple(
+                    id = newId,
                     characterId = characterId,
                     sessionId = sessionId,
                     subject = subject,
@@ -90,6 +92,22 @@ class GraphMemoryManager(private val context: Context) {
                 )
             )
         }
+        saveTriplesInternal(currentList)
+    }
+
+    /**
+     * 加载当前会话隔离的长程三元组
+     */
+    suspend fun getTriplesForSession(characterId: String, sessionId: String): List<MemoryTriple> {
+        return loadTriplesInternal().filter { it.characterId == characterId && it.sessionId == sessionId }
+    }
+
+    /**
+     * 删除单条三元组记录，确保不破坏其他数据
+     */
+    suspend fun deleteTriple(id: Long) {
+        val currentList = loadTriplesInternal().toMutableList()
+        currentList.removeAll { it.id == id }
         saveTriplesInternal(currentList)
     }
 

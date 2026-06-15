@@ -171,6 +171,7 @@ fun SettingsScreen(
                         apiConfigList = apiConfigList,
                         activeConfigId = activeConfigId,
                         appLanguage = appLanguage,
+                        viewModel = viewModel,
                         onBackClick = { subPage = SettingsSubPage.MAIN }
                     )
                 }
@@ -2746,6 +2747,7 @@ fun MemorySettingsLayout(
     apiConfigList: List<ApiConfig>,
     activeConfigId: String,
     appLanguage: String,
+    viewModel: com.loyea.ui.chat.ChatViewModel?,
     onBackClick: () -> Unit
 ) {
     val context = LocalContext.current
@@ -2757,6 +2759,9 @@ fun MemorySettingsLayout(
 
     val isEn = appLanguage == "en"
     var expandedDropdown by remember { mutableStateOf(false) }
+
+    // 控制关系图谱的查看与管理弹窗
+    var showGraphDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -3018,8 +3023,39 @@ fun MemorySettingsLayout(
                             onCheckedChange = {
                                 enableGraphMemory = it
                                 prefs.edit().putBoolean("enable_graph_memory", it).apply()
+                                viewModel?.updateGraphMemorySetting(it)
                             }
                         )
+                    }
+
+                    // 如果启用了关系图谱，展示管理记忆网络入口按钮
+                    if (enableGraphMemory) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(
+                                onClick = {
+                                    viewModel?.loadGraphMemoriesForCurrentSession()
+                                    showGraphDialog = true
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Psychology,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (isEn) "Manage Relation Graph" else "管理记忆网络",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
                     }
 
                     Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
@@ -3049,12 +3085,226 @@ fun MemorySettingsLayout(
                             onCheckedChange = {
                                 enableVoiceEmotion = it
                                 prefs.edit().putBoolean("enable_voice_emotion_perception", it).apply()
+                                viewModel?.updateVoiceEmotionPerceptionSetting(it)
                             }
                         )
                     }
                 }
             }
         }
+    }
+
+    // 关系图谱展现与删除管理弹窗
+    if (showGraphDialog) {
+        val graphMemories by remember { viewModel?.graphMemories ?: mutableStateOf(emptyList()) }
+
+        AlertDialog(
+            onDismissRequest = { showGraphDialog = false },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .fillMaxHeight(0.85f)
+                .padding(16.dp)
+                .border(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(20.dp)
+                ),
+            shape = RoundedCornerShape(20.dp),
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
+            title = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Psychology,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (isEn) "Memory Relation Graph" else "会话关系图谱网络",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    IconButton(onClick = { showGraphDialog = false }) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = if (isEn)
+                            "This list displays the relational triple network extracted from the current session. These facts are isolated from other sessions."
+                            else "本列表展示从当前会话提取出的三元组记忆网络。不同会话及不同角色的记忆已做物理沙盒隔离，互不穿透。",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        lineHeight = 16.sp
+                    )
+
+                    if (graphMemories.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = if (isEn) "No relational graph memories extracted yet." else "当前会话暂未提取出任何关系图谱记忆。",
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                            )
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            contentPadding = PaddingValues(vertical = 4.dp)
+                        ) {
+                            items(graphMemories) { triple ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .border(
+                                            width = 1.dp,
+                                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f),
+                                            shape = RoundedCornerShape(10.dp)
+                                        )
+                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                                        .padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(
+                                        modifier = Modifier.weight(1f),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        // 杂志级排版展示三元组
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            // Subject
+                                            Box(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(6.dp))
+                                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
+                                                    .padding(horizontal = 6.dp, vertical = 3.dp)
+                                            ) {
+                                                Text(
+                                                    text = triple.subject,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
+
+                                            Text(
+                                                text = "── ${triple.predicate} ──>",
+                                                fontSize = 10.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                            )
+
+                                            // Object
+                                            Box(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(6.dp))
+                                                    .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.08f))
+                                                    .padding(horizontal = 6.dp, vertical = 3.dp)
+                                            ) {
+                                                Text(
+                                                    text = triple.`object`,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.secondary
+                                                )
+                                            }
+                                        }
+
+                                        // 提及频次与遗忘权重
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                        ) {
+                                            Text(
+                                                text = if (isEn) "Mentions: ${triple.mentionCount}" else "提及次数: ${triple.mentionCount}",
+                                                fontSize = 9.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                            )
+                                            val formattedWeight = String.format("%.2f", triple.getCalculatedWeight(System.currentTimeMillis()))
+                                            Text(
+                                                text = if (isEn) "Memory Weight: $formattedWeight" else "艾宾浩斯记忆权重: $formattedWeight",
+                                                fontSize = 9.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                            )
+                                        }
+                                    }
+
+                                    IconButton(
+                                        onClick = { viewModel?.deleteGraphMemoryTriple(triple.id) }
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = "Delete",
+                                            tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (graphMemories.isNotEmpty()) {
+                        TextButton(
+                            onClick = { viewModel?.clearAllGraphMemoriesForCurrentSession() }
+                        ) {
+                            Text(
+                                text = if (isEn) "Clear All" else "一键清空",
+                                color = MaterialTheme.colorScheme.error,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp
+                            )
+                        }
+                    } else {
+                        Spacer(modifier = Modifier.width(1.dp))
+                    }
+
+                    Button(
+                        onClick = { showGraphDialog = false },
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text(text = if (isEn) "Close" else "关闭", fontSize = 14.sp)
+                    }
+                }
+            }
+        )
     }
 }
 

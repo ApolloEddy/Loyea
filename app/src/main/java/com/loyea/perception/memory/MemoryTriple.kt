@@ -4,6 +4,7 @@ package com.loyea.perception.memory
  * 图谱关系三元组实体，代表一条长程记忆
  */
 data class MemoryTriple(
+    val id: Long = 0L,            // 唯一 ID（用于 UI 和删除标识）
     val characterId: String,      // 伴侣角色卡 ID (隔离主键)
     val sessionId: String,        // 会话 ID (隔离主键)
     val subject: String,          // 主语 (如: "主人")
