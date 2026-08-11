@@ -1270,7 +1270,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             // 拦截 AI 主动发送语音消息工具，自动执行 TTS 合成、绑定与自动播放
                             if (success && isVoiceReply) {
                                 val speechText = parsedArgs["text"]?.toString() ?: ""
-                                val cleanedText = cleanTextForTts(speechText)
+                                val cleanedText = cleanTextForTts(
+                                    speechText,
+                                    resolveTtsConfig().provider.contains("mimo", ignoreCase = true)
+                                )
                                 if (cleanedText.isNotBlank()) {
                                     viewModelScope.launch(Dispatchers.IO) {
                                         ttsWriteMutex.withLock {
@@ -2260,7 +2263,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         out.write(header, 0, 44)
     }
 
-    private fun cleanTextForTts(rawText: String): String {
+    private fun cleanTextForTts(rawText: String, isMiMo: Boolean = false): String {
         if (rawText.isBlank()) return ""
         var text = rawText
         // 1. 剔除 <think> 和 </think> 标签及其内部的思考内容
@@ -2275,12 +2278,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         text = text.replace(Regex("\\[([^\\]]+)\\]\\([^\\)]+\\)"), "$1")
         // 6. 替换 Markdown 图片 ![描述](链接URL) -> 移除
         text = text.replace(Regex("!\\[([^\\]]+)\\]\\([^\\)]+\\)"), "")
-        // 7. 剔除 Markdown 格式符号：行首的 #, >, -, +, * 
+        // 7. 剔除 Markdown 格式符号：行首的 #, >, -, +, *
         text = text.replace(Regex("(?m)^[#>\\-\\+\\*\\s]+"), "")
         // 行中的加粗、斜体、删除线修饰符
         text = text.replace(Regex("\\*\\*|\\*|__|_|~~|=="), "")
         // 8. 剔除 [haptic:类型] 物理震动等系统级占位符
         text = text.replace(Regex("\\[haptic:[^\\]]+\\]"), "")
+        // 9. 非 MiMo 服务商（阿里/火山/OpenAI 等）不支持 (风格)/[音频] 语气标签：
+        //    统一剥离，避免 TTS 把括号内容当正文朗读（如"温柔你回来了"）。
+        //    MiMo 官方原生支持：句首 (风格) 风格标签 + 句中 [音频标签] 细粒度语气控制，予以保留。
+        if (!isMiMo) {
+            text = text.replace(Regex("\\[[^\\]\\n]{1,20}\\]"), "")
+            text = text.replace(Regex("[（(][^（）()\\n]{1,20}[）)]"), "")
+        }
         return text.trim()
     }
 
@@ -2373,7 +2383,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val inputJson = targetCall?.input ?: ""
             val parsedArgs = llmClient.parseArgumentsMap(inputJson)
             val speechText = parsedArgs["text"]?.toString() ?: ""
-            val cleanedText = cleanTextForTts(speechText)
+            val cleanedText = cleanTextForTts(
+                speechText,
+                resolveTtsConfig().provider.contains("mimo", ignoreCase = true)
+            )
             
             if (cleanedText.isNotBlank()) {
                 // 将 UI 状态更新为 RUNNING 占位态
@@ -2486,7 +2499,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         
-        val cleanedText = cleanTextForTts(text)
+        val cleanedText = cleanTextForTts(
+            text,
+            resolveTtsConfig().provider.contains("mimo", ignoreCase = true)
+        )
         if (cleanedText.isBlank()) {
             android.widget.Toast.makeText(context, "文字内容为空，无法进行语音合成", android.widget.Toast.LENGTH_SHORT).show()
             return
@@ -2724,6 +2740,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         return apiConfigList.value.firstOrNull { it.provider.contains("mimo", ignoreCase = true) }
             ?: activeApiConfig.value
+    }
+
+    /** TTS 合成配置解析：优先用户指定的 TTS 配置，否则回退当前主模型配置 */
+    private fun resolveTtsConfig(): ApiConfig {
+        val ttsCfgId = ttsConfigId.value
+        return if (ttsCfgId.isNotBlank()) {
+            apiConfigList.value.find { it.id == ttsCfgId } ?: activeApiConfig.value
+        } else {
+            activeApiConfig.value
+        }
     }
 
     // ===== 多模态能力检测：决定请求 payload 能否携带图片/音频，避免纯文本模型（如 DeepSeek）直接 400 =====
