@@ -45,7 +45,6 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.ui.text.input.ImeAction
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -1658,6 +1657,7 @@ fun ChatInputBar(
     val isEn = appLanguage == "en"
     val isActive = isThinking || isMcpRunning
     var isVoiceMode by remember { mutableStateOf(false) }
+    var showFullEditor by remember { mutableStateOf(false) }
 
     Row(
         modifier = Modifier
@@ -1771,6 +1771,8 @@ fun ChatInputBar(
                             style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Default)
                         )
                     }
+                    // 长文本时浮现“全屏放大编辑”入口（与主流 AI 聊天软件一致的体验）
+                    val showExpandBtn = value.text.length >= 150
                     BasicTextField(
                         value = value,
                         onValueChange = onValueChange,
@@ -1780,9 +1782,11 @@ fun ChatInputBar(
                             color = MaterialTheme.colorScheme.onBackground
                         ),
                         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                        maxLines = 6,
+                        minLines = 1,
+                        maxLines = 5,
                         modifier = Modifier
                             .fillMaxWidth()
+                            .padding(end = if (showExpandBtn) 36.dp else 0.dp)
                             .onPreviewKeyEvent { keyEvent ->
                                 if (keyEvent.key == Key.Enter) {
                                     if (isActive) {
@@ -1794,17 +1798,81 @@ fun ChatInputBar(
                                     false
                                 }
                             },
+                        // 回车键恢复默认行为（换行 / 拼音选词确认），发送走右侧圆形按钮
                         keyboardOptions = KeyboardOptions(
-                            imeAction = ImeAction.Send
-                        ),
-                        keyboardActions = KeyboardActions(
-                            onSend = {
-                                if (!isTextEmpty && !isActive) {
-                                    onSend()
-                                }
-                            }
+                            imeAction = ImeAction.Default
                         )
                     )
+                    if (showExpandBtn) {
+                        IconButton(
+                            onClick = { showFullEditor = true },
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .size(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.OpenInFull,
+                                contentDescription = if (isEn) "Expand editor" else "放大编辑",
+                                tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 全屏放大编辑层：长文本的专注编辑体验（完成 / 取消）
+            if (showFullEditor) {
+                Dialog(
+                    onDismissRequest = { showFullEditor = false },
+                    properties = DialogProperties(usePlatformDefaultWidth = false)
+                ) {
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .statusBarsPadding()
+                                .navigationBarsPadding()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                TextButton(onClick = { showFullEditor = false }) {
+                                    Text(if (isEn) "Cancel" else "取消")
+                                }
+                                Spacer(modifier = Modifier.weight(1f))
+                                TextButton(
+                                    onClick = {
+                                        onSend()
+                                        showFullEditor = false
+                                    },
+                                    enabled = !isTextEmpty && !isActive
+                                ) {
+                                    Text(if (isEn) "Send" else "发送")
+                                }
+                            }
+                            BasicTextField(
+                                value = value,
+                                onValueChange = onValueChange,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                                textStyle = TextStyle(
+                                    fontFamily = FontFamily.Default,
+                                    fontSize = 17.sp,
+                                    lineHeight = 26.sp,
+                                    color = MaterialTheme.colorScheme.onBackground
+                                ),
+                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary)
+                            )
+                        }
+                    }
                 }
             }
         }

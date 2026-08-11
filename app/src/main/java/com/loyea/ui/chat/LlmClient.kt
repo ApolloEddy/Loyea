@@ -1364,7 +1364,8 @@ class LlmClient {
             } else {
                 providerTemplate
             }
-            val isMiMo = effectiveProvider.equals("MiMo", ignoreCase = true)
+            // 判定放宽为包含 "mimo"：兼容 "Xiaomi MiMo"、"小米 mimo" 等自定义写法，避免误走 OpenAI Multipart 端点导致 400
+            val isMiMo = effectiveProvider.contains("mimo", ignoreCase = true)
             val targetModel = if (isMiMo) {
                 if (model.isBlank() || model.equals("whisper-1", ignoreCase = true) || model.contains("default", ignoreCase = true)) {
                     "mimo-v2.5-asr"
@@ -1392,51 +1393,64 @@ class LlmClient {
                 }
                 val base64Data = "data:$mimeType;base64,$base64DataBare"
 
-                val requestJson = JsonObject().apply {
-                    addProperty("model", targetModel)
-                    val messagesArray = JsonArray().apply {
-                        add(JsonObject().apply {
-                            addProperty("role", "user")
-                            val contentArray = JsonArray().apply {
-                                add(JsonObject().apply {
-                                    addProperty("type", "text")
-                                    addProperty("text", "请将这段语音转写为文字")
-                                })
-                                add(JsonObject().apply {
-                                    addProperty("type", "input_audio")
-                                    val inputAudioObj = JsonObject().apply {
-                                        addProperty("data", base64Data)
-                                        addProperty("format", format)
-                                    }
-                                    add("input_audio", inputAudioObj)
-                                })
-                            }
-                            add("content", contentArray)
-                        })
+                // 官方 MiMo ASR 规范（mimo.mi.com/docs/zh-CN/api/audio/Speech-Recognition）：
+                // content 仅含单个 input_audio 部件（无 text 引导块）；data 为 data:{MIME};base64,... 的 data URL；
+                // MIME 与 format 同时提供时两者值必须一致（400 时降级为仅 data URL 携带 MIME 重试）
+                fun buildAsrJson(includeFormat: Boolean): String {
+                    val json = JsonObject().apply {
+                        addProperty("model", targetModel)
+                        val messagesArray = JsonArray().apply {
+                            add(JsonObject().apply {
+                                addProperty("role", "user")
+                                val contentArray = JsonArray().apply {
+                                    add(JsonObject().apply {
+                                        addProperty("type", "input_audio")
+                                        val inputAudioObj = JsonObject().apply {
+                                            addProperty("data", base64Data)
+                                            if (includeFormat) {
+                                                addProperty("format", format)
+                                            }
+                                        }
+                                        add("input_audio", inputAudioObj)
+                                    })
+                                }
+                                add("content", contentArray)
+                            })
+                        }
+                        add("messages", messagesArray)
                     }
-                    add("messages", messagesArray)
+                    return gson.toJson(json)
                 }
 
-                val requestBodyStr = gson.toJson(requestJson)
+                fun asrRequest(jsonStr: String): okhttp3.Response {
+                    val requestBody = jsonStr.toRequestBody(mediaType)
+                    val requestBuilder = Request.Builder()
+                        .url(url)
+                        .addHeader("Content-Type", "application/json")
+                        .addHeader("Authorization", "Bearer ${config.apiKey}")
+                    if (isMiMo) {
+                        requestBuilder.addHeader("api-key", config.apiKey)
+                    }
+                    return client.newCall(requestBuilder.post(requestBody).build()).execute()
+                }
+
                 android.util.Log.d("LlmClient", "ASR request to $url (isMiMo=true): size=${audioBytes.size} bytes, format=$format")
-                val requestBody = requestBodyStr.toRequestBody(mediaType)
-                val requestBuilder = Request.Builder()
-                    .url(url)
-                    .addHeader("Content-Type", "application/json")
-                if (isMiMo) {
-                    requestBuilder.addHeader("api-key", config.apiKey)
+                // 首次按规范携带 format 字段；400 时自动降级为省略 format 重试一次（部分网关对 MIME/format 一致性校验更严格）
+                var response = asrRequest(buildAsrJson(true))
+                if (!response.isSuccessful && response.code == 400) {
+                    response.close()
+                    android.util.Log.w("LlmClient", "MiMo ASR got 400 with format field, retrying without format")
+                    response = asrRequest(buildAsrJson(false))
                 }
-                requestBuilder.addHeader("Authorization", "Bearer ${config.apiKey}")
-                val request = requestBuilder.post(requestBody).build()
 
-                client.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) {
-                        val errorMsg = response.body?.string() ?: ""
-                        lastAsrError = "ASR 请求失败 HTTP ${response.code}: ${errorMsg.trim().take(200)}"
-                        android.util.Log.e("LlmClient", "ASR failed! HTTP ${response.code}, response body: $errorMsg")
+                response.use { resp ->
+                    if (!resp.isSuccessful) {
+                        val errorMsg = resp.body?.string() ?: ""
+                        lastAsrError = "ASR 请求失败 HTTP ${resp.code}: ${errorMsg.trim().take(300)}"
+                        android.util.Log.e("LlmClient", "ASR failed! HTTP ${resp.code}, response body: $errorMsg")
                         return@withContext null
                     }
-                    val resBody = response.body?.string() ?: ""
+                    val resBody = resp.body?.string() ?: ""
                     val resJson = gson.fromJson(resBody, JsonObject::class.java)
                     val choices = resJson.getAsJsonArray("choices")
                     if (choices == null || choices.size() == 0) {

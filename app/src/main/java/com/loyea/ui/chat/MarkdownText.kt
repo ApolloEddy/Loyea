@@ -310,7 +310,34 @@ private fun renderInlineMarkdown(text: String, textColor: Color): AnnotatedStrin
             .replace("\\*", escapedStar)
             .replace("\\$", escapedDollar)
 
-        // 普通文本与粗体渲染（顺带还原被保护的字符）
+        // 动作描写 / 括注弱化：全角（...）、半角(...)、单星号 *...* 统一渲染为
+        // 斜体 + 减弱色 + 小字号（SillyTavern / Tavo 风格），与正文台词形成视觉层次。
+        // 括注本身是次要信息，弱化不丢信息，用户消息与 AI 消息全局生效。
+        fun appendWithActionWeak(seg: String, baseColor: Color) {
+            val actionRegex =
+                Regex("（[^（）()\\n]{1,120}）|\\([^（）()\\n]{1,120}\\)|\\*[^*\\n]{1,120}\\*")
+            var lastIndex = 0
+            actionRegex.findAll(seg).forEach { match ->
+                if (match.range.first > lastIndex) {
+                    append(seg.substring(lastIndex, match.range.first))
+                }
+                pushStyle(
+                    SpanStyle(
+                        fontStyle = FontStyle.Italic,
+                        fontSize = 14.sp,
+                        color = baseColor.copy(alpha = 0.5f)
+                    )
+                )
+                append(match.value)
+                pop()
+                lastIndex = match.range.last + 1
+            }
+            if (lastIndex < seg.length) {
+                append(seg.substring(lastIndex))
+            }
+        }
+
+        // 普通文本与粗体渲染（顺带还原被保护的字符；粗体内同样支持动作弱化）
         fun appendPlain(seg: String) {
             val boldParts = seg.split("**")
             var isBold = false
@@ -321,10 +348,10 @@ private fun renderInlineMarkdown(text: String, textColor: Color): AnnotatedStrin
                     .replace(escapedDollar, "$")
                 if (isBold) {
                     pushStyle(SpanStyle(fontWeight = FontWeight.Bold, color = textColor))
-                    append(restored)
+                    appendWithActionWeak(restored, textColor)
                     pop()
                 } else {
-                    append(restored)
+                    appendWithActionWeak(restored, textColor)
                 }
                 isBold = !isBold
             }

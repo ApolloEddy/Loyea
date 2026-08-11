@@ -2722,7 +2722,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         if (sttCfgId.isNotBlank()) {
             return apiConfigList.value.find { it.id == sttCfgId } ?: activeApiConfig.value
         }
-        return apiConfigList.value.firstOrNull { it.provider.equals("MiMo", ignoreCase = true) }
+        return apiConfigList.value.firstOrNull { it.provider.contains("mimo", ignoreCase = true) }
             ?: activeApiConfig.value
     }
 
@@ -2764,7 +2764,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun transcribeAudio(file: File): String? {
         val targetSttConfig = resolveSttConfig()
         val rawText = llmClient.transcribeAudio(targetSttConfig, file, sttModelName.value, sttProviderTemplate.value)
-        return if (targetSttConfig.provider.equals("MiMo", ignoreCase = true) || sttProviderTemplate.value.equals("MiMo", ignoreCase = true)) {
+        return if (targetSttConfig.provider.contains("mimo", ignoreCase = true) || sttProviderTemplate.value.contains("mimo", ignoreCase = true)) {
             cleanVoiceText(rawText)
         } else {
             rawText
@@ -2792,7 +2792,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val targetSttConfig = resolveSttConfig()
                 val text = llmClient.transcribeAudio(targetSttConfig, file, sttModelName.value, sttProviderTemplate.value)
 
-                val cleanedText = if (targetSttConfig.provider.equals("MiMo", ignoreCase = true) || sttProviderTemplate.value.equals("MiMo", ignoreCase = true)) {
+                val cleanedText = if (targetSttConfig.provider.contains("mimo", ignoreCase = true) || sttProviderTemplate.value.contains("mimo", ignoreCase = true)) {
                     cleanVoiceText(text)
                 } else {
                     text

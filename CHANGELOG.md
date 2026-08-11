@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.1] - 2026-08-12
+
+### Fixed (修复)
+- **动作描写 / 括注弱化渲染**（[MarkdownText.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/MarkdownText.kt)）：全角 `（...）`、半角 `(...)`、单星号 `*...*` 统一渲染为斜体 + 50% 透明度减弱色 + 14sp 小字号，与正文台词形成清晰视觉层次（SillyTavern / Tavo 风格），AI 与用户消息全局生效；粗体内括注同样弱化。
+- **输入法回车键恢复**（[ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt)）：移除 `ImeAction.Send`（此前回车键被替换为"发送"按钮导致误发），回车恢复换行与拼音选词确认，发送走右侧圆形按钮。
+- **输入框自适应与长文本全屏编辑**：输入框 1 → 5 行随内容平滑伸缩；文本 ≥150 字时右下角浮现"放大编辑"按钮，点击进入全屏编辑层（17sp 大字号 + 取消/发送）。
+- **MiMo 官方 ASR 400 修复**（[LlmClient.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/LlmClient.kt)）：
+  - 严格对齐官方规范（mimo.mi.com）：content 仅含单个 `input_audio` 部件，移除多余的 `text` 引导块（官方"仅支持单个音频输入"，此前的引导块正是 400 的高概率根源）。
+  - 400 自动降级：首次携带 `format` 字段，若网关校验失败自动省略 format（data URL 已含 MIME）重试一次。
+  - provider 判定放宽：`equals("MiMo")` → `contains("mimo", ignoreCase)`，兼容"Xiaomi MiMo / 小米 mimo"等写法，避免误走 OpenAI Multipart 端点导致 400。
+  - 错误体截断放宽至 300 字符便于定位。
+- **Prompt 工具调用由被动改为双向许可**（[PromptAssembler.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/PromptAssembler.kt)）：感知工具描述从 "Use this tool when the user asks about..." 改为主动/被动均可（用户询问时，或与对话/关怀相关时主动调用）；`send_voice_reply` 允许在表达强烈情绪、耳语、亲密时刻主动发送，同时约束"不要每条回复都发语音"。
+
+### Changed (变更)
+- 版本号升级至 v0.4.1（versionCode 5，可覆盖安装 v0.4）。
+
 ## [Unreleased] - 2026-08-12
 
 ### Added (新增)
