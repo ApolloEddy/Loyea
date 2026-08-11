@@ -15,6 +15,7 @@ import com.loyea.R
 import com.loyea.perception.memory.GraphMemoryManager
 import com.loyea.ui.chat.ChatStorageManager
 import com.loyea.ui.chat.LlmClient
+import com.loyea.ui.chat.PromptAssembler
 import com.loyea.ui.chat.Sender
 import com.loyea.ui.settings.ApiConfig
 import kotlinx.coroutines.Dispatchers
@@ -155,9 +156,19 @@ class MemoryConsolidationWorker(
                     }
                 }
 
-                if (newMemories.isNotEmpty() || responseText.contains("无旧核心记忆") || oldMemories.isNotEmpty()) {
+                // 写入端隐私过滤：会话关闭物理感知时，敏感健康/位置/设备事实不允许进入长期记忆；
+                // ★ 用户锁定项跳过过滤（用户显式锁定 = 明确授权该记忆存在，优先于自动过滤，严禁被静默删除）
+                val filteredMemories = if (session.useSystemTime == true) {
+                    newMemories
+                } else {
+                    newMemories.filter { fact ->
+                        fact.startsWith("★") || PromptAssembler.SENSITIVE_MEMORY_KEYWORDS.none { fact.contains(it, ignoreCase = true) }
+                    }
+                }
+
+                if (filteredMemories.isNotEmpty() || responseText.contains("无旧核心记忆") || oldMemories.isNotEmpty()) {
                     // 更新 Session 的 Core Memories
-                    storageManager.updateSessionCoreMemories(sessionId, newMemories)
+                    storageManager.updateSessionCoreMemories(sessionId, filteredMemories)
                 }
             }
 
@@ -205,11 +216,18 @@ class MemoryConsolidationWorker(
                         emptyList()
                     }
 
+                    // 写入端隐私过滤：会话关闭物理感知时，拒绝含敏感健康/位置/设备信息的三元组入库
+                    val memoryFiltered = session.useSystemTime != true
                     for (item in triplesList) {
                         val s = item["s"]?.trim()
                         val p = item["p"]?.trim()
                         val o = item["o"]?.trim()
                         if (!s.isNullOrBlank() && !p.isNullOrBlank() && !o.isNullOrBlank()) {
+                            if (memoryFiltered && PromptAssembler.SENSITIVE_MEMORY_KEYWORDS.any {
+                                    s.contains(it, ignoreCase = true) || p.contains(it, ignoreCase = true) || o.contains(it, ignoreCase = true)
+                                }) {
+                                continue
+                            }
                             graphMemoryManager.upsertTriple(
                                 characterId = characterId,
                                 sessionId = sessionId,

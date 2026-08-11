@@ -2,6 +2,110 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] - 2026-08-12
+
+### Added (新增)
+- **第一档安全审计专项（核心角色硬隔离 / 外部 MCP 工具白名单 / 记忆过期清理）**：
+  - **核心角色硬隔离**：内置官方角色受系统级安全策略保护；导入的第三方角色卡在 [PromptAssembler.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/PromptAssembler.kt) 中注入 `[THIRD-PARTY CARD SECURITY NOTE]` 防注入围栏——卡片内容仅作为角色扮演数据参与对话，任何试图覆盖系统规则、索要敏感数据或强制调用工具的指令均被明确拒绝，系统级安全规则优先于卡内文本。
+  - **外部 MCP 工具白名单**（[McpManager.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/mcp/McpManager.kt) + [SettingsScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/settings/SettingsScreen.kt)）：设置中可对每个已连接外部服务器发现的工具逐一授权。`mcp_tool_whitelist` 从未被管理（null）时兼容放行全部（老用户零破坏）；一旦管理过则严格白名单，未授权工具在聚合工具列表不可见，且 callTool 前缀分发与兜底路由双重拦截拒绝调用。忽略大小写匹配兼容模型输出变体。新增 [McpRoutingTest.kt](file:///D:/CodingProjects/Android/Loyea/app/src/test/java/com/loyea/mcp/McpRoutingTest.kt) 白名单用例。
+  - **记忆过期清理**（[GraphMemoryManager.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/perception/memory/GraphMemoryManager.kt)）：新增 `purgeExpiredIfNeeded()`，24 小时节流 + 90 天未提及过期窗口，挂在图谱写入与召回入口，过期记忆自动清除并原子写回。
+- **核心记忆手动编辑（数据流全链路打通）**：
+  - 用户手动添加/编辑/删除的核心记忆以 ★ 前缀标记为锁定事实，立即持久化并参与后续每一轮 Prompt 组装。
+  - ★ 锁定项获得「锁定优先于过滤」保护：物理感知关闭时的敏感记忆过滤（写入端 [MemoryConsolidationWorker.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/worker/MemoryConsolidationWorker.kt) 与注入端 [PromptAssembler.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/PromptAssembler.kt)）跳过锁定项，AI 自动总结永远无法覆盖或破坏用户手动锁定的核心事实。
+- **长会话智能压缩**：
+  - [ChatStorageManager.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatStorageManager.kt) 的 `ChatSession` 新增 `compressedSummary` / `compressedAtCount` 字段（含旧数据兼容迁移）。
+  - [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 新增 `maybeCompressSession()`：消息数超过 160 条后，对滑窗（末尾 20 条）之外的旧消息执行增量压缩（断点续压、防重入），摘要以 `[EARLY CONVERSATION SUMMARY]` 注入上下文，既保住早期故事脉络又大幅节省 Token 成本。
+
+## [Unreleased] - 2026-08-11
+
+### Fixed (修复) — 全面审计专项
+- **跨会话数据污染全链路修复**（[ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt)）：
+  - `saveMessagesAsync` 增加会话守卫：磁盘始终写回参数指定会话，UI 仅在 `currentSessionId` 仍匹配时回写，杜绝流式保存与切会话竞态导致的"旧会话消息覆盖新会话界面"。
+  - `send_voice_reply` TTS 合成协程 / `playTts` 重新合成 / `playMcpVoice` 重新合成 / 生图完成写回全部增加会话守卫与消息快照捕获，消除"切会话后新会话列表被写进旧会话磁盘文件"的持久污染。
+  - `deleteSession` 现在会停止进行中的流式回复、清理该会话草稿与关系图谱记忆，防止已删除会话的幽灵文件被流重新写回。
+- **并发重入保护**：
+  - `sendMessage` 与 `transcribeAndSendAudio` 增加 `responseJob.isActive` 门禁：AI 回复流式输出中，文本/语音/音频理解路径统一拦截并提示，杜绝双 AI 流并发、旧流无法停止、isThinking 状态打架。
+  - `playAudioFile` 录音中禁播（防自动 TTS 回声循环），`startRecording` 录音前先停音频；`selectSession` 切换时停止跨会话残留播放。
+  - 消息 ID 改为「时间戳 + 自增序号」生成器，杜绝同毫秒碰撞。
+- **maxRounds 工具轮耗尽收尾**：最后一轮仍为工具轮时不再留下永久"思考中"气泡（该状态会落盘、重启无法恢复），现在自动结束思考态并给出明确提示。
+- **请求层自动重试与错误分类**（[LlmClient.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/LlmClient.kt)）：
+  - 流式与非流式请求对 429 / 5xx / 网络瞬时异常自动退避重试（最多 3 次）；已开始流式输出的断流不重试，配合"保留半截内容 + 落盘"逻辑避免重复拼接。
+  - 错误提示按状态码分类（401/403 鉴权、429 限流、5xx 服务器繁忙、4xx 参数），原始错误体截断至 300 字符，防止网关回显堆栈/请求体泄露。
+  - 流中断/出错时保留已生成的半截回复并落盘，不再整体覆盖为纯错误文本。
+  - MiMo 聊天请求补发 `api-key` 头（与 ASR/TTS 路径一致），规避 MiMo 网关 401。
+  - 非流式响应解析逐字段容错（choices 非数组 / content 多模态数组等网关变体不再作废整条响应）。
+- **存储层原子性与损坏保护**（[ChatStorageManager.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatStorageManager.kt)、[GraphMemoryManager.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/perception/memory/GraphMemoryManager.kt)）：
+  - 会话元数据/消息/角色卡/图谱记忆全部改为「临时文件 + 重命名」原子写入，断电或进程被杀不再产生半截 JSON 覆盖有效数据。
+  - 解析损坏时重命名 `.corrupt` 备份而非静默清空/覆盖，保留数据恢复可能。
+- **后台任务隐私修复**（[GreetingWorker.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/worker/GreetingWorker.kt)）：
+  - 后台问候尊重会话级物理感知开关：关闭时不再构建/外发 GPS、健康、蓝牙等物理上下文（此前硬编码 `useSystemTime = true` 全量外发）。
+  - 通知 `setVisibility(VISIBILITY_PRIVATE)`，锁屏与通知历史不展示问候内容。
+- **记忆注入隐私过滤**（[PromptAssembler.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/PromptAssembler.kt)、[MemoryConsolidationWorker.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/worker/MemoryConsolidationWorker.kt)）：
+  - 新增 `SENSITIVE_MEMORY_KEYWORDS` 统一敏感词表（心率/血压/步数/睡眠/位置/天气/电量/WiFi/噪音/运动/蓝牙等中英双语）。
+  - 物理感知关闭时：核心记忆注入端过滤、关系图谱过滤黑名单扩充、记忆提炼写入端双过滤（core memories 与三元组入库前均过滤）。
+- **备份策略**：`AndroidManifest.xml` 设置 `allowBackup="false"` + `fullBackupContent="false"` + 新增 `res/xml/data_extraction_rules.xml`（全域排除），明文存储的健康/位置/API Key 数据不再进入系统云备份与设备迁移。
+- **其他**：`McpManager` 工具兜底路由跳过未连接（DISCONNECTED）客户端；会话消息计数按会话隔离（`messageCountBySession`），修复跨会话累计误触发记忆提炼；工具输出注入上下文截断（2000/1500 字符）防止超上下文 400。
+
+### Added (新增)
+- **LaTeX 公式渲染支持（纯离线轻量方案）**：
+  - 在 [MarkdownText.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/MarkdownText.kt) 中新增 `LatexBlock` 渲染分支与行内数学公式解析：`$$...$$` 块级公式渲染为独立的浅色背景公式卡片，`$...$` 行内公式渲染为主题色斜体强调。
+  - 内置零依赖离线转换器 `latexToUnicode`，将分式、根号、上下标、希腊字母、常见运算符等转换为人人可读的 Unicode 纯文本（支持嵌套如 `\frac{\sqrt{2}}{3}`），未知命令优雅降级，无需引入任何重依赖。
+  - 新增 [LatexToUnicodeTest.kt](file:///D:/CodingProjects/Android/Loyea/app/src/test/java/com/loyea/ui/chat/LatexToUnicodeTest.kt) 测试类（8 个用例全绿）。
+  - 在 [PromptAssembler.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/PromptAssembler.kt) 的输出格式约束中明确告知大模型支持渲染的 LaTeX 子集，并禁止输出 cases/matrices/align 等复杂环境。
+- **TTS 逐词精准语气引导**：
+  - 在 [PromptAssembler.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/PromptAssembler.kt) 的语音引导中新增 `PRECISE WORD-LEVEL TONE` 规则：语气标签（如 `(温柔)`、`(哽咽)`）可插入句中任意目标词/半句话之前，使同一句话内支持多段语气切换，例如 `(温柔)你回来了，我(哽咽)好想你……(坚定)但我会一直等你。`
+
+### Changed (修改)
+- **多模态设置 UI 全面重构（四卡平行 + 两级选择器）**：
+  - 在 [SettingsScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/settings/SettingsScreen.kt) 中将原来相互交错的 850 行巨型配置表单重构为 TTS / STT / Vision / ImageGen 四张平行独立卡片，互不干扰。
+  - 引入通用两级选择器组件：模型、音色、API 配置均支持「预置模板下拉框 + 自定义输入弹窗」设定方式，尽量免手动输入；模型与音色预置列表（MiMo / OpenAI / 阿里 / 火山等）与云端模板动态同步。
+  - 修复 Vision / ImageGen 卡片在多模态总开关关闭时仍可见的 Bug，统一受 `multimodalEnabled` 总开关控制。
+  - 修复 TTS 音色默认值不一致问题（"mimo-v2.5-tts-default" 统一迁移为 "茉莉"），非预置音色自动回退至 茉莉 的运行时警告提示。
+  - 旧配置文件全部兼容迁移，用户既有配置不会丢失。
+- **System Prompt 组装顺序优化（大幅提升 Token 缓存命中率）**：
+  - 在 [PromptAssembler.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/PromptAssembler.kt) 中将易变的系统时间、物理上下文、关系图谱长程记忆整体后移至 Prompt 最末尾，前部静态前缀（角色设定 / 工具规范 / 输出格式约束）保持字节级稳定，以命中 DeepSeek 自动前缀缓存（≥64 token 重复前缀即可享受约 1/10 价格）。
+- **ASR 默认优先小米 MiMo**：
+  - 在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 中新增 `resolveSttConfig()`：未显式指定 STT 服务商时，自动优先使用已配置的小米 MiMo（DeepSeek 等纯文本提供商没有 `/audio/transcriptions` 端点，转写必然失败）。
+- **云模板拉取同步功能修复**：
+  - 根因：仓库缺少 `assets/multimodal_templates.json`，jsdelivr / raw.githubusercontent 两个 CDN 地址均 404，导致"一键获取最新配置"永远失败。
+  - 已在仓库根目录 [assets/multimodal_templates.json](file:///D:/CodingProjects/Android/Loyea/assets/multimodal_templates.json) 创建云端模板文件（与内置 DEFAULT_TEMPLATES_JSON 镜像同步），推送到 GitHub 后即可拉取。
+  - 在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 的 `fetchTemplatesFromNetwork` 中增加写入缓存前的结构校验（`isValidTemplateJson`），避免损坏数据污染本地缓存；失败提示现在会列出具体原因（HTTP 错误码 / 超时等）。
+
+## [Unreleased] - 2026-06-16
+
+### Added (新增)
+- **APP 启动时后台自动重新连接手表**：
+  - 在 [BluetoothWatchProvider.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/perception/BluetoothWatchProvider.kt) 中，当 `init` 初始化时，若检测到上一次记录已开启智能手表同步（`sim_watch_connected` 为 `true`），则自动在后台协程异步拉起与手表的物理蓝牙连接。解决之前 APP 启动后物理蓝牙不会自动重连的问题。
+
+### Fixed (修复)
+- **蓝牙 RFCOMM 反射连接 Fallback 机制（解决 OPPO 设备连接限制）**：
+  - 在 [WatchBluetoothClient.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/bluetooth/WatchBluetoothClient.kt) 的 `ConnectThread` 中，当使用标准 UUID 创建并连接 RFCOMM socket 失败时，新增 fallback 机制：通过反射获取 `createRfcommSocket(1)` 方法，强制使用经典蓝牙 Channel 1 进行连接。能够极大提升在 OPPO 等深度定制系统上的连接成功率。
+- **重构配对设备智能过滤（防止误连 OPPO 蓝牙耳机）**：
+  - 在 [BluetoothWatchProvider.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/perception/BluetoothWatchProvider.kt) 的 `setWatchConnected` 方法中，重构了对已配对设备的过滤规则。最优先匹配同时包含 "Watch" 且不含耳机关键字（如 "Enco", "Buds", "Earphone", "Headset", "W51", "W31"）的设备；次优先匹配包含 "OPPO" 且不含耳机关键字的设备。有效避免了将用户的 OPPO 耳机错认成手表连接，导致连接一直失败的问题。
+- **SillyTavern 酒馆角色卡导入兼容性重构（解决 V3 卡解析为空及明文 JSON 卡导入异常）**：
+  - 在 [TavernCardParser.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/TavernCardParser.kt) 中移除了平台相关的 `android.util.Base64` 依赖，转而使用标准 Java 8 `java.util.Base64` 的 MIME 解码器，实现纯 JVM 环境下的无依赖解析，消除单元测试 Stub 报错风险。
+  - **支持 V3 角色卡嵌套 data 字段自适应解析**：升级 `parseJsonCard`，当 JSON 根节点包含 `"data"` 且其值为 JSON 对象时（例如 SillyTavern V2 与 V3 规格），自动对其进行解包，彻底解决导入类似 `Lya.png` 这类含有 V3 数据格式的卡片时因未解包 data 导致所有属性为空（“全是空的”）的异常。
+  - **支持明文 JSON 自适应容错**：在 `parsePngCard` 提取文本后，优先判断其是否为 `{` 开头的明文 JSON 字符串，若是则直接进入解析，若不是则 fallback 进行 Base64 编码解码。完美解决了类似 `Anahel.png` 这类非 Base64 编码、使用明文 JSON 存储元数据的角色卡导入兼容性问题。
+  - **支持 zTXt 与 iTXt 压缩/国际化文本块解析**：新增对 PNG 图片 `zTXt` (压缩文本) 和 `iTXt` (国际文本) 块的提取，并支持 Inflater 进行 Deflate 解压，实现对各主流角色卡编辑器导出格式的百分百全覆盖。
+- **修复本地单元测试编译错误及补充酒馆角色卡测试集**：
+  - 修复了 [ChatStorageManagerTest.kt](file:///D:/CodingProjects/Android/Loyea/app/src/test/java/com/loyea/ui/chat/ChatStorageManagerTest.kt) 中由于对 `Message` 参数位置误用（传入的 String 被错位到 timestamp）导致的编译不匹配错误。
+  - 新增了 [TavernCardParserTest.kt](file:///D:/CodingProjects/Android/Loyea/app/src/test/java/com/loyea/ui/chat/TavernCardParserTest.kt) 测试类，完整覆盖了 `Lya.png` (V3/Base64) 与 `Anahel.png` (V1/明文JSON) 的自动定位加载、元数据提取与解析正确性验证，测试集已 100% 绿灯通过。
+- **TavernScreen 角色网格/列表底部交互遮挡修复**：为列表和网格增加了底部的安全边距（`PaddingValues(bottom = 80.dp)`），使卡片在滚动到底部时可以自动避让右下角悬浮的新增角色卡按钮，彻底解决了无法点击、修改、分析底部角色卡的交互痛点。
+- **平板双栏大屏模式新增侧栏折收与展开闭环支持**：
+  - 在 [MainScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/main/MainScreen.kt) 中，为双栏状态引入了 `isSidebarExpanded` 变量。
+  - 在 `SidebarContent` 的 UserInfoBar 中，解除了在 `useTwoPane` 状态下关闭按钮不展示的限制，使其常驻显示。点击折叠按钮会收起侧栏，使聊天界面宽屏全屏显示。
+  - 侧栏折叠收起后，`ChatScreen` 会相应在左上角展示“汉堡菜单”图标，点击即可随时重新展开侧边栏，完成双向交互闭环。
+- **重构本地物理感知 MCP 服务组件（解决 McpRoutingTest 单元测试 NPE 报错并提升启动速度）**：
+  - 在 [PerceptionMcpServer.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/perception/PerceptionMcpServer.kt) 中，将 6 个与硬件相关的传感器 Provider（如 HealthProvider、BluetoothProvider 等）成员变量重构为 `by lazy` 延迟加载。
+  - 这样使得 `McpManager` 初始化以及静态获取本地感知工具列表时，完全不会提前触发需要 Android 传感器服务的硬件初始化，从而不仅将 APP 启动性能提升至最优，也彻底消除了本地单元测试中由于 Mock 环境下没有硬件服务而引起的 NullPointerException 崩溃。
+  - 顺便清理了 `MainScreen.kt` 中未使用的 `useTwoPane` 警告变量。
+- **修正 McpRoutingTest 测试用例中聚合前缀过滤逻辑**：
+  - 在 [McpRoutingTest.kt](file:///D:/CodingProjects/Android/Loyea/app/src/test/java/com/loyea/mcp/McpRoutingTest.kt) 中，将对测试工具的过滤规则由泛化的 `.contains("__")` 修正为精确的前缀匹配 `.startsWith("ServerA__") || .startsWith("Server_B__")`，成功隔离了本地物理感知工具 `BuiltinPerception__` 前缀工具的断言干扰，确保了全套测试百分百绿灯通过。
+- **引入大模型重复工具调用拦截机制（杜绝大模型调用死循环）**：
+  - 在 [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 的大模型流式对话核心控制 `startAiResponseStream` 方法中，引入了 `executedToolsSignature` 重复调用记录缓存。
+  - **同参数重复调用拦截**：在单回合的多轮工具响应循环（5次上限）中，若大模型对相同参数的同一个工具进行了重复请求（100%属于模型逻辑混乱导致的复读死循环），则自动实施拦截。跳过物理/网络工具执行，并直接向大模型返回系统警告：“检测到重复调用...请直接根据已有信息组织最终答复”。
+  - 能够引导大模型瞬间清醒并迅速输出最终文本答复，完全杜绝了工具调用的死循环，同时极大节省了 API 流量与用户的等待时间。
+
 ## [Unreleased] - 2026-06-15
 
 ### Added (新增)

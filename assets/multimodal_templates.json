@@ -1,0 +1,81 @@
+{
+  "tts": [
+    {
+      "provider": "MiMo",
+      "displayName": "小米 MiMo",
+      "defaultModel": "mimo-v2.5-tts",
+      "defaultVoice": "茉莉",
+      "models": [
+        {"id": "mimo-v2.5-tts", "name": "MiMo 语音合成 (v2.5)"},
+        {"id": "mimo-v2.5-audio", "name": "MiMo 语音大模型"}
+      ],
+      "voices": [
+        {"id": "茉莉", "name": "官方标准原声 (女)"},
+        {"id": "白桦", "name": "白桦 (男)"},
+        {"id": "冰糖", "name": "冰糖 (温柔女声)"},
+        {"id": "苏打", "name": "苏打 (温柔男声)"},
+        {"id": "Mia", "name": "Mia (美式女声)"},
+        {"id": "Chloe", "name": "Chloe (美式女声)"},
+        {"id": "Milo", "name": "Milo (美式男声)"},
+        {"id": "Dean", "name": "Dean (美式男声)"},
+        {"id": "mimo_default", "name": "MiMo 默认音色"}
+      ]
+    },
+    {
+      "provider": "OpenAI",
+      "displayName": "OpenAI",
+      "defaultModel": "tts-1",
+      "defaultVoice": "alloy",
+      "models": [
+        {"id": "tts-1", "name": "tts-1 (标准流式)"},
+        {"id": "tts-1-hd", "name": "tts-1-hd (高保真)"}
+      ],
+      "voices": [
+        {"id": "alloy", "name": "Alloy (中性)"},
+        {"id": "echo", "name": "Echo (中性偏男)"},
+        {"id": "fable", "name": "Fable (富有戏剧性)"},
+        {"id": "onyx", "name": "Onyx (深沉男声)"},
+        {"id": "nova", "name": "Nova (活泼女声)"},
+        {"id": "shimmer", "name": "Shimmer (专业女声)"}
+      ]
+    },
+    {
+      "provider": "Alibaba",
+      "displayName": "阿里百炼 (DashScope)",
+      "defaultModel": "cosyvoice-v3-flash",
+      "defaultVoice": "longanyang",
+      "models": [
+        {"id": "cosyvoice-v3-flash", "name": "cosyvoice-v3-flash"},
+        {"id": "cosyvoice-v3.5-plus", "name": "cosyvoice-v3.5-plus"},
+        {"id": "cosyvoice-tg-v1", "name": "cosyvoice-tg-v1 (声音复刻)"},
+        {"id": "sambert-zhichuan-v1", "name": "sambert-zhichuan-v1 (基础)"}
+      ],
+      "voices": [
+        {"id": "longanyang", "name": "龙安阳 (标准男声)"},
+        {"id": "longying", "name": "龙莹 (标准女声)"},
+        {"id": "longwan", "name": "龙婉 (温柔女声)"},
+        {"id": "longxiaoxia", "name": "龙小小 (可爱女童)"},
+        {"id": "longxiaochun", "name": "龙小春 (活泼男童)"},
+        {"id": "longshu", "name": "龙书 (成熟男声)"},
+        {"id": "longjielao", "name": "龙姐唠 (粤语女声)"}
+      ]
+    },
+    {
+      "provider": "Volcengine",
+      "displayName": "火山引擎 (豆包)",
+      "defaultModel": "volcengine-tts",
+      "defaultVoice": "female_emotion_1",
+      "models": [
+        {"id": "volcengine-tts", "name": "火山引擎基础语音合成"},
+        {"id": "doubao-tts", "name": "豆包语音合成大模型"}
+      ],
+      "voices": [
+        {"id": "female_emotion_1", "name": "情感女声 (推荐)"},
+        {"id": "male_emotion_1", "name": "情感男声 (推荐)"},
+        {"id": "female_story", "name": "讲故事女声"},
+        {"id": "male_story", "name": "讲故事男声"},
+        {"id": "child_default", "name": "默认童声"}
+      ]
+    }
+  ]
+}

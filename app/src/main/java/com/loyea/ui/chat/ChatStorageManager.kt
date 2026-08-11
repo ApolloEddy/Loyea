@@ -18,7 +18,9 @@ data class ChatSession(
     val characterId: String = "char_loyea_default", // 新增角色人格绑定
     val useSystemTime: Boolean? = false, // 是否在此会话中使用真实系统时间
     val coreMemories: List<String> = emptyList(), // 会话核心记忆列表
-    val isTitleSummarized: Boolean? = false // 是否已由AI总结了标题
+    val isTitleSummarized: Boolean? = false, // 是否已由AI总结了标题
+    val compressedSummary: String = "", // 长会话早期摘要（滑窗外的旧消息被压缩后保留故事脉络）
+    val compressedAtCount: Int = 0 // 已参与压缩的消息条数（增量压缩断点）
 )
 
 /**
@@ -40,7 +42,7 @@ class ChatStorageManager(private val context: Context) {
     private fun saveSessionListInternal(sessions: List<ChatSession>) {
         try {
             val json = gson.toJson(sessions)
-            sessionsFile.writeText(json)
+            atomicWrite(sessionsFile, json)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -60,11 +62,14 @@ class ChatStorageManager(private val context: Context) {
                     characterId = raw.characterId ?: "char_loyea_default",
                     useSystemTime = raw.useSystemTime ?: false,
                     coreMemories = raw.coreMemories ?: emptyList(),
-                    isTitleSummarized = raw.isTitleSummarized ?: false
+                    isTitleSummarized = raw.isTitleSummarized ?: false,
+                    compressedSummary = raw.compressedSummary ?: "",
+                    compressedAtCount = raw.compressedAtCount ?: 0
                 )
             }
         } catch (e: Exception) {
             e.printStackTrace()
+            backupCorruptFile(sessionsFile)
             emptyList()
         }
     }
@@ -73,7 +78,7 @@ class ChatStorageManager(private val context: Context) {
         try {
             val file = File(sessionsDir, "session_$sessionId.json")
             val json = gson.toJson(messages)
-            file.writeText(json)
+            atomicWrite(file, json)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -99,6 +104,7 @@ class ChatStorageManager(private val context: Context) {
             } ?: emptyList()
         } catch (e: Exception) {
             e.printStackTrace()
+            backupCorruptFile(file)
             emptyList()
         }
     }
@@ -106,7 +112,7 @@ class ChatStorageManager(private val context: Context) {
     private fun saveCharacterCardsInternal(cards: List<CharacterCard>) {
         try {
             val json = gson.toJson(cards)
-            cardsFile.writeText(json)
+            atomicWrite(cardsFile, json)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -142,7 +148,33 @@ class ChatStorageManager(private val context: Context) {
             }
         } catch (e: Exception) {
             e.printStackTrace()
+            backupCorruptFile(cardsFile)
             emptyList()
+        }
+    }
+
+    /**
+     * 原子写入：先写临时文件再重命名，避免中途崩溃（断电/进程被杀）产生半截 JSON 覆盖有效数据
+     */
+    private fun atomicWrite(file: File, content: String) {
+        val tmpFile = File(file.parentFile, "${file.name}.tmp")
+        tmpFile.writeText(content)
+        if (!tmpFile.renameTo(file)) {
+            tmpFile.delete()
+            file.writeText(content) // rename 失败（罕见）时回退为直接写入
+        }
+    }
+
+    /**
+     * 解析损坏时重命名备份（.corrupt），防止下次保存直接覆盖用户原始数据
+     */
+    private fun backupCorruptFile(file: File) {
+        try {
+            if (file.exists()) {
+                file.renameTo(File(file.parentFile, "${file.name}.corrupt"))
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
@@ -254,6 +286,21 @@ class ChatStorageManager(private val context: Context) {
             currentList.map { session ->
                 if (session.id == sessionId) {
                     session.copy(coreMemories = memories)
+                } else {
+                    session
+                }
+            }
+        }
+    }
+
+    /**
+     * 原子化更新某个会话的长会话压缩摘要与压缩断点
+     */
+    suspend fun updateSessionCompression(sessionId: String, summary: String, compressedAtCount: Int) {
+        updateSessionList { currentList ->
+            currentList.map { session ->
+                if (session.id == sessionId) {
+                    session.copy(compressedSummary = summary, compressedAtCount = compressedAtCount)
                 } else {
                     session
                 }

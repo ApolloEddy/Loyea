@@ -15,6 +15,7 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -82,33 +83,38 @@ fun MainScreen(
     val screenHeightDp = configuration.screenHeightDp
     val useTwoPane = screenWidthDp >= 720 && screenHeightDp >= 500
 
+    var isSidebarExpanded by rememberSaveable { mutableStateOf(true) }
+
     Box(modifier = Modifier.fillMaxSize()) {
         if (useTwoPane) {
             Row(modifier = Modifier.fillMaxSize()) {
-                Surface(
-                    modifier = Modifier
-                        .width(300.dp)
-                        .fillMaxHeight(),
-                    color = MaterialTheme.colorScheme.surface,
-                    tonalElevation = 1.dp
-                ) {
-                    SidebarContent(
-                        userName = userName,
-                        appLanguage = appLanguage,
-                        sessions = sessions,
-                        currentSessionId = currentSessionId,
-                        onHistoryItemClick = { sessionId ->
-                            onSessionSelect(sessionId)
-                        },
-                        onSessionDelete = onSessionDelete,
-                        onTavernClick = onTavernClick,
-                        onSettingsClick = onNavigateToSettings,
-                        useSystemTime = useSystemTime,
-                        onToggleSystemTime = onToggleSystemTime,
-                        onUserNameSave = onUserNameChange,
-                        onUpdateCoreMemories = onUpdateCoreMemories,
-                        onTriggerManualMemorySummary = onTriggerManualMemorySummary
-                    )
+                if (isSidebarExpanded) {
+                    Surface(
+                        modifier = Modifier
+                            .width(300.dp)
+                            .fillMaxHeight(),
+                        color = MaterialTheme.colorScheme.surface,
+                        tonalElevation = 1.dp
+                    ) {
+                        SidebarContent(
+                            userName = userName,
+                            appLanguage = appLanguage,
+                            sessions = sessions,
+                            currentSessionId = currentSessionId,
+                            onHistoryItemClick = { sessionId ->
+                                onSessionSelect(sessionId)
+                            },
+                            onSessionDelete = onSessionDelete,
+                            onTavernClick = onTavernClick,
+                            onSettingsClick = onNavigateToSettings,
+                            useSystemTime = useSystemTime,
+                            onToggleSystemTime = onToggleSystemTime,
+                            onUserNameSave = onUserNameChange,
+                            onUpdateCoreMemories = onUpdateCoreMemories,
+                            onTriggerManualMemorySummary = onTriggerManualMemorySummary,
+                            onCloseDrawer = { isSidebarExpanded = false }
+                        )
+                    }
                 }
                 ChatScreen(
                     apiConfig = apiConfig,
@@ -128,11 +134,11 @@ fun MainScreen(
                     saveDraft = saveDraft,
                     clearDraft = clearDraft,
                     onEditMessage = onEditMessage,
-                    onMenuClick = {},
+                    onMenuClick = { isSidebarExpanded = true },
                     activeCharacterCard = activeCharacterCard,
                     characterCardList = characterCardList,
                     viewModel = viewModel,
-                    showMenuIcon = false,
+                    showMenuIcon = !isSidebarExpanded,
                     modifier = modifier.weight(1f)
                 )
             }
@@ -299,7 +305,6 @@ fun SidebarContent(
 
     val configuration = androidx.compose.ui.platform.LocalConfiguration.current
     val isHeightConstrained = configuration.screenHeightDp < 550
-    val useTwoPane = configuration.screenWidthDp >= 720 && configuration.screenHeightDp >= 500
 
     @Composable
     fun UserInfoBar() {
@@ -343,19 +348,17 @@ fun SidebarContent(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                 modifier = Modifier.size(16.dp)
             )
-            if (!useTwoPane) {
-                Spacer(modifier = Modifier.width(8.dp))
-                IconButton(
-                    onClick = { onCloseDrawer() },
-                    modifier = Modifier.size(28.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.ChevronLeft,
-                        contentDescription = "Close Drawer",
-                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
+            Spacer(modifier = Modifier.width(8.dp))
+            IconButton(
+                onClick = { onCloseDrawer() },
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ChevronLeft,
+                    contentDescription = "Close Drawer",
+                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                    modifier = Modifier.size(20.dp)
+                )
             }
         }
     }

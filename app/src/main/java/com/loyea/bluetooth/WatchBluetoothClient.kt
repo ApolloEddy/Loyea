@@ -207,37 +207,56 @@ object WatchBluetoothClient {
         private val device: BluetoothDevice,
         private val context: Context
     ) : Thread() {
-        private val socket: BluetoothSocket? by lazy(LazyThreadSafetyMode.NONE) {
-            try {
-                device.createRfcommSocketToServiceRecord(BT_UUID)
-            } catch (e: IOException) {
-                Log.e(TAG, "Socket creation failed: ${e.message}")
-                null
-            }
-        }
+        private var socket: BluetoothSocket? = null
 
         override fun run() {
-            if (socket == null) {
-                _connectionState.value = ConnectionState.DISCONNECTED
-                return
-            }
-
             // 取消发现以释放系统资源，确保连接顺利
             if (hasBtPermission(context)) {
                 bluetoothAdapter?.cancelDiscovery()
             }
 
+            var success = false
+
+            // 尝试方式一：使用标准的 UUID 创建 RFCOMM Socket
             try {
-                Log.d(TAG, "ConnectThread: Connecting to socket...")
+                Log.d(TAG, "ConnectThread: Creating standard RFCOMM socket via UUID...")
+                socket = device.createRfcommSocketToServiceRecord(BT_UUID)
+                Log.d(TAG, "ConnectThread: Connecting to standard socket...")
                 socket?.connect()
-                Log.d(TAG, "ConnectThread: Connected successfully")
+                Log.d(TAG, "ConnectThread: Connected successfully via standard UUID")
+                success = true
             } catch (e: IOException) {
-                Log.e(TAG, "ConnectThread: Connection failed: ${e.message}")
+                Log.w(TAG, "ConnectThread: Standard connection failed: ${e.message}. Trying fallback reflection...")
                 try {
                     socket?.close()
                 } catch (closeException: IOException) {
-                    Log.e(TAG, "ConnectThread: Could not close socket: ${closeException.message}")
+                    Log.e(TAG, "ConnectThread: Could not close failed standard socket: ${closeException.message}")
                 }
+                socket = null
+            }
+
+            // 尝试方式二：如果方式一失败，尝试反射方式创建 Socket (针对 OPPO 等设备的已知兼容性问题)
+            if (!success) {
+                try {
+                    Log.d(TAG, "ConnectThread: Creating fallback RFCOMM socket via reflection (channel 1)...")
+                    val m = device.javaClass.getMethod("createRfcommSocket", Int::class.javaPrimitiveType ?: Int::class.java)
+                    socket = m.invoke(device, 1) as BluetoothSocket
+                    Log.d(TAG, "ConnectThread: Connecting to fallback socket...")
+                    socket?.connect()
+                    Log.d(TAG, "ConnectThread: Connected successfully via fallback reflection")
+                    success = true
+                } catch (e: Exception) {
+                    Log.e(TAG, "ConnectThread: Fallback connection failed: ${e.message}")
+                    try {
+                        socket?.close()
+                    } catch (closeException: IOException) {
+                        Log.e(TAG, "ConnectThread: Could not close failed fallback socket: ${closeException.message}")
+                    }
+                    socket = null
+                }
+            }
+
+            if (!success) {
                 _connectionState.value = ConnectionState.DISCONNECTED
                 triggerAutoReconnect()
                 return
@@ -258,7 +277,7 @@ object WatchBluetoothClient {
             try {
                 socket?.close()
             } catch (e: IOException) {
-                Log.e(TAG, "ConnectThread close() failed: ${e.message}")
+                Log.e(TAG, "ConnectThread cancel() failed: ${e.message}")
             }
         }
     }

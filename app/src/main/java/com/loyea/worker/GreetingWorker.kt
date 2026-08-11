@@ -89,14 +89,22 @@ class GreetingWorker(
             val userName = prefs.getString("user_name", "Loyea Developer") ?: "Loyea Developer"
 
             // 3. Prepare Physical Context
-            val perceptionManager = PhysicalContextManager(context)
-            val physicalContext = perceptionManager.buildPhysicalContextString()
+            // 尊重会话级物理感知开关：关闭时不构建/不发送任何物理上下文（隐私优先），
+            // 避免后台问候绕过用户开关把 GPS/健康/蓝牙等敏感数据外发
+            val sessionUsesSystemTime = currentSession.useSystemTime ?: false
+            val physicalContext = if (sessionUsesSystemTime) {
+                val perceptionManager = PhysicalContextManager(context)
+                perceptionManager.buildPhysicalContextString()
+            } else {
+                null
+            }
 
             val baseSystemPrompt = PromptAssembler.assembleSystemPrompt(
                 card = activeCard,
                 userName = userName,
-                useSystemTime = true,
-                physicalContext = physicalContext
+                useSystemTime = sessionUsesSystemTime,
+                physicalContext = physicalContext,
+                trustedCard = activeCard.isBuiltIn
             )
 
             // 4. Prepare Prompt
@@ -133,7 +141,7 @@ class GreetingWorker(
 
             // 4. Save to chat
             val newMsg = Message(
-                id = System.currentTimeMillis().toString(),
+                id = "${System.currentTimeMillis()}_greeting",
                 content = generatedText.trim(),
                 sender = Sender.AI,
                 characterId = activeCard.id
@@ -206,6 +214,8 @@ class GreetingWorker(
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
+            // 锁屏与通知历史不展示内容，防止健康/情感类问候语被他人窥见
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .build()
 
         notificationManager.notify(System.currentTimeMillis().toInt(), notification)

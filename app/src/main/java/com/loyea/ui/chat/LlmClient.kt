@@ -75,6 +75,21 @@ class LlmClient {
     private val mapType = object : TypeToken<Map<String, Any>>() {}.type
 
     /**
+     * 将 HTTP 错误码转化为对用户可操作的分级提示。
+     * 原始错误体截断后附带，防止部分网关在错误响应中回显请求体/内部堆栈。
+     */
+    private fun buildFriendlyHttpError(code: Int, rawDetail: String): String {
+        val safeDetail = rawDetail.trim().take(300)
+        return when (code) {
+            401, 403 -> "[错误] 鉴权失败 (HTTP $code)：请检查 API Key 是否正确或账户额度是否有效。$safeDetail"
+            429 -> "[错误] 请求过于频繁或额度已耗尽 (HTTP 429)：已自动重试，仍失败请稍后再试或检查账户额度。$safeDetail"
+            in 500..599 -> "[错误] 服务器繁忙 (HTTP $code)：已自动重试，仍失败请稍后再试。$safeDetail"
+            in 400..499 -> "[错误] 参数错误 (HTTP $code)：$safeDetail"
+            else -> "[错误] 服务器返回 HTTP 错误 $code: $safeDetail"
+        }
+    }
+
+    /**
      * 发送 Chat Completion 流式对话请求 (SSE)
      */
     fun sendChatCompletionStream(
@@ -111,18 +126,29 @@ class LlmClient {
             }
 
             val requestBody = gson.toJson(requestJson).toRequestBody(mediaType)
-            
+
             // 智能补全 completions 请求地址路由
             val baseUrl = resolveChatCompletionsUrl(config)
 
-            val request = Request.Builder()
+            val requestBuilder = Request.Builder()
                 .url(baseUrl)
                 .addHeader("Authorization", "Bearer ${config.apiKey}")
                 .addHeader("Content-Type", "application/json")
-                .post(requestBody)
-                .build()
+            // MiMo 网关对聊天请求同样要求 api-key 头（ASR/TTS 路径已验证该写法），补发以规避 401
+            if (config.provider.equals("MiMo", ignoreCase = true)) {
+                requestBuilder.addHeader("api-key", config.apiKey)
+            }
+            val request = requestBuilder.post(requestBody).build()
 
-            client.newCall(request).execute().use { response ->
+            // 自动重试：429 限流 / 5xx 服务端故障 / 网络瞬时异常时退避重试，避免一次失败直接终结整轮对话
+            val maxAttempts = 3
+            var attempt = 0
+            while (true) {
+                attempt++
+                var retryHttp: Pair<Int, String>? = null
+                var streamStarted = false // 收到首个 SSE 事件后置位：流中段断流不再重试（避免与半截内容保留冲突）
+                try {
+                    client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     val errorMsg = response.body?.string() ?: ""
                     val displayError = try {
@@ -131,7 +157,12 @@ class LlmClient {
                     } catch (e: Exception) {
                         errorMsg
                     }
-                    emit(StreamEvent.Error("[错误] 服务器返回 HTTP 错误 ${response.code}: $displayError"))
+                    // 429/5xx 属可恢复性故障：退避后重试（request 未消费，可安全重发）
+                    if ((response.code == 429 || response.code >= 500) && attempt < maxAttempts) {
+                        retryHttp = response.code to displayError
+                        return@use
+                    }
+                    emit(StreamEvent.Error(buildFriendlyHttpError(response.code, displayError)))
                     return@flow
                 }
 
@@ -159,6 +190,7 @@ class LlmClient {
                 while (reader.readLine().also { line = it } != null) {
                     val trimmedLine = line!!.trim()
                     if (trimmedLine.startsWith("data: ")) {
+                        streamStarted = true
                         val data = trimmedLine.substring(6).trim()
                         if (data == "[DONE]") {
                             break
@@ -227,7 +259,10 @@ class LlmClient {
                                 }
                             }
                         } catch (e: Exception) {
-                            // 忽略解析失败的行，可能是非 JSON 报文
+                            // 忽略解析失败的行（可能是心跳/注释报文）；JSON 形态解析失败时记录一次，便于排查网关格式变体
+                            if (line?.startsWith("{") == true) {
+                                android.util.Log.w("LlmClient", "SSE chunk parse failed: ${e.message}")
+                            }
                         }
                     }
                 }
@@ -258,8 +293,27 @@ class LlmClient {
                 }
 
                 emit(StreamEvent.Done)
+                }
+                    if (retryHttp != null) {
+                        kotlinx.coroutines.delay(1000L * attempt) // 简单线性退避：1s / 2s
+                        continue
+                    }
+                    return@flow
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    // 网络瞬时异常（断网/超时）：退避重试；但已开始流式输出后的断流不重试，
+                    // 交由上层"保留半截内容"逻辑处理，避免重试内容与半截内容重复拼接
+                    if (attempt < maxAttempts && !streamStarted) {
+                        kotlinx.coroutines.delay(1000L * attempt)
+                        continue
+                    }
+                    e.printStackTrace()
+                    emit(StreamEvent.Error("[错误] 网络请求故障: ${e.localizedMessage ?: e.message}"))
+                    return@flow
+                }
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             e.printStackTrace()
             emit(StreamEvent.Error("[错误] 网络请求故障: ${e.localizedMessage ?: e.message}"))
         }
@@ -661,66 +715,112 @@ class LlmClient {
                 }
             }
 
-            val request = Request.Builder()
+            val requestBuilder = Request.Builder()
                 .url(resolveChatCompletionsUrl(config))
                 .addHeader("Authorization", "Bearer ${config.apiKey}")
                 .addHeader("Content-Type", "application/json")
-                .post(gson.toJson(requestJson).toRequestBody(mediaType))
-                .build()
-
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    val errorMsg = response.body?.string() ?: ""
-                    val displayError = try {
-                        val errJson = gson.fromJson(errorMsg, JsonObject::class.java)
-                        errJson.getAsJsonObject("error")?.get("message")?.asString ?: errorMsg
-                    } catch (e: Exception) {
-                        errorMsg
-                    }
-                    return@withContext LlmResponse(
-                        content = "[错误] 服务器返回 HTTP 错误 ${response.code}: $displayError",
-                        isError = true
-                    )
-                }
-
-                val responseBody = response.body?.string()
-                if (responseBody.isNullOrBlank()) {
-                    return@withContext LlmResponse(content = "[错误] 大模型接口返回了空响应", isError = true)
-                }
-
-                parseChatCompletionResponse(responseBody)
+            // MiMo 网关对聊天请求同样要求 api-key 头（与 ASR/TTS 路径保持一致），补发以规避 401
+            if (config.provider.equals("MiMo", ignoreCase = true)) {
+                requestBuilder.addHeader("api-key", config.apiKey)
             }
+            val request = requestBuilder.post(gson.toJson(requestJson).toRequestBody(mediaType)).build()
+
+            // 与流式路径一致：429/5xx/网络瞬时异常退避重试，保障后台任务（记忆提炼等）的可靠性
+            val maxAttempts = 3
+            var attempt = 0
+            while (true) {
+                attempt++
+                val shouldRetry = attempt < maxAttempts
+                var retryHttp = false
+                try {
+                    client.newCall(request).execute().use { response ->
+                        if (!response.isSuccessful) {
+                            val errorMsg = response.body?.string() ?: ""
+                            val displayError = try {
+                                val errJson = gson.fromJson(errorMsg, JsonObject::class.java)
+                                errJson.getAsJsonObject("error")?.get("message")?.asString ?: errorMsg
+                            } catch (e: Exception) {
+                                errorMsg
+                            }
+                            if ((response.code == 429 || response.code >= 500) && shouldRetry) {
+                                retryHttp = true
+                                return@use
+                            }
+                            return@withContext LlmResponse(
+                                content = buildFriendlyHttpError(response.code, displayError),
+                                isError = true
+                            )
+                        }
+
+                        val responseBody = response.body?.string()
+                        if (responseBody.isNullOrBlank()) {
+                            return@withContext LlmResponse(content = "[错误] 大模型接口返回了空响应", isError = true)
+                        }
+
+                        return@withContext parseChatCompletionResponse(responseBody)
+                    }
+                    if (retryHttp) {
+                        kotlinx.coroutines.delay(1000L * attempt)
+                        continue
+                    }
+                    return@withContext LlmResponse(content = "[错误] 网络请求故障: 无响应", isError = true)
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    if (shouldRetry) {
+                        kotlinx.coroutines.delay(1000L * attempt)
+                        continue
+                    }
+                    e.printStackTrace()
+                    return@withContext LlmResponse(content = "[错误] 网络请求故障: ${e.localizedMessage ?: e.message}", isError = true)
+                }
+            }
+            // 不可达兜底（while(true) 内全部 return/continue），仅用于统一 try 块类型推断
+            LlmResponse(content = "[错误] 未知错误", isError = true)
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             e.printStackTrace()
             LlmResponse(content = "[错误] 网络请求故障: ${e.localizedMessage ?: e.message}", isError = true)
         }
     }
 
     private fun parseChatCompletionResponse(responseBody: String): LlmResponse {
-        val responseJson = gson.fromJson(responseBody, JsonObject::class.java)
-        val choices = responseJson.getAsJsonArray("choices")
-        if (choices == null || choices.size() == 0) {
-            return LlmResponse(
-                content = "[错误] 未能从接口解析出有效文本选择支，服务器输出：$responseBody",
-                isError = true
+        // 逐字段容错：兼容网关响应格式变体（choices 非数组 / content 为多模态数组等），
+        // 单个字段异常不再使整条有效响应作废
+        return try {
+            val responseJson = gson.fromJson(responseBody, JsonObject::class.java)
+            val choices = if (responseJson.has("choices") && responseJson.get("choices").isJsonArray) {
+                responseJson.getAsJsonArray("choices")
+            } else null
+            if (choices == null || choices.size() == 0) {
+                return LlmResponse(
+                    content = "[错误] 未能从接口解析出有效文本选择支，服务器输出：${responseBody.take(300)}",
+                    isError = true
+                )
+            }
+
+            val messageObj = choices.get(0).asJsonObject.getAsJsonObject("message")
+            val rawContent = messageObj?.get("content")?.takeIf { !it.isJsonNull }
+                ?.let { if (it.isJsonArray) it.asJsonArray.joinToString("") { el -> el.takeIf { e -> e.isJsonPrimitive && e.asJsonPrimitive.isString }?.asString ?: "" } else it.asString }
+                ?: ""
+            val reasoningContent = messageObj?.get("reasoning_content")?.takeIf { !it.isJsonNull }?.asString
+            val apiToolCalls = if (messageObj?.has("tool_calls") == true && messageObj.get("tool_calls").isJsonArray) {
+                parseToolCalls(messageObj.getAsJsonArray("tool_calls"))
+            } else emptyList()
+
+            val parsedState = parseIncrementalStreamState(rawContent, isDone = true)
+            val finalThoughts = if (!reasoningContent.isNullOrBlank()) reasoningContent else parsedState.thoughts.takeIf { it.isNotBlank() }
+            val finalContent = parsedState.visibleContent.trim()
+            val combinedToolCalls = apiToolCalls + parsedState.completedXmlCalls
+
+            LlmResponse(
+                content = finalContent,
+                thoughts = finalThoughts,
+                toolCalls = combinedToolCalls
             )
+        } catch (e: Exception) {
+            e.printStackTrace()
+            LlmResponse(content = "[错误] 接口响应解析失败: ${e.localizedMessage ?: e.message}", isError = true)
         }
-
-        val messageObj = choices.get(0).asJsonObject.getAsJsonObject("message")
-        val rawContent = messageObj?.get("content")?.takeIf { !it.isJsonNull }?.asString ?: ""
-        val reasoningContent = messageObj?.get("reasoning_content")?.takeIf { !it.isJsonNull }?.asString
-        val apiToolCalls = parseToolCalls(messageObj?.getAsJsonArray("tool_calls"))
-
-        val parsedState = parseIncrementalStreamState(rawContent, isDone = true)
-        val finalThoughts = if (!reasoningContent.isNullOrBlank()) reasoningContent else parsedState.thoughts.takeIf { it.isNotBlank() }
-        val finalContent = parsedState.visibleContent.trim()
-        val combinedToolCalls = apiToolCalls + parsedState.completedXmlCalls
-
-        return LlmResponse(
-            content = finalContent,
-            thoughts = finalThoughts,
-            toolCalls = combinedToolCalls
-        )
     }
 
     private fun parseToolCalls(toolCallsArray: JsonArray?): List<LlmToolCall> {
@@ -1332,7 +1432,7 @@ class LlmClient {
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
                         val errorMsg = response.body?.string() ?: ""
-                        lastAsrError = "ASR 请求失败 HTTP ${response.code}: $errorMsg"
+                        lastAsrError = "ASR 请求失败 HTTP ${response.code}: ${errorMsg.trim().take(200)}"
                         android.util.Log.e("LlmClient", "ASR failed! HTTP ${response.code}, response body: $errorMsg")
                         return@withContext null
                     }
@@ -1378,7 +1478,7 @@ class LlmClient {
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
                         val errorMsg = response.body?.string() ?: ""
-                        lastAsrError = "ASR 请求失败 HTTP ${response.code}: $errorMsg"
+                        lastAsrError = "ASR 请求失败 HTTP ${response.code}: ${errorMsg.trim().take(200)}"
                         android.util.Log.e("LlmClient", "ASR failed! HTTP ${response.code}, response body: $errorMsg")
                         return@withContext null
                     }

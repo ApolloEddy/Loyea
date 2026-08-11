@@ -13,13 +13,19 @@ import java.io.File
 class GraphMemoryManager(private val context: Context) {
     private val gson = Gson()
     private val memoriesFile = File(context.filesDir, "graph_memories.json")
-    
+
     companion object {
         private val fileMutex = Mutex()
+        /** 过期清理节流间隔：24 小时内最多执行一次，避免高频读写下反复全量扫描 */
+        private const val PURGE_THROTTLE_MS = 24L * 3600 * 1000L
+        /** 记忆过期窗口：90 天未被提及即视为过期遗忘 */
+        private const val PURGE_EXPIRE_MS = 90L * 24 * 3600 * 1000L
     }
 
+    private var lastPurgeTime = 0L
+
     /**
-     * 从本地 JSON 文件加载所有三元组列表，带有损坏自愈
+     * 从本地 JSON 文件加载所有三元组列表，带有损坏自愈（重命名备份而非直接删除，保留恢复可能）
      */
     private suspend fun loadTriplesInternal(): List<MemoryTriple> = fileMutex.withLock {
         if (!memoriesFile.exists()) return emptyList()
@@ -29,21 +35,43 @@ class GraphMemoryManager(private val context: Context) {
             gson.fromJson<List<MemoryTriple>>(json, type) ?: emptyList()
         } catch (e: Exception) {
             e.printStackTrace()
-            // 发生反序列化异常自动擦除自愈，防范死循环闪退
-            try { memoriesFile.delete() } catch (ex: Exception) {}
+            // 发生反序列化异常时重命名备份自愈，防范死循环闪退的同时不丢失原始数据
+            try { memoriesFile.renameTo(File(memoriesFile.parentFile, "${memoriesFile.name}.corrupt")) } catch (ex: Exception) {}
             emptyList()
         }
     }
 
     /**
-     * 保存三元组列表到本地 JSON 文件
+     * 保存三元组列表到本地 JSON 文件（原子写：临时文件 + 重命名，防止中途崩溃产生半截 JSON）
      */
     private suspend fun saveTriplesInternal(triples: List<MemoryTriple>) = fileMutex.withLock {
         try {
             val json = gson.toJson(triples)
-            memoriesFile.writeText(json)
+            val tmpFile = File(memoriesFile.parentFile, "${memoriesFile.name}.tmp")
+            tmpFile.writeText(json)
+            if (!tmpFile.renameTo(memoriesFile)) {
+                tmpFile.delete()
+                memoriesFile.writeText(json)
+            }
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+    }
+
+    /**
+     * 惰性过期清理（节流）：90 天未被提及的三元组视为过期遗忘并删除。
+     * 每次调用任何记忆入口时兜底执行一次（24h 节流），防止图谱文件无限膨胀。
+     * 注意：loadTriplesInternal 与 saveTriplesInternal 各自持锁，此处顺序调用无重入问题。
+     */
+    suspend fun purgeExpiredIfNeeded() {
+        val now = System.currentTimeMillis()
+        if (now - lastPurgeTime < PURGE_THROTTLE_MS) return
+        lastPurgeTime = now
+        val expireTime = now - PURGE_EXPIRE_MS
+        val currentList = loadTriplesInternal()
+        val filtered = currentList.filter { it.lastMentionedTime >= expireTime }
+        if (filtered.size != currentList.size) {
+            saveTriplesInternal(filtered)
         }
     }
 
@@ -57,6 +85,7 @@ class GraphMemoryManager(private val context: Context) {
         predicate: String,
         `object`: String
     ) {
+        purgeExpiredIfNeeded() // 每次写入前兜底执行过期遗忘（24h 节流）
         val currentList = loadTriplesInternal().toMutableList()
         val currentTime = System.currentTimeMillis()
         
@@ -119,6 +148,7 @@ class GraphMemoryManager(private val context: Context) {
         sessionId: String,
         userInput: String
     ): String {
+        purgeExpiredIfNeeded() // 读取路径兜底（节流后几乎零开销）
         val allTriples = loadTriplesInternal()
         // 1. 过滤当前角色及会话的图谱数据，完全阻断信息混用
         val sessionTriples = allTriples.filter { it.characterId == characterId && it.sessionId == sessionId }

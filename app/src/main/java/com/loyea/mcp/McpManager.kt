@@ -225,25 +225,56 @@ class McpManager(private val context: Context) {
 
     suspend fun getAggregateTools(): List<McpTool> {
         val list = mutableListOf<McpTool>()
-        
-        // 1. Add Local Builtin Tools
+
+        // 1. Add Local Builtin Tools (内置工具受各自 toolAuth* 授权体系约束，不过滤)
         val localTools = perceptionServer.getTools()
         for (tool in localTools) {
             list.add(tool.copy(name = "${LOCAL_SERVER_NAME}__${tool.name}"))
         }
 
-        // 2. Add Remote Tools
+        // 2. Add Remote Tools —— 白名单过滤：外部 MCP 工具须用户逐个授权后才进入 AI 可见列表
         for (client in activeClients.values) {
             if (client.status.value == McpServerStatus.CONNECTED) {
                 val tools = client.discoveredTools.value
                 // Prefix tool names: Clean server name + "__" + tool name
                 val prefix = client.config.name.replace(Regex("[^a-zA-Z0-9_]"), "_")
                 for (tool in tools) {
-                    list.add(tool.copy(name = "${prefix}__${tool.name}"))
+                    val fullName = "${prefix}__${tool.name}"
+                    if (isToolAuthorized(fullName)) {
+                        list.add(tool.copy(name = fullName))
+                    }
                 }
             }
         }
         return list
+    }
+
+    /**
+     * 外部 MCP 工具白名单检查：
+     * - 从未管理过白名单（prefs 无 key）→ 放行全部（兼容旧行为，老用户零破坏）
+     * - 用户管理过后 → 严格白名单，未授权工具一律不可见、不可调用
+     */
+    private fun isToolAuthorized(fullToolName: String): Boolean {
+        val prefs = context.getSharedPreferences("loyea_prefs", Context.MODE_PRIVATE)
+        val whitelist = prefs.getStringSet("mcp_tool_whitelist", null) ?: return true
+        // 忽略大小写匹配：兼容模型输出工具名的大小写变体
+        return whitelist.any { it.equals(fullToolName, ignoreCase = true) }
+    }
+
+    /**
+     * 授权 UI 专用：返回所有已连接外部服务器发现的全部工具（不过滤），
+     * 供用户查看并逐个授权；格式为 (服务器显示名, 工具全名)
+     */
+    fun getAllRemoteToolsForAuth(): List<Pair<String, String>> {
+        val result = mutableListOf<Pair<String, String>>()
+        for (client in activeClients.values) {
+            if (client.status.value != McpServerStatus.CONNECTED) continue
+            val prefix = client.config.name.replace(Regex("[^a-zA-Z0-9_]"), "_")
+            for (tool in client.discoveredTools.value) {
+                result.add(client.config.name to "${prefix}__${tool.name}")
+            }
+        }
+        return result
     }
 
     suspend fun callTool(prefixedToolName: String, arguments: Map<String, Any>?): JsonRpcResponse {
@@ -269,14 +300,25 @@ class McpManager(private val context: Context) {
                 it.config.name.replace(Regex("[^a-zA-Z0-9_]"), "_").equals(serverPrefix, ignoreCase = true)
             }
             if (client != null) {
+                // 白名单检查：未授权工具即使被调用也拒绝路由
+                if (!isToolAuthorized(cleanName)) {
+                    throw IOException("McpTool $prefixedToolName is not authorized by the user.")
+                }
                 return client.callTool(toolName, arguments)
             }
         }
 
         // 3. 兜底：在所有连接成功的远程服务器的可用工具中搜索匹配
         for (client in activeClients.values) {
+            // 跳过未连接的客户端：避免把调用路由到已断开的服务器（其 discoveredTools 残留旧清单）
+            if (client.status.value != McpServerStatus.CONNECTED) continue
             val hasTool = client.discoveredTools.value.any { it.name.equals(cleanName, ignoreCase = true) }
             if (hasTool) {
+                // 白名单检查：兜底路由同样受授权约束
+                val prefix = client.config.name.replace(Regex("[^a-zA-Z0-9_]"), "_")
+                if (!isToolAuthorized("${prefix}__${cleanName}")) {
+                    throw IOException("McpTool $prefixedToolName is not authorized by the user.")
+                }
                 return client.callTool(cleanName, arguments)
             }
         }

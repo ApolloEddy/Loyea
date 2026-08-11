@@ -12,12 +12,12 @@ import kotlinx.coroutines.withContext
  * 本地物理感知 MCP 服务器，允许 AI 通过工具调用获取细粒度的传感器数据
  */
 class PerceptionMcpServer(private val context: Context) {
-    private val perceptionManager = PhysicalContextManager(context)
-    private val healthProvider = HealthProvider(context)
-    private val environmentProvider = EnvironmentProvider(context)
-    private val bluetoothProvider = BluetoothProvider(context)
-    private val activityProvider = ActivityProvider(context)
-    private val weatherProvider = WeatherProvider(context)
+    private val perceptionManager by lazy { PhysicalContextManager(context) }
+    private val healthProvider by lazy { HealthProvider(context) }
+    private val environmentProvider by lazy { EnvironmentProvider(context) }
+    private val bluetoothProvider by lazy { BluetoothProvider(context) }
+    private val activityProvider by lazy { ActivityProvider(context) }
+    private val weatherProvider by lazy { WeatherProvider(context) }
     private val gson = Gson()
 
     var webSearchProvider: (suspend (String) -> String)? = null

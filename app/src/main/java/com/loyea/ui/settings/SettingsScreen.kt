@@ -35,6 +35,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextStyle
@@ -44,6 +45,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -163,6 +165,8 @@ fun SettingsScreen(
                         onNavigateToMemory = { subPage = SettingsSubPage.MEMORY_SETTINGS },
                         onNavigateToToolAuth = { subPage = SettingsSubPage.TOOL_AUTHORIZATION },
                         onNavigateToMultimodal = { subPage = SettingsSubPage.MULTIMODAL_SETTINGS },
+                        adultContentEnabled = viewModel?.enableAdultContent?.value ?: false,
+                        onAdultContentToggle = { enabled -> viewModel?.updateAdultContentSetting(enabled) },
                         onBackClick = onBackClick
                     )
                 }
@@ -261,6 +265,8 @@ fun SettingsMainLayout(
     onNavigateToMemory: () -> Unit,
     onNavigateToToolAuth: () -> Unit,
     onNavigateToMultimodal: () -> Unit,
+    adultContentEnabled: Boolean,
+    onAdultContentToggle: (Boolean) -> Unit,
     onBackClick: () -> Unit
 ) {
     val isEn = appLanguage == "en"
@@ -621,6 +627,76 @@ fun SettingsMainLayout(
                         modifier = Modifier.size(20.dp)
                     )
                 }
+            }
+
+            // ============ 开发者彩蛋（不对普通用户可见，亦不出现在任何设置项或文档中） ============
+            // 2 秒内连点版本号 5 次，切换「成人内容模式 Beta」：允许成人间自愿性互动描写，
+            // 首次开启需年龄确认；开启时版本号行尾显示极淡星号 * 作为状态提示。
+            var versionTapCount by remember { mutableStateOf(0) }
+            var lastVersionTapTime by remember { mutableStateOf(0L) }
+            var showAdultConfirm by remember { mutableStateOf(false) }
+            val easterEggContext = LocalContext.current
+            Text(
+                text = if (adultContentEnabled) "Loyea v0.4 *" else "Loyea v0.4",
+                modifier = Modifier
+                    .align(Alignment.CenterHorizontally)
+                    .clickable {
+                        val now = System.currentTimeMillis()
+                        versionTapCount = if (now - lastVersionTapTime < 2000) versionTapCount + 1 else 1
+                        lastVersionTapTime = now
+                        if (versionTapCount >= 5) {
+                            versionTapCount = 0
+                            if (adultContentEnabled) {
+                                onAdultContentToggle(false)
+                                Toast.makeText(
+                                    easterEggContext,
+                                    if (isEn) "Adult Content Mode disabled" else "成人内容模式已关闭",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            } else {
+                                showAdultConfirm = true
+                            }
+                        }
+                    },
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = if (adultContentEnabled) 0.45f else 0.25f)
+            )
+
+            // 彩蛋首次开启的年龄确认弹窗（满 18 岁方可启用）
+            if (showAdultConfirm) {
+                AlertDialog(
+                    onDismissRequest = { showAdultConfirm = false },
+                    title = { Text(if (isEn) "Enable Adult Content Mode (Beta)?" else "启用成人内容模式（Beta）？") },
+                    text = {
+                        Text(
+                            if (isEn) {
+                                "This mode allows the AI to reply with mature, open content for adult roleplay.\n\nPlease confirm:\n· You are at least 18 years old;\n· You understand this is for adult fictional roleplay only;\n· Content involving minors, non-consent or illegal acts remains strictly forbidden."
+                            } else {
+                                "本模式允许 AI 回复更成熟、开放的内容，用于成年人角色扮演。\n\n请确认：\n· 你已年满 18 周岁；\n· 你了解该模式仅用于成年人的虚构角色扮演；\n· 涉及未成年人、非自愿或非法内容仍被严格禁止。"
+                            },
+                            fontSize = 13.sp,
+                            lineHeight = 19.sp
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            showAdultConfirm = false
+                            onAdultContentToggle(true)
+                            Toast.makeText(
+                                easterEggContext,
+                                if (isEn) "Adult Content Mode enabled" else "成人内容模式已启用",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }) {
+                            Text(if (isEn) "I'm 18+, Enable" else "我已满 18 岁，确认启用")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showAdultConfirm = false }) {
+                            Text(if (isEn) "Cancel" else "取消")
+                        }
+                    }
+                )
             }
         }
     }
@@ -3327,6 +3403,13 @@ fun ToolAuthorizationLayout(
     var authHaptic by remember { mutableStateOf(viewModel?.toolAuthHaptic?.value ?: true) }
     var enableBgGreeting by remember { mutableStateOf(viewModel?.enableBackgroundGreeting?.value ?: true) }
 
+    // 外部 MCP 工具白名单状态（null = 从未管理过 → 全放行）
+    var mcpTools by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var mcpWhitelist by remember { mutableStateOf(viewModel?.mcpToolWhitelist?.value) }
+    LaunchedEffect(Unit) {
+        mcpTools = viewModel?.getAllMcpToolsForAuth() ?: emptyList()
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -3563,6 +3646,104 @@ fun ToolAuthorizationLayout(
                     )
                 }
             }
+
+            // ===== 外部 MCP 工具白名单（未管理时全放行兼容旧行为；管理后严格白名单） =====
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (isEn) "External MCP Tool Whitelist" else "外部 MCP 工具白名单",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                TextButton(onClick = { mcpTools = viewModel?.getAllMcpToolsForAuth() ?: emptyList() }) {
+                    Text(text = if (isEn) "Refresh" else "刷新", fontSize = 12.sp)
+                }
+            }
+            Text(
+                text = if (isEn) {
+                    "Third-party MCP server tools are hidden from the AI by default and only become callable after you authorize them individually."
+                } else {
+                    "第三方 MCP 服务器的工具默认对 AI 隐藏，仅在你逐个授权后才会开放给 AI 调用。"
+                },
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                lineHeight = 16.sp
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            if (mcpTools.isEmpty()) {
+                Text(
+                    text = if (isEn) "No connected external MCP servers with discovered tools." else "暂无已连接并发现工具的外部 MCP 服务器。",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+            } else {
+                mcpTools.forEach { (serverName, fullName) ->
+                    val whitelistLocal = mcpWhitelist
+                    val isAuthorized = whitelistLocal == null || whitelistLocal.any { it.equals(fullName, ignoreCase = true) }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.02f))
+                            .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f), RoundedCornerShape(12.dp))
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Extension,
+                                contentDescription = null,
+                                tint = if (isAuthorized) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = fullName,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onBackground,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = if (isEn) "Server: $serverName" else "服务器：$serverName",
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Switch(
+                            checked = isAuthorized,
+                            onCheckedChange = { checked ->
+                                val base = mcpWhitelist ?: mcpTools.map { it.second }.toSet()
+                                mcpWhitelist = if (checked) base + fullName else base - fullName
+                                viewModel?.updateMcpToolAuthorization(fullName, checked)
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                                checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                uncheckedThumbColor = MaterialTheme.colorScheme.outline,
+                                uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -3761,727 +3942,707 @@ fun MultimodalSettingsLayout(
 
             if (multimodalEnabled) {
                 // ==================== 1. 语音合成卡片 (TTS) ====================
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(MaterialTheme.colorScheme.surface)
-                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
-                        .padding(16.dp)
+                MultimodalModuleCard(
+                    icon = Icons.Default.VolumeUp,
+                    title = if (isEn) "Read Aloud (TTS)" else "文本语音朗读 (TTS)",
+                    isEn = isEn,
+                    enabled = ttsEnabled,
+                    onToggle = { viewModel?.updateMultimodalSetting("enable_tts", it) }
                 ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        // 头部开关
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.VolumeUp,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = if (isEn) "Read Aloud (TTS)" else "文本语音朗读 (TTS)",
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onBackground
-                                )
-                            }
-                            Switch(
-                                checked = ttsEnabled,
-                                onCheckedChange = { viewModel?.updateMultimodalSetting("enable_tts", it) }
+                    // 自动朗读 AI 回复
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (isEn) "Auto Play Reply" else "自动朗读 AI 回复",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = if (isEn) "Automatically read aloud new AI messages when generated." else "当 AI 消息生成完毕后，自动开始播报语音。",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
                             )
                         }
+                        Switch(
+                            checked = autoTtsEnabled,
+                            onCheckedChange = { viewModel?.updateMultimodalSetting("enable_auto_tts", it) }
+                        )
+                    }
 
-                        if (ttsEnabled) {
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
-                            
-                            // 自动播报设置
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = if (isEn) "Auto Play Reply" else "自动朗读 AI 回复",
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    Text(
-                                        text = if (isEn) "Automatically read aloud new AI messages when generated." else "当 AI 消息生成完毕后，自动开始播报语音。",
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
-                                    )
-                                }
-                                Switch(
-                                    checked = autoTtsEnabled,
-                                    onCheckedChange = { viewModel?.updateMultimodalSetting("enable_auto_tts", it) }
-                                )
-                            }
+                    // API 客户端服务商（空 = 跟随当前会话配置）
+                    ApiConfigDropdown(
+                        configId = ttsConfigId,
+                        apiConfigList = apiConfigList,
+                        isEn = isEn,
+                        onConfigIdChange = { viewModel?.updateMultimodalSetting("tts_config_id", it) }
+                    )
 
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
+                    // 智能匹配当前服务商的预置模板
+                    val activeTtsConfig = apiConfigList.find { it.id == ttsConfigId }
+                    val effectiveProvider = if (ttsProviderTemplate == "Auto") {
+                        activeTtsConfig?.provider ?: "OpenAI"
+                    } else {
+                        ttsProviderTemplate
+                    }
+                    val standardProvider = when {
+                        effectiveProvider.contains("mimo", ignoreCase = true) -> "MiMo"
+                        effectiveProvider.contains("ali", ignoreCase = true) || effectiveProvider.contains("dashscope", ignoreCase = true) -> "Alibaba"
+                        effectiveProvider.contains("volc", ignoreCase = true) || effectiveProvider.contains("doubao", ignoreCase = true) -> "Volcengine"
+                        effectiveProvider.contains("custom", ignoreCase = true) -> "Custom"
+                        else -> "OpenAI"
+                    }
+                    val currentTtsTemplate = ttsTemplates.find { it.provider.equals(standardProvider, ignoreCase = true) }
+                    val voicePresets = currentTtsTemplate?.voices?.map { PresetOption(it.id, it.name) } ?: emptyList()
+                    val modelPresets = currentTtsTemplate?.models?.map { PresetOption(it.id, it.name) } ?: emptyList()
 
-                            // 1. API 客户端配置
-                            Column {
-                                Text(
-                                    text = if (isEn) "API Client Config" else "API 客户端连接",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                var ttsDropdownExpanded by remember { mutableStateOf(false) }
-                                val currentConfig = apiConfigList.find { it.id == ttsConfigId }
-                                val configText = currentConfig?.let { "${it.name} (${it.provider})" } ?: (if (isEn) "Follow Active Conversation Config" else "跟随当前会话配置")
-                                
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
-                                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
-                                        .clickable { ttsDropdownExpanded = true }
-                                        .padding(horizontal = 12.dp, vertical = 10.dp)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(text = configText, fontSize = 13.sp)
-                                        Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(20.dp))
-                                    }
-                                    DropdownMenu(
-                                        expanded = ttsDropdownExpanded,
-                                        onDismissRequest = { ttsDropdownExpanded = false }
-                                    ) {
-                                        DropdownMenuItem(
-                                            text = { Text(if (isEn) "Follow Active Conversation Config" else "跟随当前会话配置", fontSize = 13.sp) },
-                                            onClick = {
-                                                viewModel?.updateMultimodalSetting("tts_config_id", "")
-                                                ttsDropdownExpanded = false
-                                            }
-                                        )
-                                        apiConfigList.forEach { config ->
-                                            DropdownMenuItem(
-                                                text = { Text("${config.name} (${config.provider})", fontSize = 13.sp) },
-                                                onClick = {
-                                                    viewModel?.updateMultimodalSetting("tts_config_id", config.id)
-                                                    ttsDropdownExpanded = false
-                                                }
-                                            )
-                                        }
-                                    }
-                                }
-                            }
+                    // 合成音色：预置下拉 + 自定义输入弹窗（无需手写提示词，音色名即选择项）
+                    PresetSelector(
+                        label = if (isEn) "TTS Voice (${currentTtsTemplate?.displayName ?: standardProvider})" else "合成音色（${currentTtsTemplate?.displayName ?: standardProvider}）",
+                        value = selectedVoice,
+                        presets = voicePresets,
+                        customDialogTitle = if (isEn) "Custom Voice" else "自定义音色",
+                        customPlaceholder = "e.g. alloy, mimo_default, longanyang",
+                        isEn = isEn,
+                        onValueChange = { viewModel?.updateMultimodalSetting("tts_voice", it) }
+                    )
+                    if (currentTtsTemplate != null && voicePresets.none { it.value == selectedVoice }) {
+                        Text(
+                            text = if (isEn)
+                                "Not in ${standardProvider} presets - will fallback to the provider default at runtime."
+                            else
+                                "该音色不在 ${standardProvider} 预置列表中，运行时将自动回退到该服务商的默认音色。",
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                        )
+                    }
 
-                            // 2. 预置服务商模板选择
-                            Column {
-                                Text(
-                                    text = if (isEn) "API Template Protocol" else "API 对接模板协议",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                var protocolDropdownExpanded by remember { mutableStateOf(false) }
-                                val protocolText = when (ttsProviderTemplate) {
-                                    "Auto" -> if (isEn) "Auto Detect" else "自动判定服务商协议"
-                                    "OpenAI" -> "OpenAI 官方规范"
-                                    "MiMo" -> "小米 MiMo 规范"
-                                    "Alibaba" -> "阿里百炼 (DashScope)"
-                                    "Volcengine" -> "火山引擎 (豆包)"
-                                    else -> if (isEn) "Custom Third-Party" else "完全自定义 / 其他中转"
-                                }
-                                
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
-                                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
-                                        .clickable { protocolDropdownExpanded = true }
-                                        .padding(horizontal = 12.dp, vertical = 10.dp)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(text = protocolText, fontSize = 13.sp)
-                                        Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(20.dp))
-                                    }
-                                    DropdownMenu(
-                                        expanded = protocolDropdownExpanded,
-                                        onDismissRequest = { protocolDropdownExpanded = false }
-                                    ) {
-                                        val options = listOf(
-                                            Pair("Auto", if (isEn) "Auto Detect" else "自动判定服务商协议"),
-                                            Pair("OpenAI", "OpenAI 官方规范"),
-                                            Pair("MiMo", "小米 MiMo 规范"),
-                                            Pair("Alibaba", "阿里百炼 (DashScope)"),
-                                            Pair("Volcengine", "火山引擎 (豆包)"),
-                                            Pair("Custom", if (isEn) "Custom Third-Party" else "完全自定义 / 其他中转")
-                                        )
-                                        options.forEach { (key, name) ->
-                                            DropdownMenuItem(
-                                                text = { Text(name, fontSize = 13.sp) },
-                                                onClick = {
-                                                    viewModel?.updateMultimodalSetting("tts_provider_template", key)
-                                                    protocolDropdownExpanded = false
-                                                }
-                                            )
-                                        }
-                                    }
-                                }
-                            }
+                    // 合成模型：预置下拉 + 自定义输入弹窗
+                    PresetSelector(
+                        label = if (isEn) "TTS Model" else "合成模型",
+                        value = ttsModelName,
+                        presets = modelPresets,
+                        customDialogTitle = if (isEn) "Custom Model" else "自定义模型",
+                        customPlaceholder = "e.g. tts-1, cosyvoice-v3-flash, mimo-v2.5-tts",
+                        isEn = isEn,
+                        onValueChange = { viewModel?.updateMultimodalSetting("tts_model_name", it) }
+                    )
 
-                            // 智能识别当前运行的协议模板
-                            val activeConfig = apiConfigList.find { it.id == ttsConfigId }
-                            val effectiveProvider = if (ttsProviderTemplate == "Auto") {
-                                activeConfig?.provider ?: "OpenAI"
-                            } else {
-                                ttsProviderTemplate
-                            }
-                            
-                            val standardProvider = when {
-                                effectiveProvider.contains("mimo", ignoreCase = true) -> "MiMo"
-                                effectiveProvider.contains("ali", ignoreCase = true) || effectiveProvider.contains("dashscope", ignoreCase = true) -> "Alibaba"
-                                effectiveProvider.contains("volc", ignoreCase = true) || effectiveProvider.contains("doubao", ignoreCase = true) -> "Volcengine"
-                                effectiveProvider.contains("custom", ignoreCase = true) -> "Custom"
-                                else -> "OpenAI"
-                            }
-                            
-                            val currentTtsTemplate = ttsTemplates.find { it.provider.equals(standardProvider, ignoreCase = true) }
-                            
-                            // 3. 模型选择与自定义
-                            Column {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = if (isEn) "TTS Model Name" else "合成模型名称",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
-                                    )
-                                    if (ttsProviderTemplate == "Auto") {
-                                        Text(
-                                            text = "(${if (isEn) "Auto detected: " else "已自动匹配: "}$effectiveProvider)",
-                                            fontSize = 11.sp,
-                                            color = MaterialTheme.colorScheme.primary,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                    }
-                                }
-                                
-                                // 模型快捷候选 Chip
-                                currentTtsTemplate?.let { template ->
-                                    if (template.models.isNotEmpty()) {
-                                        Spacer(modifier = Modifier.height(6.dp))
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .horizontalScroll(rememberScrollState()),
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
-                                            template.models.forEach { modelCandidate ->
-                                                val isSelected = ttsModelName == modelCandidate.id
-                                                Box(
-                                                    modifier = Modifier
-                                                        .clip(RoundedCornerShape(6.dp))
-                                                        .background(
-                                                            if (isSelected) MaterialTheme.colorScheme.primary
-                                                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                                                        )
-                                                        .border(
-                                                            width = 1.dp,
-                                                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
-                                                            shape = RoundedCornerShape(6.dp)
-                                                        )
-                                                        .clickable {
-                                                            viewModel?.updateMultimodalSetting("tts_model_name", modelCandidate.id)
-                                                        }
-                                                        .padding(horizontal = 10.dp, vertical = 5.dp)
-                                                ) {
-                                                    Text(
-                                                        text = modelCandidate.name,
-                                                        fontSize = 11.sp,
-                                                        color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onBackground,
-                                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                
-                                Spacer(modifier = Modifier.height(6.dp))
-                                OutlinedTextField(
-                                    value = ttsModelName,
-                                    onValueChange = { viewModel?.updateMultimodalSetting("tts_model_name", it) },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    textStyle = TextStyle(fontSize = 13.sp),
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                                        focusedContainerColor = Color.Transparent,
-                                        unfocusedContainerColor = Color.Transparent
-                                    ),
-                                    placeholder = { Text("e.g. tts-1, cosyvoice-v3-flash", fontSize = 13.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f)) },
-                                    singleLine = true
-                                )
-                            }
-
-                            // 4. 音色选择
-                            Column {
-                                Text(
-                                    text = if (isEn) "Select TTS Voice" else "选择合成音色",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
-                                )
-                                Spacer(modifier = Modifier.height(6.dp))
-                                
-                                // 音色快捷候选 Grid
-                                currentTtsTemplate?.let { template ->
-                                    if (template.voices.isNotEmpty()) {
-                                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                            val chunks = template.voices.chunked(2)
-                                            chunks.forEach { rowVoices ->
-                                                Row(
-                                                    modifier = Modifier.fillMaxWidth(),
-                                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                                ) {
-                                                    rowVoices.forEach { voiceCandidate ->
-                                                        val isSelected = selectedVoice == voiceCandidate.id
-                                                        Box(
-                                                            modifier = Modifier
-                                                                .weight(1f)
-                                                                .clip(RoundedCornerShape(8.dp))
-                                                                .background(
-                                                                    if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
-                                                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
-                                                                )
-                                                                .border(
-                                                                    width = 1.dp,
-                                                                    color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
-                                                                    shape = RoundedCornerShape(8.dp)
-                                                                )
-                                                                .clickable {
-                                                                    viewModel?.updateMultimodalSetting("tts_voice", voiceCandidate.id)
-                                                                }
-                                                                .padding(horizontal = 12.dp, vertical = 10.dp)
-                                                        ) {
-                                                            Row(
-                                                                modifier = Modifier.fillMaxWidth(),
-                                                                horizontalArrangement = Arrangement.SpaceBetween,
-                                                                verticalAlignment = Alignment.CenterVertically
-                                                            ) {
-                                                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                                                                    Icon(
-                                                                        imageVector = if (isSelected) Icons.Default.RadioButtonChecked else Icons.Default.RadioButtonUnchecked,
-                                                                        contentDescription = null,
-                                                                        tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
-                                                                        modifier = Modifier.size(14.dp)
-                                                                    )
-                                                                    Spacer(modifier = Modifier.width(6.dp))
-                                                                    Text(
-                                                                        text = voiceCandidate.name,
-                                                                        fontSize = 12.sp,
-                                                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground,
-                                                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                                                        maxLines = 1
-                                                                    )
-                                                                }
-                                                                Text(
-                                                                    text = voiceCandidate.id,
-                                                                    fontSize = 10.sp,
-                                                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
-                                                                    maxLines = 1
-                                                                )
-                                                            }
-                                                        }
-                                                    }
-                                                    if (rowVoices.size == 1) {
-                                                        Spacer(modifier = Modifier.weight(1f))
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        Spacer(modifier = Modifier.height(6.dp))
-                                    }
-                                }
-                                
-                                // 自定义输入
-                                OutlinedTextField(
-                                    value = selectedVoice,
-                                    onValueChange = { viewModel?.updateMultimodalSetting("tts_voice", it) },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    textStyle = TextStyle(fontSize = 13.sp),
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                                        focusedContainerColor = Color.Transparent,
-                                        unfocusedContainerColor = Color.Transparent
-                                    ),
-                                    placeholder = { Text("e.g. alloy, mimo_default, longanyang", fontSize = 13.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f)) },
-                                    singleLine = true
-                                )
-                            }
+                    // 高级：协议模板（默认自动判定，通常无需修改）
+                    AdvancedSection(title = if (isEn) "Advanced: API Protocol Template" else "高级：API 对接协议模板", isEn = isEn) {
+                        ProtocolTemplateDropdown(
+                            current = ttsProviderTemplate,
+                            options = listOf(
+                                Pair("Auto", if (isEn) "Auto Detect" else "自动判定服务商协议"),
+                                Pair("OpenAI", "OpenAI 官方规范"),
+                                Pair("MiMo", "小米 MiMo 规范"),
+                                Pair("Alibaba", "阿里百炼 (DashScope)"),
+                                Pair("Volcengine", "火山引擎 (豆包)"),
+                                Pair("Custom", if (isEn) "Custom Third-Party" else "完全自定义 / 其他中转")
+                            ),
+                            isEn = isEn,
+                            onValueChange = { viewModel?.updateMultimodalSetting("tts_provider_template", it) }
+                        )
+                        if (ttsProviderTemplate == "Auto") {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = if (isEn) "Auto detected: $effectiveProvider -> $standardProvider" else "已自动匹配: $effectiveProvider → $standardProvider",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.SemiBold
+                            )
                         }
                     }
                 }
 
                 // ==================== 2. 语音输入卡片 (STT) ====================
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(MaterialTheme.colorScheme.surface)
-                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
-                        .padding(16.dp)
+                MultimodalModuleCard(
+                    icon = Icons.Default.Mic,
+                    title = if (isEn) "Voice Input (STT)" else "语音录音输入 (STT)",
+                    isEn = isEn,
+                    enabled = sttEnabled,
+                    onToggle = { viewModel?.updateMultimodalSetting("enable_stt", it) }
                 ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.Mic,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = if (isEn) "Voice Input (STT)" else "语音录音输入 (STT)",
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onBackground
-                                )
-                            }
-                            Switch(
-                                checked = sttEnabled,
-                                onCheckedChange = { viewModel?.updateMultimodalSetting("enable_stt", it) }
+                    // 输入模式单选：语音转文字 / 大模型直接音频理解（二者互斥）
+                    Text(
+                        text = if (isEn) "Input Mode" else "语音输入模式",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { viewModel?.updateMultimodalSetting("enable_audio_understanding", false) }
+                            .padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = !audioUnderstandingEnabled,
+                            onClick = { viewModel?.updateMultimodalSetting("enable_audio_understanding", false) }
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (isEn) "Transcribe to Text (STT)" else "语音转文字 (STT)",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                text = if (isEn) "Recognize speech into text, compatible with all providers." else "识别为文字后发送，兼容所有服务商，小米 MiMo 转写效果最佳。",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                            )
+                        }
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { viewModel?.updateMultimodalSetting("enable_audio_understanding", true) }
+                            .padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = audioUnderstandingEnabled,
+                            onClick = { viewModel?.updateMultimodalSetting("enable_audio_understanding", true) }
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (isEn) "Direct Audio Understanding" else "大模型直接音频理解",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                text = if (isEn) "Send voice directly to the LLM to perceive tone and background sound (needs an audio multimodal model)." else "语音直接发给大模型，感知语气与背景声（需底层模型支持多模态音频）。",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                            )
+                        }
+                    }
+
+                    if (!audioUnderstandingEnabled) {
+                        // API 客户端服务商（空 = 自动优先使用小米 MiMo 转写）
+                        ApiConfigDropdown(
+                            configId = sttConfigId,
+                            apiConfigList = apiConfigList,
+                            isEn = isEn,
+                            onConfigIdChange = { viewModel?.updateMultimodalSetting("stt_config_id", it) }
+                        )
+                        val hasMimoConfig = apiConfigList.any { it.provider.equals("MiMo", ignoreCase = true) }
+                        if (sttConfigId.isBlank() && hasMimoConfig) {
+                            Text(
+                                text = if (isEn) "Unspecified: will auto-prefer the MiMo config for transcription." else "未指定服务商时，将自动优先使用小米 MiMo 转写（转写效果最佳）。",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.SemiBold
                             )
                         }
 
-                        if (sttEnabled) {
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
-                            
-                            // 1. 协议模板选择
-                            var sttProtocolDropdownExpanded by remember { mutableStateOf(false) }
-                            val sttProtocolText = when (sttProviderTemplate) {
-                                "Auto" -> if (isEn) "Auto Detect" else "自动判定服务商协议"
-                                "OpenAI" -> "OpenAI / Whisper 标准 (Multipart)"
-                                "MiMo" -> "小米 MiMo / 多模态 ASR (ChatCompletions)"
-                                "Custom" -> if (isEn) "Custom / Others" else "完全自定义 / 其他中转"
-                                else -> sttProviderTemplate
-                            }
+                        // 转写模型：预置下拉 + 自定义输入弹窗
+                        PresetSelector(
+                            label = if (isEn) "Transcription Model" else "转写模型",
+                            value = sttModelName,
+                            presets = sttModelPresets,
+                            customDialogTitle = if (isEn) "Custom Transcription Model" else "自定义转写模型",
+                            customPlaceholder = "e.g. whisper-1, mimo-v2.5-asr",
+                            isEn = isEn,
+                            onValueChange = { viewModel?.updateMultimodalSetting("stt_model_name", it) }
+                        )
 
-                            Column {
-                                Text(
-                                    text = if (isEn) "STT Protocol Template" else "语音输入协议模板",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
-                                )
-                                Spacer(modifier = Modifier.height(6.dp))
-                                
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
-                                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
-                                        .clickable { sttProtocolDropdownExpanded = true }
-                                        .padding(horizontal = 12.dp, vertical = 10.dp)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(text = sttProtocolText, fontSize = 13.sp)
-                                        Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(20.dp))
-                                    }
-                                    DropdownMenu(
-                                        expanded = sttProtocolDropdownExpanded,
-                                        onDismissRequest = { sttProtocolDropdownExpanded = false }
-                                    ) {
-                                        val options = listOf(
-                                            Pair("Auto", if (isEn) "Auto Detect" else "自动判定服务商协议"),
-                                            Pair("OpenAI", "OpenAI / Whisper 标准 (Multipart)"),
-                                            Pair("MiMo", "小米 MiMo / 多模态 ASR (ChatCompletions)"),
-                                            Pair("Custom", if (isEn) "Custom / Others" else "完全自定义 / 其他中转")
-                                        )
-                                        options.forEach { (key, name) ->
-                                            DropdownMenuItem(
-                                                text = { Text(name, fontSize = 13.sp) },
-                                                onClick = {
-                                                    viewModel?.updateMultimodalSetting("stt_provider_template", key)
-                                                    sttProtocolDropdownExpanded = false
-                                                }
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            MultimodalConfigForm(
-                                configId = sttConfigId,
-                                modelName = sttModelName,
-                                apiConfigList = apiConfigList,
-                                isEn = appLanguage,
-                                onConfigIdChange = { viewModel?.updateMultimodalSetting("stt_config_id", it) },
-                                onModelNameChange = { viewModel?.updateMultimodalSetting("stt_model_name", it) },
-                                modelPlaceholder = "e.g. whisper-1"
+                        // 高级：协议模板（默认自动判定）
+                        AdvancedSection(title = if (isEn) "Advanced: STT Protocol Template" else "高级：语音输入协议模板", isEn = isEn) {
+                            ProtocolTemplateDropdown(
+                                current = sttProviderTemplate,
+                                options = listOf(
+                                    Pair("Auto", if (isEn) "Auto Detect" else "自动判定服务商协议"),
+                                    Pair("OpenAI", "OpenAI / Whisper 标准 (Multipart)"),
+                                    Pair("MiMo", "小米 MiMo / 多模态 ASR (ChatCompletions)"),
+                                    Pair("Custom", if (isEn) "Custom / Others" else "完全自定义 / 其他中转")
+                                ),
+                                isEn = isEn,
+                                onValueChange = { viewModel?.updateMultimodalSetting("stt_provider_template", it) }
                             )
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                                    Text(
-                                        text = if (isEn) "Direct Audio Understanding" else "大模型直接音频理解",
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = MaterialTheme.colorScheme.onBackground
-                                    )
-                                    Text(
-                                        text = if (isEn) "Send voice directly to LLM without STT translation (Requires audio multimodal model)" else "不经文字翻译，将语音直接发给大模型，供其感知语气与背景声（需底层模型支持多模态音频）",
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
-                                        lineHeight = 14.sp
-                                    )
-                                }
-                                Switch(
-                                    checked = audioUnderstandingEnabled,
-                                    onCheckedChange = { viewModel?.updateMultimodalSetting("enable_audio_understanding", it) }
-                                )
-                            }
+                        }
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.05f))
+                                .padding(12.dp)
+                        ) {
+                            Text(
+                                text = if (isEn)
+                                    "Audio understanding mode: voice is sent directly to the current conversation model. Make sure it supports audio input."
+                                else
+                                    "音频理解模式：语音将直接发送给当前会话的大模型，请确保该模型支持多模态音频输入（如 MiMo 多模态模型）。",
+                                fontSize = 11.sp,
+                                lineHeight = 16.sp,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                            )
                         }
                     }
                 }
-            }
 
-            // ==================== 3. 视觉与图片理解卡片 (Vision) ====================
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(MaterialTheme.colorScheme.surface)
-                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
-                    .padding(16.dp)
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.Visibility,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(22.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = if (isEn) "Visual Understanding" else "视觉图片理解 (Vision)",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onBackground
-                            )
-                        }
-                    }
-
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
-                    MultimodalConfigForm(
+                // ==================== 3. 视觉与图片理解卡片 (Vision) ====================
+                MultimodalModuleCard(
+                    icon = Icons.Default.Visibility,
+                    title = if (isEn) "Visual Understanding" else "视觉图片理解 (Vision)",
+                    isEn = isEn,
+                    enabled = true,
+                    onToggle = null
+                ) {
+                    ApiConfigDropdown(
                         configId = visionConfigId,
-                        modelName = visionModelName,
                         apiConfigList = apiConfigList,
-                        isEn = appLanguage,
-                        onConfigIdChange = { viewModel?.updateMultimodalSetting("vision_config_id", it) },
-                        onModelNameChange = { viewModel?.updateMultimodalSetting("vision_model_name", it) },
-                        modelPlaceholder = "e.g. gpt-4o-mini, claude-3-5-sonnet"
+                        isEn = isEn,
+                        onConfigIdChange = { viewModel?.updateMultimodalSetting("vision_config_id", it) }
+                    )
+                    PresetSelector(
+                        label = if (isEn) "Vision Model" else "视觉模型",
+                        value = visionModelName,
+                        presets = visionModelPresets,
+                        customDialogTitle = if (isEn) "Custom Vision Model" else "自定义视觉模型",
+                        customPlaceholder = "e.g. gpt-4o-mini, claude-3-5-sonnet, qwen-vl-max",
+                        isEn = isEn,
+                        onValueChange = { viewModel?.updateMultimodalSetting("vision_model_name", it) }
                     )
                 }
-            }
 
-            // ==================== 4. AI 图像生成卡片 (ImageGen) ====================
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(MaterialTheme.colorScheme.surface)
-                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
-                    .padding(16.dp)
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Default.Palette,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(22.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = if (isEn) "Image Generation" else "AI 图像生成 (生图)",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onBackground
-                            )
-                        }
-                        Switch(
-                            checked = imageGenEnabled,
-                            onCheckedChange = { viewModel?.updateMultimodalSetting("enable_image_gen", it) }
-                        )
-                    }
-
-                    if (imageGenEnabled) {
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
-                        MultimodalConfigForm(
-                            configId = imageGenConfigId,
-                            modelName = imageModelName,
-                            apiConfigList = apiConfigList,
-                            isEn = appLanguage,
-                            onConfigIdChange = { viewModel?.updateMultimodalSetting("image_gen_config_id", it) },
-                            onModelNameChange = { viewModel?.updateMultimodalSetting("image_gen_model", it) },
-                            modelPlaceholder = "e.g. dall-e-3, mimo-v2.5-images"
-                        )
-                    }
+                // ==================== 4. AI 图像生成卡片 (ImageGen) ====================
+                MultimodalModuleCard(
+                    icon = Icons.Default.Palette,
+                    title = if (isEn) "Image Generation" else "AI 图像生成 (生图)",
+                    isEn = isEn,
+                    enabled = imageGenEnabled,
+                    onToggle = { viewModel?.updateMultimodalSetting("enable_image_gen", it) }
+                ) {
+                    ApiConfigDropdown(
+                        configId = imageGenConfigId,
+                        apiConfigList = apiConfigList,
+                        isEn = isEn,
+                        onConfigIdChange = { viewModel?.updateMultimodalSetting("image_gen_config_id", it) }
+                    )
+                    PresetSelector(
+                        label = if (isEn) "Image Model" else "生图模型",
+                        value = imageModelName,
+                        presets = imageGenModelPresets,
+                        customDialogTitle = if (isEn) "Custom Image Model" else "自定义生图模型",
+                        customPlaceholder = "e.g. dall-e-3, mimo-v2.5-images",
+                        isEn = isEn,
+                        onValueChange = { viewModel?.updateMultimodalSetting("image_gen_model", it) }
+                    )
                 }
             }
         }
     }
 }
 
-@Composable
-fun MultimodalConfigForm(
-    configId: String,
-    modelName: String,
-    apiConfigList: List<ApiConfig>,
-    isEn: String,
-    onConfigIdChange: (String) -> Unit,
-    onModelNameChange: (String) -> Unit,
-    modelPlaceholder: String = ""
-) {
-    val isEnglish = isEn == "en"
-    var expandedDropdown by remember { mutableStateOf(false) }
-    val currentConfig = apiConfigList.find { it.id == configId }
-    val configText = currentConfig?.let { "${it.name} (${it.provider})" } ?: (if (isEnglish) "Follow Active Conversation Config" else "跟随当前会话配置")
+// ---------- 多模态通用组件 ----------
 
-    Column(
+/** 预置选项：value 为实际值，name 为显示名 */
+private data class PresetOption(val value: String, val name: String)
+
+private val sttModelPresets = listOf(
+    PresetOption("mimo-v2.5-asr", "MiMo 语音转写 (v2.5)"),
+    PresetOption("whisper-1", "OpenAI Whisper-1"),
+    PresetOption("gpt-4o-transcribe", "OpenAI GPT-4o Transcribe"),
+    PresetOption("paraformer-realtime-v2", "阿里 Paraformer (实时)")
+)
+
+private val visionModelPresets = listOf(
+    PresetOption("gpt-4o-mini", "GPT-4o mini"),
+    PresetOption("gpt-4o", "GPT-4o"),
+    PresetOption("qwen-vl-max", "通义千问 qwen-vl-max"),
+    PresetOption("glm-4v-plus", "智谱 GLM-4V-Plus"),
+    PresetOption("claude-3-5-sonnet", "Claude 3.5 Sonnet")
+)
+
+private val imageGenModelPresets = listOf(
+    PresetOption("mimo-v2.5-images", "MiMo 图像生成 (v2.5)"),
+    PresetOption("dall-e-3", "OpenAI DALL-E 3"),
+    PresetOption("dall-e-2", "OpenAI DALL-E 2"),
+    PresetOption("stable-diffusion-xl", "Stable Diffusion XL")
+)
+
+/**
+ * 多模态模块卡片容器：图标 + 标题 + 可选开关
+ */
+@Composable
+private fun MultimodalModuleCard(
+    icon: ImageVector,
+    title: String,
+    isEn: Boolean,
+    enabled: Boolean,
+    onToggle: ((Boolean) -> Unit)?,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
+            .padding(16.dp)
     ) {
-        // 服务商选择
-        Column {
-            Text(
-                text = if (isEnglish) "API Client Provider" else "API 客户端服务商",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
-                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
-                    .clickable { expandedDropdown = true }
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = configText,
-                        fontSize = 13.sp,
+                        text = title,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onBackground
                     )
-                    Icon(
-                        imageVector = Icons.Default.ArrowDropDown,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                        modifier = Modifier.size(20.dp)
-                    )
                 }
-                DropdownMenu(
-                    expanded = expandedDropdown,
-                    onDismissRequest = { expandedDropdown = false },
-                    modifier = Modifier.fillMaxWidth(0.85f)
-                ) {
-                    DropdownMenuItem(
-                        text = { Text(if (isEnglish) "Follow Active Conversation Config" else "跟随当前会话配置", fontSize = 13.sp) },
-                        onClick = {
-                            onConfigIdChange("")
-                            expandedDropdown = false
-                        }
-                    )
-                    apiConfigList.forEach { config ->
-                        DropdownMenuItem(
-                            text = { Text("${config.name} (${config.provider})", fontSize = 13.sp) },
-                            onClick = {
-                                onConfigIdChange(config.id)
-                                expandedDropdown = false
-                            }
-                        )
-                    }
+                if (onToggle != null) {
+                    Switch(checked = enabled, onCheckedChange = onToggle)
                 }
             }
-        }
-
-        // 模型名称自定义
-        Column {
-            Text(
-                text = if (isEnglish) "Custom Model Name" else "自定义模型名称",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            OutlinedTextField(
-                value = modelName,
-                onValueChange = onModelNameChange,
-                modifier = Modifier.fillMaxWidth(),
-                textStyle = TextStyle(fontSize = 13.sp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = MaterialTheme.colorScheme.primary,
-                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                    focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent
-                ),
-                placeholder = { Text(modelPlaceholder, fontSize = 13.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f)) },
-                singleLine = true
-            )
+            if (onToggle == null || enabled) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
+                content()
+            }
         }
     }
 }
 
+/**
+ * 两级选择器：预置下拉框 + 自定义输入弹窗
+ * 点击后展开下拉菜单展示预置候选，选中"自定义输入…"则弹出输入框。
+ */
+@Composable
+private fun PresetSelector(
+    label: String,
+    value: String,
+    presets: List<PresetOption>,
+    customDialogTitle: String,
+    customPlaceholder: String,
+    isEn: Boolean,
+    onValueChange: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var showCustomDialog by remember { mutableStateOf(false) }
+    var customInput by remember(value) { mutableStateOf(value) }
+
+    val matched = presets.firstOrNull { it.value == value }
+    val isCustom = matched == null
+
+    Column {
+        Text(
+            text = label,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                .clickable { expanded = true }
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = matched?.name ?: value,
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (isCustom) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (isEn) "Custom" else "自定义",
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+                Icon(
+                    imageVector = Icons.Default.ArrowDropDown,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                modifier = Modifier.fillMaxWidth(0.85f)
+            ) {
+                presets.forEach { preset ->
+                    DropdownMenuItem(
+                        text = { Text(preset.name, fontSize = 13.sp) },
+                        onClick = {
+                            onValueChange(preset.value)
+                            expanded = false
+                        }
+                    )
+                }
+                if (presets.isNotEmpty()) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                }
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = if (isEn) "Custom input…" else "自定义输入…",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    },
+                    onClick = {
+                        expanded = false
+                        customInput = value
+                        showCustomDialog = true
+                    }
+                )
+            }
+        }
+        if (isCustom && value.isNotBlank()) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = if (isEn) "Custom value (not in preset list)" else "当前为自定义值，不在预置列表中",
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+            )
+        }
+    }
+
+    if (showCustomDialog) {
+        AlertDialog(
+            onDismissRequest = { showCustomDialog = false },
+            title = { Text(customDialogTitle, fontSize = 16.sp) },
+            text = {
+                OutlinedTextField(
+                    value = customInput,
+                    onValueChange = { customInput = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    textStyle = TextStyle(fontSize = 13.sp),
+                    placeholder = {
+                        Text(customPlaceholder, fontSize = 13.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f))
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onValueChange(customInput.trim())
+                    showCustomDialog = false
+                }) { Text(if (isEn) "OK" else "确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCustomDialog = false }) { Text(if (isEn) "Cancel" else "取消") }
+            }
+        )
+    }
+}
+
+/**
+ * API 客户端下拉选择（空值 = 跟随当前会话配置）
+ */
+@Composable
+private fun ApiConfigDropdown(
+    configId: String,
+    apiConfigList: List<ApiConfig>,
+    isEn: Boolean,
+    onConfigIdChange: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val currentConfig = apiConfigList.find { it.id == configId }
+    val configText = currentConfig?.let { "${it.name} (${it.provider})" }
+        ?: (if (isEn) "Follow Active Conversation Config" else "跟随当前会话配置")
+
+    Column {
+        Text(
+            text = if (isEn) "API Client Provider" else "API 客户端服务商",
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                .clickable { expanded = true }
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = configText,
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = Icons.Default.ArrowDropDown,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                modifier = Modifier.fillMaxWidth(0.85f)
+            ) {
+                DropdownMenuItem(
+                    text = { Text(if (isEn) "Follow Active Conversation Config" else "跟随当前会话配置", fontSize = 13.sp) },
+                    onClick = {
+                        onConfigIdChange("")
+                        expanded = false
+                    }
+                )
+                apiConfigList.forEach { config ->
+                    DropdownMenuItem(
+                        text = { Text("${config.name} (${config.provider})", fontSize = 13.sp) },
+                        onClick = {
+                            onConfigIdChange(config.id)
+                            expanded = false
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 折叠式高级设置区域
+ */
+@Composable
+private fun AdvancedSection(
+    title: String,
+    isEn: Boolean,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Column {
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { expanded = !expanded }
+                .padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = title,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+            )
+            Icon(
+                imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                modifier = Modifier.size(18.dp)
+            )
+        }
+        if (expanded) {
+            content()
+        }
+    }
+}
+
+/**
+ * 协议模板下拉选择
+ */
+@Composable
+private fun ProtocolTemplateDropdown(
+    current: String,
+    options: List<Pair<String, String>>,
+    isEn: Boolean,
+    onValueChange: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val displayText = options.firstOrNull { it.first == current }?.second
+        ?: (if (isEn) "Custom / Others" else "完全自定义 / 其他中转")
+
+    Column {
+        Text(
+            text = if (isEn) "Protocol Template" else "对接协议模板",
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                .clickable { expanded = true }
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = displayText,
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = Icons.Default.ArrowDropDown,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                modifier = Modifier.fillMaxWidth(0.85f)
+            ) {
+                options.forEach { (key, name) ->
+                    DropdownMenuItem(
+                        text = { Text(name, fontSize = 13.sp) },
+                        onClick = {
+                            onValueChange(key)
+                            expanded = false
+                        }
+                    )
+                }
+            }
+        }
+    }
+}

@@ -19,6 +19,17 @@ class BluetoothWatchProvider(private val context: Context) : WatchProvider {
     init {
         // 初始化蓝牙客户端
         WatchBluetoothClient.init(context)
+        
+        // 自动连接逻辑：如果上次记录中已经开启了智能手表同步 (sim_watch_connected == true)，
+        // 则在 APP 启动时，自动尝试在后台唤醒与手表的经典蓝牙连接
+        val isMockConnected = prefs.getBoolean("sim_watch_connected", false)
+        if (isMockConnected) {
+            Log.d(TAG, "init: Last watch sync was enabled. Automatically connecting to watch in background...")
+            CoroutineScope(Dispatchers.IO).launch {
+                delay(1500) // 稍作延迟以待蓝牙适配器和应用就绪
+                setWatchConnected(true)
+            }
+        }
     }
 
     override fun getHeartRateBpm(): Int {
@@ -77,12 +88,34 @@ class BluetoothWatchProvider(private val context: Context) : WatchProvider {
                 return
             }
             
-            // 优先选择名字中带有 Watch 或 OPPO 的配对设备，没有就用第一个配对的
-            val targetDevice = pairedDevices.firstOrNull { 
-                it.name?.contains("Watch", ignoreCase = true) == true || 
-                it.name?.contains("OPPO", ignoreCase = true) == true 
+            // 过滤并寻找正确的手表设备，避免将 OPPO 蓝牙耳机（如 Enco、Buds）错当成手表连接
+            val targetDevice = pairedDevices.firstOrNull { device ->
+                val name = device.name ?: ""
+                val isWatch = name.contains("Watch", ignoreCase = true)
+                val isAudio = name.contains("Enco", ignoreCase = true) || 
+                              name.contains("Buds", ignoreCase = true) || 
+                              name.contains("Earphone", ignoreCase = true) ||
+                              name.contains("Headset", ignoreCase = true) ||
+                              name.contains("W51", ignoreCase = true) ||
+                              name.contains("W31", ignoreCase = true)
+                isWatch && !isAudio
+            } ?: pairedDevices.firstOrNull { device ->
+                // 次优先选择包含 "OPPO" 且不包含耳机关键字的设备
+                val name = device.name ?: ""
+                val isOppo = name.contains("OPPO", ignoreCase = true)
+                val isAudio = name.contains("Enco", ignoreCase = true) || 
+                              name.contains("Buds", ignoreCase = true) || 
+                              name.contains("Earphone", ignoreCase = true) ||
+                              name.contains("Headset", ignoreCase = true) ||
+                              name.contains("W51", ignoreCase = true) ||
+                              name.contains("W31", ignoreCase = true)
+                isOppo && !isAudio
+            } ?: pairedDevices.firstOrNull { device ->
+                // 再次匹配包含 "Watch" 或 "OPPO" 的任何设备
+                val name = device.name ?: ""
+                name.contains("Watch", ignoreCase = true) || name.contains("OPPO", ignoreCase = true)
             } ?: pairedDevices.firstOrNull()
-
+ 
             targetDevice?.let {
                 Log.d(TAG, "Connecting to paired device: ${it.name} (${it.address})")
                 WatchBluetoothClient.connect(context, it)

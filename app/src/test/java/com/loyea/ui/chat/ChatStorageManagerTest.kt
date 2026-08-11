@@ -55,8 +55,8 @@ class ChatStorageManagerTest {
     fun testUpdateSessionMessagesAtomic() = runBlocking {
         val sessionId = "test_session_id"
         val initialMsgs = listOf(
-            Message("m1", "Hello", Sender.USER, "char_loyea_default"),
-            Message("m2", "World", Sender.AI, "char_loyea_default")
+            Message("m1", "Hello", Sender.USER, characterId = "char_loyea_default"),
+            Message("m2", "World", Sender.AI, characterId = "char_loyea_default")
         )
         storageManager.saveSessionMessages(sessionId, initialMsgs)
 

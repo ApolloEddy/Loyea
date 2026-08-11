@@ -175,7 +175,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var enableTts = mutableStateOf(true)
         private set
-    var ttsVoice = mutableStateOf("mimo-v2.5-tts-default")
+    var ttsVoice = mutableStateOf("茉莉")
         private set
     var enableAutoTts = mutableStateOf(false)
         private set
@@ -196,6 +196,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var ttsModelName = mutableStateOf("tts-1")
         private set
+    // LLM 智能标题生成防重入：同一会话只生成一次
+    private val titleGenerationInFlight = mutableSetOf<String>()
     var imageGenConfigId = mutableStateOf("")
         private set
 
@@ -260,6 +262,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var enableVoiceEmotionPerception = mutableStateOf(true)
         private set
+
+    // 成人内容模式（Beta，默认关闭）：放宽 AI 回复内容开放度，仅注入 Prompt 引导，不改变红线
+    var enableAdultContent = mutableStateOf(false)
+        private set
+
+    // 外部 MCP 工具白名单：null = 从未管理（兼容放行全部）；非 null = 严格白名单（仅授权工具可用）
+    var mcpToolWhitelist = mutableStateOf<Set<String>?>(null)
+        private set
+
+    // 长会话压缩参数：消息数超过阈值时，滑窗外的旧消息异步压缩为早期摘要（增量断点 compressedAtCount）
+    private val compressTriggerCount = 160
+    private val compressTailCount = 20
+    private var isCompressing = false // 防重入：压缩任务进行中禁止并发触发
 
     // 声学/语气临时情感缓存层，切换会话时会被自动清空
     var currentVoiceEmotion = mutableStateOf<String?>(null)
@@ -418,10 +433,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         enableStt.value = prefs.getBoolean("enable_stt", true)
         enableAudioUnderstanding.value = prefs.getBoolean("enable_audio_understanding", false)
         enableTts.value = prefs.getBoolean("enable_tts", true)
-        ttsVoice.value = prefs.getString("tts_voice", "mimo-v2.5-tts-default") ?: "mimo-v2.5-tts-default"
+        val savedTtsVoice = prefs.getString("tts_voice", "") ?: ""
+        // 旧版本默认值 "mimo-v2.5-tts-default" 迁移为真实音色 "茉莉"（运行时也会自愈回退）
+        ttsVoice.value = when (savedTtsVoice) {
+            "", "mimo-v2.5-tts-default" -> "茉莉"
+            else -> savedTtsVoice
+        }
         enableAutoTts.value = prefs.getBoolean("enable_auto_tts", false)
         enableImageGen.value = prefs.getBoolean("enable_image_gen", true)
         imageGenModel.value = prefs.getString("image_gen_model", "dall-e-3") ?: "dall-e-3"
+        enableAdultContent.value = prefs.getBoolean("enable_adult_content", false)
+        mcpToolWhitelist.value = prefs.getStringSet("mcp_tool_whitelist", null)
         
         visionConfigId.value = prefs.getString("vision_config_id", "") ?: ""
         visionModelName.value = prefs.getString("vision_model_name", "gpt-4o-mini") ?: "gpt-4o-mini"
@@ -495,6 +517,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectSession(sessionId: String) {
         stopResponse()
+        stopAudio() // 切换会话时停止跨会话残留的音频播放
         currentSessionId.value = sessionId
         currentVoiceEmotion.value = null // 清空临时情感缓存，防止信息混用污染
         prefs.edit().putString("current_session_id", sessionId).apply()
@@ -579,8 +602,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     // --- 会话与对话处理业务逻辑 ---
 
     fun deleteSession(deleteId: String) {
+        // 删除当前会话时立即停止其正在进行的流式回复，防止流继续写回已删除会话文件
+        stopResponse()
+        clearDraft(deleteId)
+        val targetCharId = sessions.value.find { it.id == deleteId }?.characterId
         viewModelScope.launch(Dispatchers.IO) {
             storageManager.deleteSession(deleteId)
+            // 同步清理该会话的关系图谱记忆，防止残留数据被后续提炼流程"复活"
+            if (targetCharId != null) {
+                graphMemoryManager.clearMemoriesForSession(targetCharId, deleteId)
+            }
             val updatedSessions = storageManager.loadSessionList()
             withContext(Dispatchers.Main) {
                 sessions.value = updatedSessions
@@ -662,6 +693,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        // 重入保护：AI 回复流式输出中禁止并发发起第二轮请求（文本/语音/音频理解路径统一拦截）
+        if (responseJob?.isActive == true) {
+            android.widget.Toast.makeText(context, "AI 正在回复中，请稍候或点击停止", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        // 长会话惰性压缩检查（异步、不阻塞）：滑窗外的旧消息增量压成早期摘要
+        maybeCompressSession(currentSessionId.value)
+
         // 拦截生图指令
         if (enableImageGen.value && inputText.trim().startsWith("/draw ")) {
             val prompt = inputText.trim().substringAfter("/draw ").trim()
@@ -684,7 +724,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         
         val userMsg = Message(
-            id = System.currentTimeMillis().toString(),
+            id = newMessageId(),
             content = inputText,
             sender = Sender.USER,
             characterId = activeCard.id,
@@ -709,39 +749,95 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
 
     private fun updateSessionTitleIfNeeded(sessionId: String, currentMessages: List<Message>) {
-        val currentSession = sessions.value.find { it.id == sessionId }
-        if (currentSession != null) {
-            val isDefaultTitle = currentSession.title == "新会话" || 
-                                currentSession.title == "New Chat" || 
-                                currentSession.title.startsWith("欢迎会话") || 
-                                currentSession.title.startsWith("Welcome Chat")
-            
-            val firstUserMsg = currentMessages.firstOrNull { it.sender == Sender.USER }
-            if (isDefaultTitle && firstUserMsg != null) {
-                val rawContent = firstUserMsg.content
-                val cleanTitle = if (rawContent.length > 15) {
-                    rawContent.take(15) + "..."
-                } else {
-                    rawContent
-                }
-                
-                viewModelScope.launch(Dispatchers.IO) {
-                    var updatedList: List<ChatSession> = emptyList()
-                    storageManager.updateSessionList { diskSessions ->
-                        val updated = diskSessions.map {
-                            if (it.id == sessionId) {
-                                it.copy(title = cleanTitle, lastActiveTime = System.currentTimeMillis())
-                            } else {
-                                it
-                            }
-                        }.sortedByDescending { it.lastActiveTime }
-                        updatedList = updated
-                        updated
+        val currentSession = sessions.value.find { it.id == sessionId } ?: return
+        if (!isDefaultSessionTitle(currentSession.title)) return
+        val firstUserMsg = currentMessages.firstOrNull { it.sender == Sender.USER } ?: return
+        val cleanTitle = buildFallbackTitle(firstUserMsg)
+        if (cleanTitle.isBlank()) return
+        applySessionTitle(sessionId, cleanTitle)
+    }
+
+    /** 首条用户消息 → 兜底标题（立即生效、零成本；语音/图片首条消息不再出现空标题） */
+    private fun buildFallbackTitle(firstUserMsg: Message): String {
+        var raw = firstUserMsg.content.orEmpty().trim()
+        if (raw.startsWith("/draw ")) raw = raw.removePrefix("/draw ").trim()
+        if (raw.isBlank()) {
+            return when {
+                !firstUserMsg.audioUrl.isNullOrBlank() ->
+                    if (appLanguage.value == "en") "Voice Message" else "语音消息"
+                !firstUserMsg.imageUrl.isNullOrBlank() ->
+                    if (appLanguage.value == "en") "Image Message" else "图片消息"
+                else -> ""
+            }
+        }
+        val singleLine = raw.replace(Regex("\\s+"), " ")
+        return if (singleLine.length > 15) singleLine.take(15) + "..." else singleLine
+    }
+
+    private fun isDefaultSessionTitle(title: String): Boolean =
+        title == "新会话" || title == "New Chat" ||
+            title.startsWith("欢迎会话") || title.startsWith("Welcome Chat")
+
+    private fun applySessionTitle(sessionId: String, newTitle: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            var updatedList: List<ChatSession> = emptyList()
+            storageManager.updateSessionList { diskSessions ->
+                val updated = diskSessions.map {
+                    if (it.id == sessionId) {
+                        it.copy(title = newTitle, lastActiveTime = System.currentTimeMillis())
+                    } else {
+                        it
                     }
+                }.sortedByDescending { it.lastActiveTime }
+                updatedList = updated
+                updated
+            }
+            withContext(Dispatchers.Main) {
+                sessions.value = updatedList
+            }
+        }
+    }
+
+    /**
+     * 第一条 AI 回复完成后，用 LLM 为会话精修一次标题（4-12 字）。
+     * 仅执行一次且静默失败：异常/超时直接放弃，兜底标题已由 updateSessionTitleIfNeeded 提供。
+     */
+    private fun maybeGenerateSmartTitle(sessionId: String, history: List<Message>) {
+        val currentSession = sessions.value.find { it.id == sessionId } ?: return
+        if (!isDefaultSessionTitle(currentSession.title)) return // 已被重命名过则跳过
+        if (!titleGenerationInFlight.add(sessionId)) return      // 同一会话只允许一次
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val firstUserText = history.firstOrNull { it.sender == Sender.USER }?.content
+                    ?.take(120)?.trim().orEmpty()
+                val firstAiText = history.firstOrNull { it.sender == Sender.AI }?.content
+                    ?.take(120)?.trim().orEmpty()
+                if (firstUserText.isBlank()) return@launch
+                val prompt = "根据这段对话的开头，生成一个 4-12 个字的精炼中文会话标题，只输出标题本身，不要引号、标点或任何解释。\n用户：$firstUserText\nAI：${firstAiText.ifBlank { "（暂无）" }}"
+                val titleBuilder = StringBuilder()
+                kotlinx.coroutines.withTimeoutOrNull(15_000) {
+                    llmClient.sendChatCompletionStream(
+                        activeApiConfig.value,
+                        listOf(LlmChatMessage(role = "user", content = prompt)),
+                        emptyList()
+                    ).collect { ev ->
+                        if (ev is StreamEvent.Content) titleBuilder.append(ev.text)
+                    }
+                }
+                val title = titleBuilder.toString().trim()
+                    .trim('"', '“', '”', '「', '」', '\'', '\n')
+                    .replace(Regex("\\s+"), " ")
+                    .take(16)
+                if (title.length >= 2 && !title.contains("\n") && !title.contains("标题")) {
                     withContext(Dispatchers.Main) {
-                        sessions.value = updatedList
+                        val fresh = sessions.value.find { it.id == sessionId }
+                        if (fresh != null && isDefaultSessionTitle(fresh.title)) {
+                            applySessionTitle(sessionId, title)
+                        }
                     }
                 }
+            } catch (e: Exception) {
+                // 静默降级：标题保持兜底值
             }
         }
     }
@@ -755,7 +851,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             isThinking.value = true
             isMcpRunning.value = false
             
-            val aiMessageId = (System.currentTimeMillis() + 1).toString()
+            val aiMessageId = newMessageId()
             val startTime = System.currentTimeMillis()
 
             // 1. 折叠历史中的思考
@@ -788,9 +884,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             // 获取 API 配置和 MCP 工具列表
             var apiConfig = activeApiConfig.value
             
-            // 智能路由图片识图客户端与模型
-            val hasImages = history.any { !it.imageUrl.isNullOrBlank() }
-            if (hasImages && enableMultimodal.value) {
+            // ===== 多模态智能路由与降级 =====
+            // 仅当「当前正在发送的这条消息」携带图片时才考虑视觉路由。
+            // 旧逻辑的致命缺陷：只要会话历史里出现过任意一张图片，后续所有请求（包括纯文本消息）
+            // 都会被强制替换模型名并带图发送 —— DeepSeek 等无视觉模型直接 400，整个会话无法继续。
+            val lastUserMsg = history.lastOrNull { it.sender == Sender.USER }
+            val currentMsgHasImage = !lastUserMsg?.imageUrl.isNullOrBlank()
+            val currentMsgHasAudio = enableAudioUnderstanding.value && !lastUserMsg?.audioUrl.isNullOrBlank()
+
+            var useVisionRoute = false
+            var includeVision = false
+            if (currentMsgHasImage && enableMultimodal.value) {
                 val visionCfgId = visionConfigId.value
                 val visionModel = visionModelName.value
                 val targetVisionCfg = if (visionCfgId.isNotBlank()) {
@@ -798,12 +902,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     null
                 }
-                if (targetVisionCfg != null) {
-                    apiConfig = targetVisionCfg.copy(modelName = visionModel)
-                } else {
-                    apiConfig = apiConfig.copy(modelName = visionModel)
+                val visionCandidate = targetVisionCfg ?: apiConfig
+                if (providerSupportsVision(visionCandidate.provider, visionModel)) {
+                    // 视觉路由生效：切到视觉配置与模型
+                    apiConfig = if (targetVisionCfg != null) {
+                        targetVisionCfg.copy(modelName = visionModel)
+                    } else {
+                        apiConfig.copy(modelName = visionModel)
+                    }
+                    useVisionRoute = true
+                    includeVision = true
                 }
+                // 视觉配置缺失或目标提供商不支持视觉 → includeVision 保持 false，
+                // 图片将以 [图片] 文本占位随消息发送，会话继续正常进行，不报错。
             }
+            // 音频输入是否可进 payload（取决于当前路由后的模型能力，与图片降级同理）
+            val includeAudioInput = currentMsgHasAudio &&
+                providerSupportsAudioInput(apiConfig.provider, apiConfig.modelName)
 
             // 判定当前角色是否是 Loyea 核心角色（仅 Loyea 支持物理感知和设备数据读取，隔离跨角色隐私泄露）
             // 策略调整：不再在每次发送消息时自动调出所有工具物理信息，而是将“系统当前时间”作为必要物理信息随消息附带。
@@ -822,7 +937,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     msg.mcpCalls
                         .filter { it.status == McpStatus.SUCCESS && it.toolName != "send_voice_reply" }
                         .map { call ->
-                            "- ${timeDesc}成功调用了 `${call.toolName}` 工具，返回结果为：${call.output.trim()}"
+                            "- ${timeDesc}成功调用了 `${call.toolName}` 工具，返回结果为：${call.output.trim().take(1500)}"
                         }
                 }
                 .joinToString("\n")
@@ -855,13 +970,26 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 physicalContext = physicalContextData,
                 enableSearch = apiConfig.enableSearch,
                 coreMemories = activeSession.value?.coreMemories ?: emptyList(),
-                graphMemory = graphMemory
+                graphMemory = graphMemory,
+                enableHaptic = toolAuthHaptic.value,
+                enableVoice = hasTtsCapability(),
+                enableAdultContent = enableAdultContent.value,
+                trustedCard = characterCard.isBuiltIn
             )
 
-            // 构建初始会话上下文
-            var conversation = buildLlmConversation(systemPrompt, history)
+            // 构建初始会话上下文（按目标模型能力决定图片/音频是否进入 payload）
+            var conversation = buildLlmConversation(
+                systemPrompt, history,
+                includeVision = includeVision,
+                includeAudio = includeAudioInput,
+                compressedSummary = activeSession.value?.compressedSummary ?: ""
+            )
             var round = 0
             val maxRounds = 5
+            var lastRoundHadTools = false // 标记最后一轮是否为工具轮，maxRounds 耗尽时需收尾占位气泡
+            val executedToolsSignature = mutableSetOf<String>()
+            // 多模态失败降级重试标记：带图/带音频请求报错后，仅允许自动去掉媒体重试一次
+            var degradedRetried = false
 
             try {
                 while (round < maxRounds) {
@@ -872,6 +1000,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         val lowName = tool.name.lowercase()
                         when {
                             lowName.contains("web_search") -> apiConfig.enableSearch
+                            lowName.contains("send_voice_reply") -> hasTtsCapability()
                             lowName.contains("location") -> toolAuthLocation.value
                             lowName.contains("weather") || lowName.contains("forecast") -> toolAuthWeather.value
                             lowName.contains("light") || lowName.contains("noise") -> toolAuthEnvironment.value
@@ -884,7 +1013,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
                     // 执行流式调用
                     isThinking.value = true
-                    val sendTools = if (hasImages && enableMultimodal.value) emptyList() else availableMcpTools
+                    // 仅在真正走了视觉路由时才禁用工具（视觉模型工具兼容性保守处理），
+                    // 历史有图但当前纯文本的请求不再被剥夺工具调用能力
+                    val sendTools = if (useVisionRoute) emptyList() else availableMcpTools
                     llmClient.sendChatCompletionStream(
                         config = apiConfig,
                         messages = conversation,
@@ -957,19 +1088,51 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 streamToolCalls = event.calls
                             }
                             is StreamEvent.Error -> {
-                                currentList = messages.value.map { msg ->
-                                    if (msg.id == aiMessageId) {
-                                        msg.copy(
-                                            content = event.message,
-                                            isStillThinking = false,
-                                            isError = true
-                                        )
-                                    } else {
-                                        msg
-                                    }
+                                // 多模态失败降级兜底：若本次请求携带图片/音频（可能模型不识别该媒体格式），
+                                // 自动去掉媒体重建会话并重试一次，而不是让整个会话卡死在错误上
+                                val carriesMedia = conversation.any {
+                                    !it.imageUrl.isNullOrBlank() || !it.audioUrl.isNullOrBlank()
                                 }
-                                messages.value = currentList
-                                hasError = true
+                                if (carriesMedia && !degradedRetried) {
+                                    degradedRetried = true
+                                    conversation = conversation.map { msg ->
+                                        var c = msg.content ?: ""
+                                        if (!msg.imageUrl.isNullOrBlank()) {
+                                            c = (if (c.isBlank()) "" else "$c\n") + "[图片]"
+                                        }
+                                        if (!msg.audioUrl.isNullOrBlank() && c.isBlank()) c = "[语音消息]"
+                                        msg.copy(content = c, imageUrl = null, audioUrl = null)
+                                    }
+                                    // 清除错误气泡状态并进入下一轮自动重试
+                                    currentList = messages.value.map { msg ->
+                                        if (msg.id == aiMessageId) {
+                                            msg.copy(isError = false, isStillThinking = false)
+                                        } else msg
+                                    }
+                                    messages.value = currentList
+                                    accumulatedContent = ""
+                                    accumulatedThoughts = ""
+                                } else {
+                                    // 流中断/出错时保留已生成的半截内容（附错误提示），不整体覆盖丢失，并落盘保存
+                                    val partialContent = accumulatedContent.trim()
+                                    val errorDisplay = if (partialContent.isNotEmpty()) {
+                                        "$partialContent\n\n⚠️ ${event.message.removePrefix("[错误] ")}"
+                                    } else {
+                                        event.message
+                                    }
+                                    currentList = messages.value.map { msg ->
+                                        if (msg.id == aiMessageId) {
+                                            msg.copy(
+                                                content = errorDisplay,
+                                                isStillThinking = false,
+                                                isError = true
+                                            )
+                                        } else msg
+                                    }
+                                    messages.value = currentList
+                                    saveMessagesAsync(sessionId, currentList)
+                                    hasError = true
+                                }
                             }
                             is StreamEvent.Done -> {
                                 if (calculatedDuration == null) {
@@ -995,6 +1158,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 if (enableTts.value && enableAutoTts.value && streamToolCalls.isEmpty()) {
                                     playTts(aiMessageId, accumulatedContent)
                                 }
+
+                                // 首轮 AI 回复完成后，尝试用 LLM 精修会话标题（静默失败、仅一次）
+                                if (streamToolCalls.isEmpty() && accumulatedContent.isNotBlank()) {
+                                    maybeGenerateSmartTitle(sessionId, history)
+                                }
                             }
                         }
                     }
@@ -1006,6 +1174,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
                     // 如果有工具调用，就处理工具调用，并在 nextConversation 里追加，然后继续下一轮
                     if (streamToolCalls.isNotEmpty()) {
+                        lastRoundHadTools = true
                         isThinking.value = false
                         isMcpRunning.value = true
                         
@@ -1046,6 +1215,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                                toolCall.name.endsWith("__send_voice_reply", ignoreCase = true) || 
                                                toolCall.name.endsWith(".send_voice_reply", ignoreCase = true)
 
+                            // 检查是否重复调用了相同参数的工具以防陷入死循环
+                            val toolSignature = "${toolCall.name}::${toolCall.argumentsJson.trim()}"
+                            val isDuplicate = executedToolsSignature.contains(toolSignature)
+
                             // 执行实际的工具请求
                             var toolOutput: String
                             var success: Boolean
@@ -1055,13 +1228,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                               toolCall.name.endsWith("__web_search", ignoreCase = true) || 
                                               toolCall.name.endsWith(".web_search", ignoreCase = true)
 
-                            if (isVoiceReply) {
+                            if (isDuplicate) {
+                                toolOutput = "[系统拦截] 检测到重复的工具调用。您在本次回答中已调用过 ${toolCall.name} 且参数完全一致，请不要重复调用，直接根据已有信息组织最终语言回复用户。"
+                                success = false
+                            } else if (isVoiceReply) {
+                                executedToolsSignature.add(toolSignature)
                                 toolOutput = "语音回复已发送"
                                 success = true
                             } else if (!useSystemTime && !isWebSearch) {
                                 toolOutput = "Permission Denied: Physical perception is globally disabled by the user."
                                 success = false
                             } else {
+                                executedToolsSignature.add(toolSignature)
                                 try {
                                     val result = mcpManager.callTool(
                                         prefixedToolName = toolCall.name,
@@ -1139,8 +1317,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                                 }
                                             }
                                             withContext(Dispatchers.Main) {
-                                                messages.value = currentList
-                                                saveMessagesAsync(currentSessionId.value, currentList)
+                                                // 会话守卫：TTS 合成期间用户可能已切换会话，
+                                                // UI 更新仅在本会话仍处于前台时进行，磁盘始终写回本次流所属会话
+                                                if (currentSessionId.value == sessionId) {
+                                                    messages.value = currentList
+                                                }
+                                                saveMessagesAsync(sessionId, currentList)
                                             }
                                         }
                                     }
@@ -1151,7 +1333,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             nextConversation.add(
                                 LlmChatMessage(
                                     role = "tool",
-                                    content = toolOutput,
+                                    content = toolOutput.take(2000), // 截断超长工具输出，防止下一轮请求超上下文
                                     toolCallId = toolCall.id,
                                     name = toolCall.name
                                 )
@@ -1185,6 +1367,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         isMcpRunning.value = false
                     } else {
                         // 如果没有工具需要调用，完成最后一轮自动折叠逻辑 (针对内容结束)
+                        lastRoundHadTools = false
                         currentList = currentList.map { msg ->
                             if (msg.id == aiMessageId) {
                                 msg.copy(
@@ -1197,6 +1380,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         checkAndTriggerMemorySummaryAsync(sessionId)
                         break
                     }
+                }
+
+                // 工具轮耗尽 maxRounds 时的收尾：若最后一轮仍是工具轮，模型未产出最终回复，
+                // 必须结束占位气泡的"思考中"状态（该状态会被落盘，不处理则重启后依然卡死）
+                if (lastRoundHadTools) {
+                    val finalContent = accumulatedContent.trim().ifBlank {
+                        if (appLanguage.value == "en") "[System] Tool call limit reached. Please reply directly with the information you already have."
+                        else "[系统] 工具调用次数已达上限，请直接根据已有信息组织回复。"
+                    }
+                    currentList = currentList.map { msg ->
+                        if (msg.id == aiMessageId) {
+                            msg.copy(content = finalContent, isStillThinking = false)
+                        } else msg
+                    }
+                    messages.value = currentList
+                    saveMessagesAsync(sessionId, currentList)
                 }
             } catch (t: Throwable) {
                 if (t is kotlinx.coroutines.CancellationException) throw t
@@ -1249,10 +1448,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun buildLlmConversation(systemPrompt: String?, history: List<Message>): List<LlmChatMessage> {
+    private fun buildLlmConversation(
+        systemPrompt: String?,
+        history: List<Message>,
+        includeVision: Boolean = true,
+        includeAudio: Boolean = true,
+        compressedSummary: String = ""
+    ): List<LlmChatMessage> {
         val list = mutableListOf<LlmChatMessage>()
         if (!systemPrompt.isNullOrBlank()) {
             list.add(LlmChatMessage(role = "system", content = systemPrompt))
+        }
+        // 长会话早期摘要：滑窗外的旧消息被压缩后，以系统级上下文注入，保持早期故事脉络
+        if (compressedSummary.isNotBlank()) {
+            list.add(
+                LlmChatMessage(
+                    role = "system",
+                    content = "[EARLY CONVERSATION SUMMARY / 会话早期摘要]\n$compressedSummary"
+                )
+            )
         }
         val filteredHistory = history.filter {
             (it.content.isNotBlank() || !it.imageUrl.isNullOrBlank() || !it.audioUrl.isNullOrBlank()) && !it.content.startsWith("[错误]") && !it.content.startsWith("[Error]")
@@ -1260,14 +1474,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // 线性滑动窗口只取最新 20 条消息
         val recentHistory = filteredHistory.takeLast(20)
         recentHistory.forEachIndexed { index, msg ->
-            val decoratedContent = msg.content
-            val includeAudio = enableAudioUnderstanding.value && index == recentHistory.lastIndex
+            // 多模态能力过滤：模型不支持视觉/音频输入时，媒体降级为文本占位符（仅影响本次请求，不污染存储）
+            val effectiveImage = if (includeVision && !msg.imageUrl.isNullOrBlank()) msg.imageUrl else null
+            val effectiveAudio = if (includeAudio && index == recentHistory.lastIndex && !msg.audioUrl.isNullOrBlank()) msg.audioUrl else null
+            var textContent = msg.content ?: ""
+            if (effectiveImage == null && !msg.imageUrl.isNullOrBlank()) {
+                textContent = (if (textContent.isBlank()) "" else "$textContent\n") + "[图片]"
+            }
+            if (effectiveAudio == null && !msg.audioUrl.isNullOrBlank() && textContent.isBlank()) {
+                textContent = "[语音消息]"
+            }
             list.add(
                 LlmChatMessage(
                     role = if (msg.sender == Sender.USER) "user" else "assistant",
-                    content = decoratedContent,
-                    imageUrl = msg.imageUrl,
-                    audioUrl = if (includeAudio) msg.audioUrl else null
+                    content = textContent,
+                    imageUrl = effectiveImage,
+                    audioUrl = effectiveAudio
                 )
             )
         }
@@ -1325,7 +1547,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             val finalMsgs = mergeAndSaveMessages(sessionId, currentList)
             withContext(Dispatchers.Main) {
-                messages.value = finalMsgs
+                // 会话守卫：磁盘始终写入参数指定的会话；仅当用户仍停留该会话时才回写 UI，
+                // 防止流式保存与切会话的竞态把旧会话消息覆盖到新会话界面
+                if (currentSessionId.value == sessionId) {
+                    messages.value = finalMsgs
+                }
             }
         }
     }
@@ -1408,16 +1634,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         prefs.edit().remove("draft_$sessionId").apply()
     }
 
-    private var messageCountSinceLastSummary = 0
+    /** 跨协程唯一消息 ID 生成器（时间戳 + 自增序号），杜绝同毫秒碰撞与并发重入混用 */
+    private val idCounter = java.util.concurrent.atomic.AtomicLong(0)
+    private fun newMessageId(): String {
+        val seq = idCounter.incrementAndGet()
+        return if (seq == 1L) System.currentTimeMillis().toString() else "${System.currentTimeMillis()}_$seq"
+    }
+
+    /** 会话内消息计数（按会话隔离，避免全局计数器跨会话误触发记忆提炼） */
+    private val messageCountBySession = mutableMapOf<String, Int>()
 
     private fun checkAndTriggerMemorySummaryAsync(sessionId: String) {
         val enableMemory = prefs.getBoolean("enable_memory_consolidation", true)
         if (!enableMemory) return
 
         val triggerThreshold = prefs.getInt("memory_consolidation_trigger_count", 10)
-        messageCountSinceLastSummary++
-        if (messageCountSinceLastSummary >= triggerThreshold) {
-            messageCountSinceLastSummary = 0
+        val sessionCount = (messageCountBySession[sessionId] ?: 0) + 1
+        messageCountBySession[sessionId] = sessionCount
+        if (sessionCount >= triggerThreshold) {
+            messageCountBySession[sessionId] = 0
             
             val workData = workDataOf("session_id" to sessionId)
             val workRequest = OneTimeWorkRequestBuilder<com.loyea.worker.MemoryConsolidationWorker>()
@@ -1458,6 +1693,80 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         session
                     }
                 }
+            }
+        }
+    }
+
+    /**
+     * 长会话惰性压缩：消息数超阈值时，将滑窗（末尾 20 条）之外的旧消息增量压缩为早期摘要。
+     * - 摘要持久化到 ChatSession.compressedSummary，断点记入 compressedAtCount（增量，避免重复压缩）
+     * - 独立协程异步执行，不阻塞发送；防重入；失败静默（断点未推进，下次触发自然重试）
+     */
+    private fun maybeCompressSession(sessionId: String) {
+        if (sessionId.isBlank()) return
+        if (isCompressing) return
+        val activeSession = activeSession.value ?: return
+        val total = messages.value.size
+        if (total < compressTriggerCount) return
+        if (total - compressTailCount <= activeSession.compressedAtCount) return // 无新增可压缩段
+        isCompressing = true
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                // 以磁盘完整消息为准（内存可能只加载了尾部）
+                val fullMessages = storageManager.loadSessionMessages(sessionId)
+                if (fullMessages.size < compressTriggerCount) return@launch
+                val bound = fullMessages.size - compressTailCount
+                val compressStart = activeSession.compressedAtCount
+                if (bound <= compressStart) return@launch
+
+                val existingSummary = activeSession.compressedSummary
+                val segment = fullMessages.subList(compressStart, bound)
+                val segmentText = segment.joinToString("\n") {
+                    "${if (it.sender == Sender.USER) "用户" else "AI"}: ${it.content.take(500)}"
+                }
+
+                // 摘要模型：优先提炼专用模型（memory_api_config_id），否则当前激活模型
+                val memoryApiId = prefs.getString("memory_api_config_id", "") ?: ""
+                val targetConfig = if (memoryApiId.isBlank()) {
+                    activeApiConfig.value
+                } else {
+                    apiConfigList.value.find { it.id == memoryApiId } ?: activeApiConfig.value
+                }
+
+                val summaryPrompt = """
+                    你是一个长对话摘要器。请把以下早期对话压缩为一份简洁但保留关键情节的中文摘要（不超过 200 字），供 AI 在后续对话中保持上下文连续。
+                    要求：
+                    1. 保留：重要事件、人物关系变化、用户的承诺与约定、双方的重要约定与习惯、关键情感节点。
+                    2. 去除：寒暄、日常琐碎、重复内容。
+                    3. 直接输出摘要正文，严禁包含任何前言、后记或分析过程。
+
+                    ${if (existingSummary.isNotBlank()) "【已有早期摘要】（在此基础上整合新增内容，不要重复）:\n$existingSummary\n" else ""}
+                    【新增对话段落】：
+                    $segmentText
+                """.trimIndent()
+
+                val response = llmClient.sendChatCompletion(
+                    config = targetConfig,
+                    systemPrompt = summaryPrompt,
+                    history = emptyList()
+                )
+                if (!response.isError && response.content.isNotBlank()) {
+                    val newSummary = response.content.trim()
+                    storageManager.updateSessionCompression(sessionId, newSummary, bound)
+                    withContext(Dispatchers.Main) {
+                        sessions.value = sessions.value.map { s ->
+                            if (s.id == sessionId) {
+                                s.copy(compressedSummary = newSummary, compressedAtCount = bound)
+                            } else {
+                                s
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                isCompressing = false
             }
         }
     }
@@ -1613,6 +1922,28 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun updateAdultContentSetting(enabled: Boolean) {
+        enableAdultContent.value = enabled
+        prefs.edit().putBoolean("enable_adult_content", enabled).apply()
+    }
+
+    /**
+     * 外部 MCP 工具授权开关：
+     * 首次管理（白名单尚为 null）时以当前已发现工具全集为基底构建白名单，避免误杀旧配置；
+     * 之后为严格白名单模式，未授权工具不可见、不可调用。
+     */
+    fun updateMcpToolAuthorization(toolFullName: String, enabled: Boolean) {
+        val base = mcpToolWhitelist.value ?: mcpManager.getAllRemoteToolsForAuth().map { it.second }.toSet()
+        val newSet = base.toMutableSet().apply {
+            if (enabled) add(toolFullName) else remove(toolFullName)
+        }
+        mcpToolWhitelist.value = newSet
+        prefs.edit().putStringSet("mcp_tool_whitelist", newSet).apply()
+    }
+
+    /** 授权页专用：返回所有已连接外部服务器的全部工具（服务器名, 工具全名），不过滤 */
+    fun getAllMcpToolsForAuth(): List<Pair<String, String>> = mcpManager.getAllRemoteToolsForAuth()
+
     /**
      * 加载当前会话隔离的长程三元组（UI 列表管理）
      */
@@ -1699,6 +2030,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun startRecording() {
         if (isRecording.value) return
+        stopAudio() // 录音前停止正在播放的音频（含自动 TTS），防止回声循环
         isRecordingActive = true
         amplitudeList.clear()
         viewModelScope.launch(Dispatchers.IO) {
@@ -2015,7 +2347,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         stopAudio()
-        
+        val sessionId = currentSessionId.value // 捕获调用时所属会话，合成完成写回时做会话守卫
+
         val ttsFile = File(context.cacheDir, "tts_${mcpCallId}.mp3")
         if (ttsFile.exists() && ttsFile.length() > 0) {
             playAudioFile(mcpCallId, ttsFile)
@@ -2071,7 +2404,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 val duration = getAudioDurationInSeconds(ttsFile)
                                 if (duration > 0) {
                                     val voicePayload = "AUDIO_URL:${ttsFile.absolutePath}|DURATION:${duration}"
-                                    messages.value = messages.value.map { msg ->
+                                    val updatedMsgs = messages.value.map { msg ->
                                         if (msg.id == parentMessageId) {
                                             msg.copy(mcpCalls = msg.mcpCalls.map { c ->
                                                 if (c.id == mcpCallId) c.copy(status = McpStatus.SUCCESS, output = voicePayload) else c
@@ -2080,7 +2413,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                             msg
                                         }
                                     }
-                                    saveMessagesAsync(currentSessionId.value, messages.value)
+                                    // 会话守卫：重新合成期间用户可能已切换会话，UI 仅在本会话前台时更新
+                                    if (currentSessionId.value == sessionId) {
+                                        messages.value = updatedMsgs
+                                    }
+                                    saveMessagesAsync(sessionId, updatedMsgs)
                                     // 重新播放它
                                     playAudioFile(mcpCallId, ttsFile)
                                 } else {
@@ -2162,6 +2499,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         
         // 后台进行 TTS 合成
         viewModelScope.launch(Dispatchers.IO) {
+            // 捕获所属会话的消息快照，避免合成期间用户切会话导致写错会话文件
+            val originMsgs = messages.value
             val ttsCfgId = ttsConfigId.value
             val targetTtsConfig = if (ttsCfgId.isNotBlank()) {
                 apiConfigList.value.find { it.id == ttsCfgId } ?: activeApiConfig.value
@@ -2170,24 +2509,28 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
             val voice = ttsVoice.value
             val ttsResult = llmClient.generateSpeech(targetTtsConfig, cleanedText, ttsModelName.value, voice, ttsFile)
-            
+
             withContext(Dispatchers.Main) {
                 // 重置消息正在合成状态
                 messages.value = messages.value.map { msg ->
                     if (msg.id == messageId) msg.copy(isAudioSynthesizing = false) else msg
                 }
-                
+
                 if (ttsResult.success && ttsFile.exists()) {
                     val duration = getAudioDurationInSeconds(ttsFile)
                     if (duration > 0) {
-                        messages.value = messages.value.map { msg ->
+                        val updatedMsgs = originMsgs.map { msg ->
                             if (msg.id == messageId) {
                                 msg.copy(audioUrl = ttsFile.absolutePath, audioDuration = duration)
                             } else {
                                 msg
                             }
                         }
-                        saveMessagesAsync(sessionId, messages.value)
+                        // 会话守卫：合成期间用户可能已切走，UI 仅在本会话前台时更新，磁盘写回本会话
+                        if (currentSessionId.value == sessionId) {
+                            messages.value = updatedMsgs
+                        }
+                        saveMessagesAsync(sessionId, updatedMsgs)
                         playAudioFile(messageId, ttsFile)
                     } else {
                         android.widget.Toast.makeText(context, "合成文件解析失败", android.widget.Toast.LENGTH_SHORT).show()
@@ -2253,6 +2596,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun playAudioFile(messageId: String, file: File) {
+        // 录音进行中禁止播放任何音频（含自动 TTS），防止扬声器声音被麦克风录成回声再发给 AI
+        if (isRecording.value) return
         // 在播放新音频前，必须强制同步清理掉旧的播放器和状态，保障互斥防冲
         stopAudio()
 
@@ -2367,13 +2712,57 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         return result.trim()
     }
 
-    suspend fun transcribeAudio(file: File): String? {
+    /**
+     * 解析语音转写目标配置：
+     * 显式指定了 stt_config_id 时优先使用它；未指定时自动优先使用已配置的小米 MiMo
+     * （DeepSeek 等纯文本提供商没有 /audio/transcriptions 端点，转写必然失败）。
+     */
+    private fun resolveSttConfig(): ApiConfig {
         val sttCfgId = sttConfigId.value
-        val targetSttConfig = if (sttCfgId.isNotBlank()) {
-            apiConfigList.value.find { it.id == sttCfgId } ?: activeApiConfig.value
-        } else {
-            activeApiConfig.value
+        if (sttCfgId.isNotBlank()) {
+            return apiConfigList.value.find { it.id == sttCfgId } ?: activeApiConfig.value
         }
+        return apiConfigList.value.firstOrNull { it.provider.equals("MiMo", ignoreCase = true) }
+            ?: activeApiConfig.value
+    }
+
+    // ===== 多模态能力检测：决定请求 payload 能否携带图片/音频，避免纯文本模型（如 DeepSeek）直接 400 =====
+
+    /** 视觉能力判断：白名单服务商 + 模型名匹配视觉型号 */
+    private fun providerSupportsVision(provider: String, model: String): Boolean {
+        val p = provider.lowercase()
+        val m = model.lowercase()
+        return when {
+            p.contains("anthropic") || p.contains("google") -> true // 全系原生支持视觉
+            p.contains("openai") ->
+                listOf("4o", "4.1", "4.5", "omni", "gpt-4-vision", "gpt-4-turbo").any { m.contains(it) }
+            p.contains("alibaba") || p.contains("zhipu") || p.contains("moonshot") ->
+                listOf("vl", "vision", "4v", "glm-4v", "kimi").any { m.contains(it) }
+            p.contains("openrouter") ->
+                listOf("vision", "vl", "4o", "4.5", "omni", "gemini", "claude").any { m.contains(it) }
+            else -> false
+        }
+    }
+
+    /** 音频输入（input_audio）能力判断：目前仅 OpenAI 音频模型与 Gemini 支持 */
+    private fun providerSupportsAudioInput(provider: String, model: String): Boolean {
+        val p = provider.lowercase()
+        val m = model.lowercase()
+        return (p.contains("openai") && (m.contains("omni") || m.contains("4o") || m.contains("audio"))) ||
+            (p.contains("google") && m.contains("gemini"))
+    }
+
+    /** TTS 是否真正可用：显式配置了 TTS 服务商，或当前配置属于支持 TTS 的服务商（MiMo/OpenAI/阿里/火山） */
+    private fun hasTtsCapability(): Boolean {
+        if (ttsConfigId.value.isNotBlank()) return true
+        val provider = activeApiConfig.value.provider.lowercase()
+        if (provider.contains("mimo") || provider.contains("openai") ||
+            provider.contains("alibaba") || provider.contains("volcengine")) return true
+        return apiConfigList.value.any { it.provider.equals("MiMo", ignoreCase = true) }
+    }
+
+    suspend fun transcribeAudio(file: File): String? {
+        val targetSttConfig = resolveSttConfig()
         val rawText = llmClient.transcribeAudio(targetSttConfig, file, sttModelName.value, sttProviderTemplate.value)
         return if (targetSttConfig.provider.equals("MiMo", ignoreCase = true) || sttProviderTemplate.value.equals("MiMo", ignoreCase = true)) {
             cleanVoiceText(rawText)
@@ -2383,55 +2772,67 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun transcribeAndSendAudio(file: File, duration: Int, onFailed: (String) -> Unit = {}) {
-        if (enableAudioUnderstanding.value) {
-            // 开启音频理解时直接发送语音，无需进行 STT 转文本
+        // 重入拦截：AI 回复流式输出中禁止语音路径并发发起第二轮请求（转写耗时窗口内流可能仍在运行）
+        if (responseJob?.isActive == true) {
+            onFailed("AI 正在回复中，请稍候再说话")
+            return
+        }
+        // 音频理解模式：仅当当前主模型支持音频输入（input_audio）时才直接发送语音，
+        // 否则自动降级走 STT 转写文本（DeepSeek 等纯文本模型收到 input_audio 会直接 400）
+        if (enableAudioUnderstanding.value &&
+            providerSupportsAudioInput(activeApiConfig.value.provider, activeApiConfig.value.modelName)
+        ) {
             sendMessage("", null, file.absolutePath, duration)
             return
         }
 
         isThinking.value = true
         viewModelScope.launch(Dispatchers.IO) {
-            val sttCfgId = sttConfigId.value
-            val targetSttConfig = if (sttCfgId.isNotBlank()) {
-                apiConfigList.value.find { it.id == sttCfgId } ?: activeApiConfig.value
-            } else {
-                activeApiConfig.value
-            }
-            val text = llmClient.transcribeAudio(targetSttConfig, file, sttModelName.value, sttProviderTemplate.value)
-            
-            val cleanedText = if (targetSttConfig.provider.equals("MiMo", ignoreCase = true) || sttProviderTemplate.value.equals("MiMo", ignoreCase = true)) {
-                cleanVoiceText(text)
-            } else {
-                text
-            }
-            
-            // 开启了声学情绪感知时，根据语音输入识别一个模拟的语气/情绪状态
-            if (enableVoiceEmotionPerception.value && !cleanedText.isNullOrBlank()) {
-                val lowerText = cleanedText.lowercase()
-                val detectedEmotion = when {
-                    lowerText.contains("难过") || lowerText.contains("伤心") || lowerText.contains("哭") || lowerText.contains("委屈") -> "伤心"
-                    lowerText.contains("生气") || lowerText.contains("愤怒") || lowerText.contains("讨厌") || lowerText.contains("烦") -> "生气"
-                    lowerText.contains("开心") || lowerText.contains("高兴") || lowerText.contains("哈哈") || lowerText.contains("乐") -> "开心"
-                    lowerText.contains("谢谢") || lowerText.contains("温柔") || lowerText.contains("喜欢") || lowerText.contains("乖") -> "温柔"
-                    lowerText.contains("累") || lowerText.contains("困") || lowerText.contains("睡") -> "慵懒"
-                    else -> "中性"
-                }
-                withContext(Dispatchers.Main) {
-                    currentVoiceEmotion.value = detectedEmotion
-                }
-            } else {
-                withContext(Dispatchers.Main) {
-                    currentVoiceEmotion.value = null
-                }
-            }
+            try {
+                val targetSttConfig = resolveSttConfig()
+                val text = llmClient.transcribeAudio(targetSttConfig, file, sttModelName.value, sttProviderTemplate.value)
 
-            withContext(Dispatchers.Main) {
-                isThinking.value = false
-                if (!cleanedText.isNullOrBlank()) {
-                    sendMessage(cleanedText, null, file.absolutePath, duration)
+                val cleanedText = if (targetSttConfig.provider.equals("MiMo", ignoreCase = true) || sttProviderTemplate.value.equals("MiMo", ignoreCase = true)) {
+                    cleanVoiceText(text)
                 } else {
-                    val errorReason = llmClient.lastAsrError ?: "未提取到有效文字"
-                    onFailed(errorReason)
+                    text
+                }
+
+                // 开启了声学情绪感知时，根据语音输入识别一个模拟的语气/情绪状态
+                if (enableVoiceEmotionPerception.value && !cleanedText.isNullOrBlank()) {
+                    val lowerText = cleanedText.lowercase()
+                    val detectedEmotion = when {
+                        lowerText.contains("难过") || lowerText.contains("伤心") || lowerText.contains("哭") || lowerText.contains("委屈") -> "伤心"
+                        lowerText.contains("生气") || lowerText.contains("愤怒") || lowerText.contains("讨厌") || lowerText.contains("烦") -> "生气"
+                        lowerText.contains("开心") || lowerText.contains("高兴") || lowerText.contains("哈哈") || lowerText.contains("乐") -> "开心"
+                        lowerText.contains("谢谢") || lowerText.contains("温柔") || lowerText.contains("喜欢") || lowerText.contains("乖") -> "温柔"
+                        lowerText.contains("累") || lowerText.contains("困") || lowerText.contains("睡") -> "慵懒"
+                        else -> "中性"
+                    }
+                    withContext(Dispatchers.Main) {
+                        currentVoiceEmotion.value = detectedEmotion
+                    }
+                } else {
+                    withContext(Dispatchers.Main) {
+                        currentVoiceEmotion.value = null
+                    }
+                }
+
+                withContext(Dispatchers.Main) {
+                    isThinking.value = false
+                    if (!cleanedText.isNullOrBlank()) {
+                        sendMessage(cleanedText, null, file.absolutePath, duration)
+                    } else {
+                        val errorReason = llmClient.lastAsrError ?: "未提取到有效文字"
+                        onFailed(errorReason)
+                    }
+                }
+            } catch (e: Exception) {
+                // 兜底：任何转写异常都不能让会话卡死（isThinking 必须复位，错误需上报给用户）
+                Log.e("ChatViewModel", "ASR transcribe error", e)
+                withContext(Dispatchers.Main) {
+                    isThinking.value = false
+                    onFailed(e.localizedMessage ?: "语音转写异常，请重试")
                 }
             }
         }
@@ -2464,13 +2865,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         // 1. 发送消息
         val userMsg = Message(
-            id = System.currentTimeMillis().toString(),
+            id = newMessageId(),
             content = "/draw $prompt",
             sender = Sender.USER,
             characterId = activeCard.id
         )
         // 2. AI 占位消息
-        val aiMessageId = (System.currentTimeMillis() + 1).toString()
+        val aiMessageId = newMessageId()
         val aiMsg = Message(
             id = aiMessageId,
             content = "正在为您生成图像，请稍候...",
@@ -2520,7 +2921,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             e.printStackTrace()
                         }
 
-                        // 将最终图片和消息更新
+                        // 将最终图片和消息更新（会话守卫：生图期间用户可能已切走，UI 仅在本会话前台时更新）
                         withContext(Dispatchers.Main) {
                             val updatedContent = "AI 已为您生成图像，提示词：\"$prompt\""
                             val currentList = messages.value.map { msg ->
@@ -2534,12 +2935,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                     msg
                                 }
                             }
-                            messages.value = currentList
+                            if (currentSessionId.value == sessionId) {
+                                messages.value = currentList
+                            }
                             saveMessagesAsync(sessionId, currentList)
                         }
                     }
                 } else {
-                    // 生图失败
+                    // 生图失败（会话守卫同成功分支）
                     val currentList = messages.value.map { msg ->
                         if (msg.id == aiMessageId) {
                             msg.copy(
@@ -2551,7 +2954,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             msg
                         }
                     }
-                    messages.value = currentList
+                    if (currentSessionId.value == sessionId) {
+                        messages.value = currentList
+                    }
                     saveMessagesAsync(sessionId, currentList)
                 }
             }
@@ -2624,16 +3029,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
                     .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
                     .build()
-                
+
                 val urls = listOf(
                     "https://cdn.jsdelivr.net/gh/ApolloEddy/Loyea@main/assets/multimodal_templates.json",
                     "https://raw.githubusercontent.com/ApolloEddy/Loyea/main/assets/multimodal_templates.json"
                 )
-                
+
                 var success = false
                 var jsonResult = ""
-                var lastError = ""
-                
+                val errors = mutableListOf<String>()
+
                 for (url in urls) {
                     if (success) break
                     try {
@@ -2641,30 +3046,30 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         client.newCall(request).execute().use { response ->
                             if (response.isSuccessful) {
                                 val body = response.body?.string()
-                                if (!body.isNullOrBlank() && body.contains("\"tts\"")) {
+                                if (!body.isNullOrBlank() && isValidTemplateJson(body)) {
                                     jsonResult = body
                                     success = true
                                 } else {
-                                    lastError = "响应数据为空或格式不匹配"
+                                    errors.add("响应数据为空或格式不匹配")
                                 }
                             } else {
-                                lastError = "HTTP 错误 ${response.code}"
+                                errors.add("HTTP 错误 ${response.code}")
                             }
                         }
                     } catch (e: Exception) {
-                        lastError = e.localizedMessage ?: e.message ?: "网络超时"
+                        errors.add(e.localizedMessage ?: e.message ?: "网络超时")
                     }
                 }
-                
+
                 if (success) {
                     prefs.edit().putString("multimodal_templates_json", jsonResult).apply()
                     withContext(Dispatchers.Main) {
                         loadTemplatesFromJson(jsonResult)
-                        updateTemplatesStatus.value = "更新成功！已同步最新配置"
+                        updateTemplatesStatus.value = "更新成功！已同步云端最新模板配置"
                     }
                 } else {
                     withContext(Dispatchers.Main) {
-                        updateTemplatesStatus.value = "更新失败: $lastError，已为您保留本地内置模板"
+                        updateTemplatesStatus.value = "更新失败（${errors.joinToString("；")}），已保留本地内置模板。请确认仓库根目录 assets/multimodal_templates.json 已推送到 GitHub"
                     }
                 }
             } catch (e: Exception) {
@@ -2676,6 +3081,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     isUpdatingTemplates.value = false
                 }
             }
+        }
+    }
+
+    /**
+     * 校验云端拉取的模板 JSON 能否解析为合法模板结构，避免把损坏数据写入本地缓存
+     */
+    private fun isValidTemplateJson(json: String): Boolean {
+        return try {
+            val type = object : com.google.gson.reflect.TypeToken<Map<String, List<TtsTemplate>>>() {}.type
+            val map: Map<String, List<TtsTemplate>> = Gson().fromJson(json, type)
+            map["tts"]?.isNotEmpty() == true
+        } catch (e: Exception) {
+            false
         }
     }
 }

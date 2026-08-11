@@ -1,10 +1,12 @@
 package com.loyea.ui.chat
 
-import android.util.Base64
-import com.google.gson.Gson
-import com.google.gson.JsonObject
+import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.nio.charset.StandardCharsets
+import java.util.Base64
+import java.util.zip.Inflater
+import com.google.gson.Gson
+import com.google.gson.JsonObject
 
 /**
  * 角色人格卡片实体
@@ -32,7 +34,7 @@ object TavernCardParser {
     private val gson = Gson()
 
     /**
-     * 从 PNG 文件的 tEXt chunk 中提取并解析角色卡元数据
+     * 从 PNG 文件的 tEXt/zTXt/iTXt chunk 中提取并解析角色卡元数据
      */
     fun parsePngCard(inputStream: InputStream): CharacterCard? {
         try {
@@ -63,8 +65,8 @@ object TavernCardParser {
 
                 if (type == "IEND") break // PNG 结束块
 
-                if (type == "tEXt") {
-                    // 读取 tEXt 数据区
+                if (type == "tEXt" || type == "zTXt" || type == "iTXt") {
+                    // 读取 Chunk 数据区
                     val chunkData = ByteArray(length)
                     var bytesRead = 0
                     while (bytesRead < length) {
@@ -74,7 +76,7 @@ object TavernCardParser {
                     }
                     if (bytesRead != length) break
 
-                    // zEXt/tEXt 结构: Keyword (以 0 字节结尾) + Text
+                    // 文本块的结构通常以 Keyword (0 字节结尾) 开始
                     var nullIndex = -1
                     for (i in 0 until length) {
                         if (chunkData[i] == 0.toByte()) {
@@ -86,14 +88,80 @@ object TavernCardParser {
                     if (nullIndex != -1) {
                         val keyword = String(chunkData, 0, nullIndex, StandardCharsets.US_ASCII)
                         if (keyword == "chara") {
-                            val textStart = nullIndex + 1
-                            val textLength = length - textStart
-                            val base64Text = String(chunkData, textStart, textLength, StandardCharsets.UTF_8).trim()
-                            
-                            // Base64 解码出原始 JSON
-                            val decodedBytes = Base64.decode(base64Text, Base64.DEFAULT)
-                            val jsonStr = String(decodedBytes, StandardCharsets.UTF_8)
-                            return parseJsonCard(jsonStr)
+                            var textBytes: ByteArray? = null
+                            when (type) {
+                                "tEXt" -> {
+                                    val textStart = nullIndex + 1
+                                    val textLength = length - textStart
+                                    if (textLength > 0) {
+                                        textBytes = ByteArray(textLength)
+                                        System.arraycopy(chunkData, textStart, textBytes, 0, textLength)
+                                    }
+                                }
+                                "zTXt" -> {
+                                    // zTXt: Keyword (0-terminated) + Compression method (1 byte) + Compressed text
+                                    val compMethodIndex = nullIndex + 1
+                                    if (compMethodIndex < length) {
+                                        val compMethod = chunkData[compMethodIndex].toInt()
+                                        if (compMethod == 0) { // 0 = deflate
+                                            val textStart = compMethodIndex + 1
+                                            val textLength = length - textStart
+                                            if (textLength > 0) {
+                                                textBytes = decompressDeflate(chunkData, textStart, textLength)
+                                            }
+                                        }
+                                    }
+                                }
+                                "iTXt" -> {
+                                    // iTXt: Keyword (0-terminated) + Compression flag (1 byte) + Compression method (1 byte)
+                                    // + Language tag (0-terminated) + Translated keyword (0-terminated) + Text
+                                    var p = nullIndex + 1
+                                    if (p + 1 < length) {
+                                        val compFlag = chunkData[p].toInt()
+                                        val compMethod = chunkData[p + 1].toInt()
+                                        p += 2
+
+                                        // 跳过 Language tag
+                                        while (p < length && chunkData[p] != 0.toByte()) { p++ }
+                                        p++ // 跳过 null 字节
+
+                                        // 跳过 Translated keyword
+                                        while (p < length && chunkData[p] != 0.toByte()) { p++ }
+                                        p++ // 跳过 null 字节
+
+                                        if (p < length) {
+                                            val textLength = length - p
+                                            if (textLength > 0) {
+                                                if (compFlag == 1 && compMethod == 0) {
+                                                    textBytes = decompressDeflate(chunkData, p, textLength)
+                                                } else {
+                                                    textBytes = ByteArray(textLength)
+                                                    System.arraycopy(chunkData, p, textBytes, 0, textLength)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (textBytes != null) {
+                                val rawText = String(textBytes, StandardCharsets.UTF_8).trim()
+                                // 1. 尝试直接作为明文 JSON 解析
+                                if (rawText.startsWith("{")) {
+                                    val card = parseJsonCard(rawText)
+                                    if (card != null) return card
+                                }
+                                // 2. 尝试作为 Base64 解码后解析
+                                try {
+                                    // 使用 MIME 解码器更宽容地对待换行符
+                                    val decodedBytes = Base64.getMimeDecoder().decode(rawText)
+                                    val jsonStr = String(decodedBytes, StandardCharsets.UTF_8)
+                                    val card = parseJsonCard(jsonStr)
+                                    if (card != null) return card
+                                } catch (e: Exception) {
+                                    // 忽略 Base64 解码失败，继续尝试其他 Chunk
+                                }
+                            }
                         }
                     }
                 } else {
@@ -115,16 +183,38 @@ object TavernCardParser {
     }
 
     /**
-     * 解析 JSON 格式的角色卡数据 (自动兼容 Tavern V1/V2 格式规范)
+     * 解压 Deflate 压缩的数据
+     */
+    private fun decompressDeflate(data: ByteArray, offset: Int, length: Int): ByteArray {
+        val inflater = Inflater()
+        inflater.setInput(data, offset, length)
+        val outputStream = ByteArrayOutputStream(length)
+        val buffer = ByteArray(1024)
+        try {
+            while (!inflater.finished()) {
+                val count = inflater.inflate(buffer)
+                if (count == 0) {
+                    // 如果 inflater 还没 finish 但是返回 0，可能是数据不完整或已读完
+                    break
+                }
+                outputStream.write(buffer, 0, count)
+            }
+        } finally {
+            inflater.end()
+        }
+        return outputStream.toByteArray()
+    }
+
+    /**
+     * 解析 JSON 格式的角色卡数据 (自动兼容 Tavern V1/V2/V3 等各种包含嵌套 data 对象或扁平的格式规范)
      */
     fun parseJsonCard(jsonStr: String): CharacterCard? {
         return try {
             val root = gson.fromJson(jsonStr, JsonObject::class.java) ?: return null
             
-            // 如果含有 spec 字段且值为 chara_card_v2，说明是 V2 规格卡
-            val isV2 = root.has("spec") && root.get("spec").asString == "chara_card_v2"
-            
-            val dataObj = if (isV2 && root.has("data")) {
+            // 只要 root 中含有 data 属性且 data 是一个 JSON 对象，就视作包裹（Nested）格式进行解包
+            // 这能够自适应兼容 spec = chara_card_v2、chara_card_v3 以及后续包含 data 的版本
+            val dataObj = if (root.has("data") && root.get("data").isJsonObject) {
                 root.getAsJsonObject("data")
             } else {
                 root
