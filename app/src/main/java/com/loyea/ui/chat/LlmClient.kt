@@ -28,6 +28,7 @@ sealed class StreamEvent {
     data class Thoughts(val text: String) : StreamEvent()
     data class Error(val message: String) : StreamEvent()
     data class ToolCalls(val calls: List<LlmToolCall>) : StreamEvent()
+    data class Usage(val promptTokens: Long, val completionTokens: Long, val totalTokens: Long) : StreamEvent()
     object Done : StreamEvent()
 }
 
@@ -38,7 +39,10 @@ data class LlmResponse(
     val content: String,
     val thoughts: String? = null,
     val isError: Boolean = false,
-    val toolCalls: List<LlmToolCall> = emptyList()
+    val toolCalls: List<LlmToolCall> = emptyList(),
+    val promptTokens: Long? = null,
+    val completionTokens: Long? = null,
+    val totalTokens: Long? = null
 )
 
 data class LlmToolCall(
@@ -113,11 +117,17 @@ class LlmClient {
                 addProperty("model", targetModel)
                 add("messages", toProviderMessages(processedMessages))
                 addProperty("stream", true)
+                // 仅在明确支持的 provider 上请求流式 usage（DeepSeek/OpenAI 官方支持 stream_options），
+                // 其它 provider（如 MiMo）不发送该字段，避免严格网关 400；无 usage 时上层用字符估算兜底
+                if (config.provider.equals("DeepSeek", ignoreCase = true) ||
+                    config.provider.equals("OpenAI", ignoreCase = true)) {
+                    add("stream_options", JsonObject().apply { addProperty("include_usage", true) })
+                }
                 if (tools.isNotEmpty()) {
                     add("tools", toProviderTools(tools))
                     addProperty("tool_choice", "auto")
                 }
-                
+
                 // 开启联网搜索 (非独立搜索时才写入 web_search 参数，避免中转冲突；排除 MiMo 避免 401 鉴权问题)
                 if (config.enableSearch && !config.useIndependentSearch && !config.provider.equals("MiMo", ignoreCase = true)) {
                     addProperty("web_search", true)
@@ -197,6 +207,15 @@ class LlmClient {
                         }
                         try {
                             val chunkJson = gson.fromJson(data, JsonObject::class.java)
+                            // 终态 usage 块：{"choices":[],"usage":{...}}，当前 choices 为空数组时会被下方守卫跳过，需提前识别
+                            val usage = chunkJson.get("usage")?.takeIf { !it.isJsonNull && it.isJsonObject }?.asJsonObject
+                            if (usage != null) {
+                                emit(StreamEvent.Usage(
+                                    promptTokens = usage.get("prompt_tokens")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
+                                    completionTokens = usage.get("completion_tokens")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
+                                    totalTokens = usage.get("total_tokens")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
+                                ))
+                            }
                             val choices = chunkJson.getAsJsonArray("choices")
                             if (choices != null && choices.size() > 0) {
                                 val delta = choices.get(0).asJsonObject.getAsJsonObject("delta")
@@ -463,9 +482,13 @@ class LlmClient {
                     finalContent = rawContent.replace(thinkRegex, "").trim()
                 }
 
+                val usage = parseUsage(responseJson)
                 return@withContext LlmResponse(
                     content = finalContent,
-                    thoughts = finalThoughts
+                    thoughts = finalThoughts,
+                    promptTokens = usage?.first,
+                    completionTokens = usage?.second,
+                    totalTokens = usage?.third
                 )
             }
         } catch (e: Exception) {
@@ -499,6 +522,13 @@ class LlmClient {
         }
         if (response.content.isNotBlank()) {
             emit(StreamEvent.Content(response.content))
+        }
+        if (response.promptTokens != null || response.completionTokens != null) {
+            emit(StreamEvent.Usage(
+                promptTokens = response.promptTokens ?: 0L,
+                completionTokens = response.completionTokens ?: 0L,
+                totalTokens = response.totalTokens ?: ((response.promptTokens ?: 0L) + (response.completionTokens ?: 0L))
+            ))
         }
         emit(StreamEvent.Done)
     }.flowOn(Dispatchers.IO)
@@ -811,16 +841,32 @@ class LlmClient {
             val finalThoughts = if (!reasoningContent.isNullOrBlank()) reasoningContent else parsedState.thoughts.takeIf { it.isNotBlank() }
             val finalContent = parsedState.visibleContent.trim()
             val combinedToolCalls = apiToolCalls + parsedState.completedXmlCalls
+            val usage = parseUsage(responseJson)
 
             LlmResponse(
                 content = finalContent,
                 thoughts = finalThoughts,
-                toolCalls = combinedToolCalls
+                toolCalls = combinedToolCalls,
+                promptTokens = usage?.first,
+                completionTokens = usage?.second,
+                totalTokens = usage?.third
             )
         } catch (e: Exception) {
             e.printStackTrace()
             LlmResponse(content = "[错误] 接口响应解析失败: ${e.localizedMessage ?: e.message}", isError = true)
         }
+    }
+
+    /**
+     * 从非流式响应 JSON 中解析 usage（OpenAI 兼容格式），缺失时返回 null。
+     * 供 sendChatCompletion 与 parseChatCompletionResponse 两个解析点共用。
+     */
+    private fun parseUsage(responseJson: JsonObject): Triple<Long?, Long?, Long?>? {
+        val usage = responseJson.get("usage")?.takeIf { !it.isJsonNull && it.isJsonObject }?.asJsonObject ?: return null
+        val prompt = usage.get("prompt_tokens")?.takeIf { !it.isJsonNull }?.asLong
+        val completion = usage.get("completion_tokens")?.takeIf { !it.isJsonNull }?.asLong
+        val total = usage.get("total_tokens")?.takeIf { !it.isJsonNull }?.asLong
+        return Triple(prompt, completion, total)
     }
 
     private fun parseToolCalls(toolCallsArray: JsonArray?): List<LlmToolCall> {

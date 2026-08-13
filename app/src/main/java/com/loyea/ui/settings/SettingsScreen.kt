@@ -62,7 +62,7 @@ enum class ThemeMode {
 
 // 二级页面枚举
 enum class SettingsSubPage {
-    MAIN, API_CONFIG, THEME_SETTINGS, MCP_CONFIG, PHYSICAL_SENSOR, MEMORY_SETTINGS, TOOL_AUTHORIZATION, MULTIMODAL_SETTINGS
+    MAIN, API_CONFIG, THEME_SETTINGS, MCP_CONFIG, PHYSICAL_SENSOR, MEMORY_SETTINGS, TOOL_AUTHORIZATION, MULTIMODAL_SETTINGS, WORLD_INFO_SETTINGS
 }
 
 // API 配置数据模型
@@ -169,6 +169,7 @@ fun SettingsScreen(
                         onNavigateToMemory = { subPage = SettingsSubPage.MEMORY_SETTINGS },
                         onNavigateToToolAuth = { subPage = SettingsSubPage.TOOL_AUTHORIZATION },
                         onNavigateToMultimodal = { subPage = SettingsSubPage.MULTIMODAL_SETTINGS },
+                        onNavigateToWorldInfo = { subPage = SettingsSubPage.WORLD_INFO_SETTINGS },
                         adultContentEnabled = viewModel?.enableAdultContent?.value ?: false,
                         onAdultContentToggle = { enabled -> viewModel?.updateAdultContentSetting(enabled) },
                         onBackClick = onBackClick
@@ -246,6 +247,13 @@ fun SettingsScreen(
                         onBackClick = { subPage = SettingsSubPage.MAIN }
                     )
                 }
+                SettingsSubPage.WORLD_INFO_SETTINGS -> {
+                    WorldInfoSettingsLayout(
+                        viewModel = viewModel,
+                        appLanguage = appLanguage,
+                        onBackClick = { subPage = SettingsSubPage.MAIN }
+                    )
+                }
             }
         }
     }
@@ -271,6 +279,7 @@ fun SettingsMainLayout(
     onNavigateToMemory: () -> Unit,
     onNavigateToToolAuth: () -> Unit,
     onNavigateToMultimodal: () -> Unit,
+    onNavigateToWorldInfo: () -> Unit,
     adultContentEnabled: Boolean,
     onAdultContentToggle: (Boolean) -> Unit,
     onBackClick: () -> Unit
@@ -550,6 +559,49 @@ fun SettingsMainLayout(
 
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
 
+                // 全局世界观（World Info）二级页面入口：与人格设计/记忆管理平级
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onNavigateToWorldInfo() }
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Public,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = if (isEn) "World Info (Global Lore)" else "World Info 世界观记忆",
+                                fontSize = 15.sp,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Text(
+                                text = if (isEn) "Keyword-triggered global lore, cross-session" else "关键词触发的全局世界观设定，跨会话生效（兼容 SillyTavern）",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                            )
+                        }
+                    }
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+
                 // 外部工具授权二级页面入口
                 Row(
                     modifier = Modifier
@@ -643,7 +695,7 @@ fun SettingsMainLayout(
             var showAdultConfirm by remember { mutableStateOf(false) }
             val easterEggContext = LocalContext.current
             Text(
-                text = if (adultContentEnabled) "Loyea v0.4 *" else "Loyea v0.4",
+                text = if (adultContentEnabled) "Loyea v0.5.1 *" else "Loyea v0.5.1",
                 modifier = Modifier
                     .align(Alignment.CenterHorizontally)
                     .clickable {

@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.1] - 2026-08-14
+
+### Added (新增)
+- **会话级 Token 用量控件**（[TokenUsageWidget.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/TokenUsageWidget.kt)）：每个会话顶部右置小 pill（迷你 donut + 总量），点击弹出气泡——donut 环形图 + 本会话已用 / Prompt / 回复三行数字 + 上下文窗口占用进度条。**只记 token 数量、不计价格；每个会话独立计量**；统计范围 = **对话 + 系统调用**（主聊天流、AI 标题生成、长会话压缩、后台记忆提炼、后台图谱提取、后台主动问候）。
+  - 真实 usage 管线（[LlmClient.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/LlmClient.kt)）：DeepSeek/OpenAI 流式请求追加 `stream_options.include_usage`，SSE 终态 `usage` chunk 捕获入 `StreamEvent.Usage`；非流式两条解析路径均读取 `usage`。MiMo 等不支持的服务端走字符估算兜底（[TokenEstimator.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/TokenEstimator.kt)：CJK ≈0.5 token/字、ASCII ≈0.25）。
+  - 持久化（[ChatStorageManager.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatStorageManager.kt)）：`ChatSession` 新增 `promptTokens/completionTokens/lastContextTokens`，`updateSessionTokens` 加性累加；`lastContextTokens` 仅主聊天流写入（用于上下文窗口展示）。杀进程重启后数字仍在。
+- **全局世界观（World Info）**（[WorldInfoSettings.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/settings/WorldInfoSettings.kt)）：仿 SillyTavern 世界书，跨会话全局记忆，设置页新增「World Info 世界观记忆」入口（与人格设计/记忆管理平级）。条目 = 触发关键词 + 内容，关键词命中近 10 条对话即注入 system prompt 尾部（`constant` 常驻注入无视关键词）；`enabled` 开关控制是否参与匹配。**完全兼容 SillyTavern**：支持导入/导出标准 World Info JSON（`{"kind":0,"entries":{...}}`），保留 `key/keysecondary/constant/disable/order/depth/comment/selective` 等 ST 字段，往返不失真。
+- **平板侧栏完全收起**（[MainScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/main/MainScreen.kt)）：两栏布局侧栏收起改为 `AnimatedVisibility` 横向滑出动画，收起后聊天占满全屏；**顶部保留用户头像**作为展开入口（点击圆形首字母头像展开侧栏）；侧栏收起按钮加大至 32dp。收起状态经 `rememberSaveable` 在旋转/导航返回后保持。
+
+### Changed (变更)
+- 版本号升级至 v0.5.1（versionCode 7，可覆盖安装 v0.5）。
+
 ## [0.5] - 2026-08-13
 
 ### Added (新增)

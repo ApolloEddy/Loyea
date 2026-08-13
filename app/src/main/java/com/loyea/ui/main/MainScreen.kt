@@ -1,6 +1,12 @@
 package com.loyea.ui.main
 
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -90,7 +96,13 @@ fun MainScreen(
     Box(modifier = Modifier.fillMaxSize()) {
         if (useTwoPane) {
             Row(modifier = Modifier.fillMaxSize()) {
-                if (isSidebarExpanded) {
+                // 平板两栏：侧栏完全收起（横向滑出动画），收起后聊天占满全屏、顶部保留头像作为展开入口
+                AnimatedVisibility(
+                    visible = isSidebarExpanded,
+                    enter = expandHorizontally(animationSpec = tween(250)) + fadeIn(animationSpec = tween(250)),
+                    exit = shrinkHorizontally(animationSpec = tween(250)) + fadeOut(animationSpec = tween(250)),
+                    modifier = Modifier.fillMaxHeight()
+                ) {
                     Surface(
                         modifier = Modifier
                             .width(300.dp)
@@ -143,6 +155,8 @@ fun MainScreen(
                     characterCardList = characterCardList,
                     viewModel = viewModel,
                     showMenuIcon = !isSidebarExpanded,
+                    userName = userName,
+                    useAvatarMenu = !isSidebarExpanded,
                     modifier = modifier.weight(1f)
                 )
             }
@@ -360,15 +374,16 @@ fun SidebarContent(
                 modifier = Modifier.size(16.dp)
             )
             Spacer(modifier = Modifier.width(8.dp))
+            // 收起按钮做明显些（平板两栏下收起后无其它可见入口，这是唯一手势）
             IconButton(
                 onClick = { onCloseDrawer() },
-                modifier = Modifier.size(28.dp)
+                modifier = Modifier.size(32.dp)
             ) {
                 Icon(
                     imageVector = Icons.Default.ChevronLeft,
-                    contentDescription = "Close Drawer",
-                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-                    modifier = Modifier.size(20.dp)
+                    contentDescription = "Close Sidebar",
+                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                    modifier = Modifier.size(22.dp)
                 )
             }
         }

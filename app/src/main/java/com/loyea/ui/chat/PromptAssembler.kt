@@ -30,6 +30,7 @@ object PromptAssembler {
         enableSearch: Boolean = false,
         coreMemories: List<String> = emptyList(),
         graphMemory: String? = null,
+        worldInfo: String? = null,
         enableHaptic: Boolean = true,
         enableVoice: Boolean = true,
         enableAdultContent: Boolean = false,
@@ -236,6 +237,14 @@ object PromptAssembler {
             if (trimmed.isNotBlank() && trimmed != "[Recall Memory:") {
                 sb.append(trimmed).append("\n\n")
             }
+        }
+
+        // 插入全局世界观（World Info）：跨会话关键词触发记忆，置于最末尾易变段（随会话内容变化）
+        // 保持前部静态前缀字节级稳定，不影响 DeepSeek 自动前缀缓存
+        if (!worldInfo.isNullOrBlank()) {
+            sb.append("[WORLD INFO / 世界观]\n")
+            sb.append("以下是与当前话题相关的全局世界观设定（跨会话长期存在，可能随时被引用）。当条目与当前对话相关时，请自然地在扮演中体现并遵守：\n")
+            sb.append(worldInfo.trim()).append("\n\n")
         }
 
         val rawPrompt = sb.toString().trimEnd()

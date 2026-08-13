@@ -123,6 +123,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     var characterCardList = mutableStateOf<List<CharacterCard>>(emptyList())
         private set
 
+    // 8.1 全局世界观（World Info）条目列表（跨会话）
+    var worldInfoEntries = mutableStateOf<List<WorldInfoEntry>>(emptyList())
+        private set
+
     val activeCharacterCard = derivedStateOf {
         val currentSession = sessions.value.find { it.id == currentSessionId.value }
         val charId = currentSession?.characterId ?: "char_loyea_default"
@@ -421,6 +425,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val cards = storageManager.loadCharacterCards()
             withContext(Dispatchers.Main) {
                 characterCardList.value = cards
+            }
+            val worldInfo = storageManager.loadWorldInfo()
+            withContext(Dispatchers.Main) {
+                worldInfoEntries.value = worldInfo
             }
             val watchConn = perceptionManager.watchProvider.isWatchConnected()
             val watchMov = perceptionManager.watchProvider.getMovementState() == "Moving"
@@ -958,13 +966,24 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 if (firstUserText.isBlank() && firstAiText.isBlank()) return@launch
                 val prompt = buildSmartTitlePrompt(firstUserText, firstAiText)
                 val titleBuilder = StringBuilder()
+                var usagePrompt = 0L
+                var usageCompletion = 0L
+                var hasRealUsage = false
                 kotlinx.coroutines.withTimeoutOrNull(15_000) {
                     llmClient.sendChatCompletionStream(
                         activeApiConfig.value,
                         listOf(LlmChatMessage(role = "user", content = prompt)),
                         emptyList()
                     ).collect { ev ->
-                        if (ev is StreamEvent.Content) titleBuilder.append(ev.text)
+                        when (ev) {
+                            is StreamEvent.Content -> titleBuilder.append(ev.text)
+                            is StreamEvent.Usage -> {
+                                usagePrompt = ev.promptTokens
+                                usageCompletion = ev.completionTokens
+                                hasRealUsage = true
+                            }
+                            else -> {}
+                        }
                     }
                 }
                 val title = titleBuilder.toString().trim()
@@ -979,6 +998,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                 }
+                // 标题生成也计入会话用量（系统调用），但不更新上下文窗口展示值
+                persistSessionTokens(
+                    sessionId,
+                    promptTokens = if (hasRealUsage) usagePrompt else estimateTokens(prompt),
+                    completionTokens = if (hasRealUsage) usageCompletion else estimateTokens(titleBuilder.toString()),
+                    lastContext = null
+                )
             } catch (e: Exception) {
                 // 静默降级：标题保持兜底值
             } finally {
@@ -1077,6 +1103,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             var accumulatedContent = ""
             var accumulatedThoughts = ""
             var calculatedDuration: Int? = null
+
+            // —— Token 用量累计（跨 Agent 多轮，直到整条回复结束才统一落库）——
+            var accumulatedPromptTokens = 0L
+            var accumulatedCompletionTokens = 0L
+            var lastContextPromptTokens = 0L
+            var hasRealUsage = false
 
             // —— Agent 式多轮分段构建（仅新消息）——
             // segments：已提交的文本段 + 工具段；segmentCut：accumulatedContent 中当前文本段的起点。
@@ -1192,6 +1224,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 null
             }
 
+            // 全局世界观（World Info）关键词匹配：命中则拼块注入 system prompt 尾部
+            val worldInfo = buildWorldInfoBlock(history)
+
             val systemPrompt = PromptAssembler.assembleSystemPrompt(
                 card = characterCard,
                 userName = userName.value,
@@ -1200,6 +1235,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 enableSearch = apiConfig.enableSearch,
                 coreMemories = activeSession.value?.coreMemories ?: emptyList(),
                 graphMemory = graphMemory,
+                worldInfo = worldInfo,
                 enableHaptic = toolAuthHaptic.value,
                 enableVoice = hasTtsCapability(),
                 enableAdultContent = enableAdultContent.value,
@@ -1360,6 +1396,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                     saveMessagesAsync(sessionId, currentList)
                                     hasError = true
                                 }
+                            }
+                            is StreamEvent.Usage -> {
+                                accumulatedPromptTokens += event.promptTokens
+                                accumulatedCompletionTokens += event.completionTokens
+                                lastContextPromptTokens = event.promptTokens
+                                hasRealUsage = true
                             }
                             is StreamEvent.Done -> {
                                 // 最终轮（无工具）时重算总耗时，让 "Thought for Xs" 覆盖整个多轮响应
@@ -1681,6 +1723,47 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 isThinking.value = false
                 isMcpRunning.value = false
                 currentVoiceEmotion.value = null // 情感分析重置
+
+                // —— Token 用量落库（成功/出错/取消均计入；未返回 usage 的 provider 用字符估算兜底）——
+                val promptTokens = if (hasRealUsage) {
+                    accumulatedPromptTokens
+                } else {
+                    estimateTokens(conversation.joinToString("\n") { it.content ?: "" })
+                }
+                val completionTokens = if (hasRealUsage) accumulatedCompletionTokens else estimateTokens(accumulatedContent)
+                persistSessionTokens(
+                    sessionId,
+                    promptTokens,
+                    completionTokens,
+                    lastContext = if (hasRealUsage) lastContextPromptTokens else promptTokens
+                )
+            }
+        }
+    }
+
+    /**
+     * 累计本会话 token 用量到存储与内存（加性，跨多次调用累加）。
+     * lastContext 仅主聊天流传入（覆盖上下文窗口展示值），其它调用传 null 保留旧值。
+     */
+    private fun persistSessionTokens(
+        sessionId: String,
+        promptTokens: Long,
+        completionTokens: Long,
+        lastContext: Long? = null
+    ) {
+        if (sessionId.isBlank() || (promptTokens <= 0L && completionTokens <= 0L)) return
+        viewModelScope.launch(Dispatchers.IO) {
+            storageManager.updateSessionTokens(sessionId, promptTokens, completionTokens, lastContext)
+            withContext(Dispatchers.Main) {
+                sessions.value = sessions.value.map { s ->
+                    if (s.id == sessionId) {
+                        s.copy(
+                            promptTokens = s.promptTokens + promptTokens,
+                            completionTokens = s.completionTokens + completionTokens,
+                            lastContextTokens = lastContext ?: s.lastContextTokens
+                        )
+                    } else s
+                }
             }
         }
     }
@@ -1985,6 +2068,50 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * 保存全局世界观条目列表（设置页编辑/导入/导出后调用）：落库 + 更新内存 state
+     */
+    fun saveWorldInfo(entries: List<WorldInfoEntry>) {
+        viewModelScope.launch(Dispatchers.IO) {
+            storageManager.saveWorldInfo(entries)
+            withContext(Dispatchers.Main) {
+                worldInfoEntries.value = entries
+            }
+        }
+    }
+
+    /**
+     * 从近 10 条历史消息中做世界观关键词匹配，拼接注入块。
+     * - enabled=false 的条目不参与匹配
+     * - constant=true 的条目无条件注入（ST 常驻语义）
+     * - 关键词命中采用 contains（ignoreCase），对子串/部分命中宽松匹配
+     */
+    private fun buildWorldInfoBlock(history: List<Message>): String? {
+        val entries = worldInfoEntries.value
+        if (entries.isEmpty()) return null
+        val recentText = history.takeLast(10).joinToString("\n") { it.content }
+        if (recentText.isBlank()) return null
+
+        val matched = entries
+            .filter { entry -> entry.enabled }
+            .filter { entry ->
+                entry.constant || entry.keywords.any { keyword ->
+                    keyword.isNotBlank() && recentText.contains(keyword, ignoreCase = true)
+                }
+            }
+            .sortedBy { it.order }
+        if (matched.isEmpty()) return null
+
+        return buildString {
+            matched.forEach { entry ->
+                val content = entry.content.trim()
+                if (content.isNotBlank()) {
+                    append("- ").append(content).append("\n")
+                }
+            }
+        }.trimEnd()
+    }
+
+    /**
      * 长会话惰性压缩：消息数超阈值时，将滑窗（末尾 20 条）之外的旧消息增量压缩为早期摘要。
      * - 摘要持久化到 ChatSession.compressedSummary，断点记入 compressedAtCount（增量，避免重复压缩）
      * - 独立协程异步执行，不阻塞发送；防重入；失败静默（断点未推进，下次触发自然重试）
@@ -2036,6 +2163,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     config = targetConfig,
                     systemPrompt = summaryPrompt,
                     history = emptyList()
+                )
+                // 压缩也计入会话用量（系统调用），但不更新上下文窗口展示值
+                persistSessionTokens(
+                    sessionId,
+                    promptTokens = response.promptTokens ?: estimateTokens(summaryPrompt),
+                    completionTokens = response.completionTokens ?: estimateTokens(response.content),
+                    lastContext = null
                 )
                 if (!response.isError && response.content.isNotBlank()) {
                     val newSummary = response.content.trim()

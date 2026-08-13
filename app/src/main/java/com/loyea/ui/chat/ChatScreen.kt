@@ -96,6 +96,8 @@ fun ChatScreen(
     onEditMessage: (String, String) -> Unit,
     viewModel: ChatViewModel? = null,
     showMenuIcon: Boolean = true,
+    userName: String = "",
+    useAvatarMenu: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -186,7 +188,25 @@ fun ChatScreen(
                     )
                 },
                 navigationIcon = {
-                    if (showMenuIcon) {
+                    if (useAvatarMenu) {
+                        // 平板侧栏完全收起态：顶部保留用户头像作为展开入口（仿 UserInfoBar 圆形首字母头像）
+                        Box(
+                            modifier = Modifier
+                                .padding(start = 4.dp)
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
+                                .clickable { onMenuClick() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = if (userName.isNotBlank()) userName.take(1).uppercase() else "L",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    } else if (showMenuIcon) {
                         IconButton(onClick = onMenuClick) {
                             Icon(
                                 imageVector = Icons.Default.Menu,
@@ -236,6 +256,16 @@ fun ChatScreen(
                     }
                 )
         ) {
+            // 会话级 Token 用量控件（置顶不随滚动；新会话无用量自动隐藏）
+            TokenUsageWidget(
+                session = viewModel?.activeSession?.value,
+                modelName = apiConfig.modelName,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .padding(top = 4.dp)
+            )
+
             // 消息流
             LazyColumn(
                 state = listState,

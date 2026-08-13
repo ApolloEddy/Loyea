@@ -23,6 +23,7 @@ import com.loyea.ui.chat.Message
 import com.loyea.ui.chat.Sender
 import com.loyea.ui.chat.StreamEvent
 import com.loyea.ui.chat.TavernCardParser
+import com.loyea.ui.chat.estimateTokens
 import com.loyea.ui.settings.ApiConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -120,6 +121,10 @@ class GreetingWorker(
             """.trimIndent()
 
             var generatedText = ""
+            // 问候计费累计器：服务端返回 usage 时用真实值，否则估算兜底
+            var accumulatedPrompt = 0L
+            var accumulatedCompletion = 0L
+            var hasRealUsage = false
             try {
                 llmClient.sendChatCompletionStream(
                     config = activeConfig.copy(enableReasoning = false), // Disable reasoning for quick greeting
@@ -128,6 +133,11 @@ class GreetingWorker(
                 ).collect { event ->
                     when (event) {
                         is StreamEvent.Content -> generatedText += event.text
+                        is StreamEvent.Usage -> {
+                            accumulatedPrompt += event.promptTokens
+                            accumulatedCompletion += event.completionTokens
+                            hasRealUsage = true
+                        }
                         is StreamEvent.Error -> throw Exception(event.message)
                         else -> {}
                     }
@@ -138,6 +148,15 @@ class GreetingWorker(
             }
 
             if (generatedText.isBlank()) return@withContext Result.retry()
+
+            // 后台主动问候计入解析出的那个会话用量（系统调用）；lastContext 仅主聊天流写，这里保持 null
+            val historyText = history.joinToString("\n") { it.content }
+            storageManager.updateSessionTokens(
+                sessionId,
+                promptTokens = if (hasRealUsage) accumulatedPrompt else estimateTokens(systemPrompt) + estimateTokens(historyText),
+                completionTokens = if (hasRealUsage) accumulatedCompletion else estimateTokens(generatedText),
+                lastContextTokens = null
+            )
 
             // 4. Save to chat
             val newMsg = Message(

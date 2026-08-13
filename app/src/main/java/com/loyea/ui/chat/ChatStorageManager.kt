@@ -20,7 +20,32 @@ data class ChatSession(
     val coreMemories: List<String> = emptyList(), // 会话核心记忆列表
     val isTitleSummarized: Boolean? = false, // 是否已由AI总结了标题
     val compressedSummary: String = "", // 长会话早期摘要（滑窗外的旧消息被压缩后保留故事脉络）
-    val compressedAtCount: Int = 0 // 已参与压缩的消息条数（增量压缩断点）
+    val compressedAtCount: Int = 0, // 已参与压缩的消息条数（增量压缩断点）
+    val promptTokens: Long = 0, // 本会话累计 prompt token（会话独立计量）
+    val completionTokens: Long = 0, // 本会话累计 completion token
+    val lastContextTokens: Long = 0 // 最近一次主聊天流请求的上下文 token（仅主聊天流更新，用于上下文窗口展示）
+)
+
+/**
+ * 全局世界观条目（World Info，仿 SillyTavern 世界书）。
+ *
+ * 关键词触发注入 system prompt；字段保留 SillyTavern World Info 常用字段，
+ * 保证导入/导出往返不失真（见 WorldInfoSettings 的 import/export）。
+ */
+data class WorldInfoEntry(
+    val id: String,
+    val keywords: List<String>,      // 主关键词（ST key）
+    val content: String,
+    val enabled: Boolean = true,     // 本地启用开关（未启用不参与关键词匹配注入）
+    // ---- SillyTavern 兼容字段 ----
+    val uid: Int = 0,                // ST uid（用于序列化顺序；可重复）
+    val keysecondary: List<String> = emptyList(), // ST 次关键词
+    val constant: Boolean = false,   // ST 常驻注入：无视关键词始终注入
+    val order: Int = 100,            // ST order：命中后的输出顺序
+    val depth: Int = 4,              // ST depth：注入深度
+    val comment: String = "",        // ST 备注
+    val selective: Boolean = false,  // ST selective
+    val disable: Boolean = false     // ST 原生 disable（导入时非 disable → enabled，导出时反向）
 )
 
 /**
@@ -37,6 +62,7 @@ class ChatStorageManager(private val context: Context) {
         private val sessionsMutex = Mutex()
         private val messagesMutex = Mutex()
         private val cardsMutex = Mutex()
+        private val worldInfoMutex = Mutex()
     }
 
     private fun saveSessionListInternal(sessions: List<ChatSession>) {
@@ -64,7 +90,10 @@ class ChatStorageManager(private val context: Context) {
                     coreMemories = raw.coreMemories ?: emptyList(),
                     isTitleSummarized = raw.isTitleSummarized ?: false,
                     compressedSummary = raw.compressedSummary ?: "",
-                    compressedAtCount = raw.compressedAtCount ?: 0
+                    compressedAtCount = raw.compressedAtCount ?: 0,
+                    promptTokens = raw.promptTokens ?: 0,
+                    completionTokens = raw.completionTokens ?: 0,
+                    lastContextTokens = raw.lastContextTokens ?: 0
                 )
             }
         } catch (e: Exception) {
@@ -241,6 +270,83 @@ class ChatStorageManager(private val context: Context) {
 
     private val cardsFile = File(context.filesDir, "character_cards.json")
 
+    private val worldInfoFile = File(context.filesDir, "global_world_info.json")
+
+    /**
+     * 保存全局世界观条目列表
+     */
+    suspend fun saveWorldInfo(entries: List<WorldInfoEntry>) {
+        worldInfoMutex.withLock {
+            try {
+                atomicWrite(worldInfoFile, gson.toJson(entries))
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    /**
+     * 读取全局世界观条目列表（不存在则返回空列表）
+     */
+    suspend fun loadWorldInfo(): List<WorldInfoEntry> {
+        return worldInfoMutex.withLock {
+            if (!worldInfoFile.exists()) return@withLock emptyList()
+            try {
+                val json = worldInfoFile.readText()
+                val type = object : TypeToken<List<WorldInfoEntry>>() {}.type
+                val rawList = gson.fromJson<List<WorldInfoEntry>>(json, type) ?: emptyList()
+                // 自愈式清洗：Gson 反射对缺失字段不触发 Kotlin 默认值，逐字段兜底
+                rawList.map { raw ->
+                    WorldInfoEntry(
+                        id = raw.id ?: System.currentTimeMillis().toString(),
+                        keywords = raw.keywords ?: emptyList(),
+                        content = raw.content ?: "",
+                        enabled = raw.enabled ?: true,
+                        uid = raw.uid ?: 0,
+                        keysecondary = raw.keysecondary ?: emptyList(),
+                        constant = raw.constant ?: false,
+                        order = raw.order ?: 100,
+                        depth = raw.depth ?: 4,
+                        comment = raw.comment ?: "",
+                        selective = raw.selective ?: false,
+                        disable = raw.disable ?: false
+                    )
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                backupCorruptFile(worldInfoFile)
+                emptyList()
+            }
+        }
+    }
+
+    /**
+     * 原子化更新全局世界观条目列表
+     */
+    suspend fun updateWorldInfo(updateBlock: (List<WorldInfoEntry>) -> List<WorldInfoEntry>) {
+        worldInfoMutex.withLock {
+            val current = if (worldInfoFile.exists()) {
+                try {
+                    val json = worldInfoFile.readText()
+                    val type = object : TypeToken<List<WorldInfoEntry>>() {}.type
+                    gson.fromJson<List<WorldInfoEntry>>(json, type) ?: emptyList()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    backupCorruptFile(worldInfoFile)
+                    emptyList()
+                }
+            } else {
+                emptyList()
+            }
+            val updated = updateBlock(current)
+            try {
+                atomicWrite(worldInfoFile, gson.toJson(updated))
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
     /**
      * 保存所有角色卡列表
      */
@@ -304,6 +410,31 @@ class ChatStorageManager(private val context: Context) {
             currentList.map { session ->
                 if (session.id == sessionId) {
                     session.copy(compressedSummary = summary, compressedAtCount = compressedAtCount)
+                } else {
+                    session
+                }
+            }
+        }
+    }
+
+    /**
+     * 原子化累加某个会话的 token 用量（加性：prompt/completion 为增量，跨多次调用累计）。
+     * lastContextTokens 传非 null 时覆盖（仅主聊天流更新），否则保留旧值。
+     */
+    suspend fun updateSessionTokens(
+        sessionId: String,
+        promptTokens: Long,
+        completionTokens: Long,
+        lastContextTokens: Long? = null
+    ) {
+        updateSessionList { currentList ->
+            currentList.map { session ->
+                if (session.id == sessionId) {
+                    session.copy(
+                        promptTokens = session.promptTokens + promptTokens,
+                        completionTokens = session.completionTokens + completionTokens,
+                        lastContextTokens = lastContextTokens ?: session.lastContextTokens
+                    )
                 } else {
                     session
                 }

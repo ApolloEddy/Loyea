@@ -17,6 +17,7 @@ import com.loyea.ui.chat.ChatStorageManager
 import com.loyea.ui.chat.LlmClient
 import com.loyea.ui.chat.PromptAssembler
 import com.loyea.ui.chat.Sender
+import com.loyea.ui.chat.estimateTokens
 import com.loyea.ui.settings.ApiConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -137,6 +138,13 @@ class MemoryConsolidationWorker(
                 systemPrompt = summaryPrompt,
                 history = emptyList()
             )
+            // 记忆提炼计入会话用量（系统调用）；服务端未返回 usage 时用字符估算兜底
+            storageManager.updateSessionTokens(
+                sessionId,
+                promptTokens = llmResponse.promptTokens ?: estimateTokens(summaryPrompt),
+                completionTokens = llmResponse.completionTokens ?: estimateTokens(llmResponse.content),
+                lastContextTokens = null
+            )
             val responseText = llmResponse.content
             if (!llmResponse.isError && responseText.isNotBlank()) {
                 val newMemories = mutableListOf<String>()
@@ -197,6 +205,13 @@ class MemoryConsolidationWorker(
                     config = targetConfig,
                     systemPrompt = extractPrompt,
                     history = emptyList()
+                )
+                // 图谱提取计入会话用量（系统调用）；服务端未返回 usage 时用字符估算兜底
+                storageManager.updateSessionTokens(
+                    sessionId,
+                    promptTokens = graphLlmResponse.promptTokens ?: estimateTokens(extractPrompt),
+                    completionTokens = graphLlmResponse.completionTokens ?: estimateTokens(graphLlmResponse.content),
+                    lastContextTokens = null
                 )
                 var graphResponseText = graphLlmResponse.content.trim()
                 if (!graphLlmResponse.isError && graphResponseText.isNotBlank()) {
