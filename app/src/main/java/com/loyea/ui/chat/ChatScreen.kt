@@ -146,10 +146,29 @@ fun ChatScreen(
         selectedImagePath.value = null // 切换会话时清空图片预览
     }
 
-    // 自动滚动到底部
-    LaunchedEffect(messages.size, isThinking) {
-        if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1 + if (isThinking) 1 else 0)
+    // 自动滚动：思考中默认展开并滚动到「Thinking 标题顶到屏幕顶端即停」；用户触摸后完全交还控制权
+    var autoPinActive by remember { mutableStateOf(true) }
+
+    // 流式响应中的占位气泡（isThinking 每轮流前置位，工具执行期由 isMcpRunning 补位，覆盖整个多轮响应）
+    val activeStreaming = isThinking || isMcpRunning
+    val streamingMsg = if (activeStreaming) messages.lastOrNull { it.sender == Sender.AI } else null
+
+    // 新一轮 AI 回复开始时复位自动置顶（同响应内 id 稳定不重复触发）
+    LaunchedEffect(streamingMsg?.id) {
+        if (streamingMsg != null) autoPinActive = true
+    }
+
+    LaunchedEffect(messages.lastOrNull(), isThinking, isMcpRunning) {
+        if (messages.isEmpty()) return@LaunchedEffect
+        val s = if (isThinking || isMcpRunning) messages.lastOrNull { it.sender == Sender.AI } else null
+        when {
+            // 用户已手动滚动/触摸 → 不再自动滚动
+            !autoPinActive -> Unit
+            // 思考展开且有内容 → 把该消息顶对齐视口顶部（Thinking 标题置顶，index = messages.size，占位 Spacer 占 index 0）
+            s != null && s.isThoughtsExpanded && !s.thoughts.isNullOrBlank() ->
+                listState.scrollToItem(messages.size, 0)
+            // 流式初期（思考文本未到/已折叠）跟随底部；思考结束回到底部看最终回复
+            else -> listState.animateScrollToItem(messages.size - 1 + if (isThinking) 1 else 0)
         }
     }
 
@@ -222,7 +241,16 @@ fun ChatScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
+                    .padding(horizontal = 16.dp)
+                    // 用户触摸列表 → 停止自动置顶滚动，尊重用户意图
+                    .pointerInput(Unit) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                awaitFirstDown()
+                                autoPinActive = false
+                            }
+                        }
+                    },
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 // 占位，防止贴顶
@@ -289,8 +317,12 @@ fun ChatScreen(
                 }
 
                 if (isThinking) {
-                    item {
-                        ThinkingIndicator()
+                    // 仅当流式消息气泡完全为空（思考与正文均未到）才显示尾随加载点，避免与思考块重复
+                    val streamMsg = messages.lastOrNull { it.sender == Sender.AI }
+                    if (streamMsg == null || (streamMsg.thoughts.isNullOrBlank() && streamMsg.content.isBlank())) {
+                        item {
+                            ThinkingIndicator()
+                        }
                     }
                 }
 
@@ -499,11 +531,12 @@ fun ChatScreen(
                 value = inputText,
                 appLanguage = appLanguage,
                 characterName = activeCharacterCard.name,
-                onValueChange = { 
-                    val filteredText = it.text.replace("\n", "").replace("\r", "")
-                    inputText = it.copy(text = filteredText)
+                onValueChange = {
+                    // 保留换行：回车=换行（ImeAction.Default），发送走右侧按钮。
+                    // 不再剥离 \n，否则多行输入会被吞掉（光标一闪即插入又被删除）。
+                    inputText = it
                     if (currentSessionId.isNotEmpty()) {
-                        saveDraft(currentSessionId, filteredText)
+                        saveDraft(currentSessionId, it.text)
                     }
                 },
                 onSend = {
@@ -939,6 +972,12 @@ fun SelectPersonaContent(
     }
 }
 
+/** 判断工具是否为 AI 语音回复工具（兼容裸名 / 双下划线前缀 / 点号前缀三种命名形式） */
+private fun isVoiceReplyTool(toolName: String): Boolean =
+    toolName.equals("send_voice_reply", ignoreCase = true) ||
+        toolName.endsWith("__send_voice_reply", ignoreCase = true) ||
+        toolName.endsWith(".send_voice_reply", ignoreCase = true)
+
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun MessageItem(
@@ -1365,13 +1404,11 @@ fun MessageItem(
                     .padding(end = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                if (message.mcpCalls.isNotEmpty()) {
+                // 旧消息（无 contentSegments）保持工具卡整列置顶；新消息工具卡已内联到分段序列中
+                if (message.contentSegments.isEmpty() && message.mcpCalls.isNotEmpty()) {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         message.mcpCalls.forEach { call ->
-                            val isVoiceReply = call.toolName.equals("send_voice_reply", ignoreCase = true) || 
-                                               call.toolName.endsWith("__send_voice_reply", ignoreCase = true) || 
-                                               call.toolName.endsWith(".send_voice_reply", ignoreCase = true)
-                            if (!isVoiceReply) {
+                            if (!isVoiceReplyTool(call.toolName)) {
                                 McpCallItem(mcpCall = call)
                             }
                         }
@@ -1510,9 +1547,44 @@ fun MessageItem(
                     }
                 }
 
-                if (message.content.isNotBlank()) {
+                if (message.contentSegments.isNotEmpty()) {
+                    // 新路径：Agent 式分段渲染——文本段与工具卡按调用顺序内联
+                    message.contentSegments.forEach { segment ->
+                        when (segment.type) {
+                            "text" -> if (segment.text.isNotBlank()) {
+                                val processedSegText = remember(segment.text) {
+                                    segment.text.replace(Regex("(?<!`)`(?!`)"), "\\\\`")
+                                }
+                                androidx.compose.foundation.text.selection.SelectionContainer {
+                                    MarkdownText(
+                                        text = processedSegText,
+                                        color = MaterialTheme.colorScheme.onBackground
+                                    )
+                                }
+                            }
+                            "tool" -> {
+                                val call = message.mcpCalls.find { it.id == segment.mcpCallId }
+                                if (call != null) {
+                                    if (isVoiceReplyTool(call.toolName)) {
+                                        McpVoiceReplyItem(
+                                            call = call,
+                                            currentlyPlayingAudioId = currentlyPlayingAudioId,
+                                            currentlyPlayingAudioProgress = currentlyPlayingAudioProgress,
+                                            onPlayClick = onMcpVoicePlay
+                                        )
+                                    } else {
+                                        McpCallItem(mcpCall = call)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if (message.content.isNotBlank()) {
+                    // 旧路径（历史消息）：整段渲染，并折叠连续空行
                     val processedContent = remember(message.content) {
                         message.content.replace(Regex("(?<!`)`(?!`)"), "\\\\`")
+                            .replace(Regex("\\n{2,}"), "\n\n")
+                            .trim('\n', '\r')
                     }
                     androidx.compose.foundation.text.selection.SelectionContainer {
                         MarkdownText(
@@ -1522,21 +1594,19 @@ fun MessageItem(
                     }
                 }
 
-                // AI 虚拟工具语音回复条展示 (McpVoiceReplyItem 统一收拢在底端渲染，防止位置乱跑)
-                val voiceCalls = message.mcpCalls.filter { call ->
-                    call.toolName.equals("send_voice_reply", ignoreCase = true) || 
-                    call.toolName.endsWith("__send_voice_reply", ignoreCase = true) || 
-                    call.toolName.endsWith(".send_voice_reply", ignoreCase = true)
-                }
-                if (voiceCalls.isNotEmpty()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
-                        voiceCalls.forEach { call ->
-                            McpVoiceReplyItem(
-                                call = call,
-                                currentlyPlayingAudioId = currentlyPlayingAudioId,
-                                currentlyPlayingAudioProgress = currentlyPlayingAudioProgress,
-                                onPlayClick = onMcpVoicePlay
-                            )
+                // AI 虚拟工具语音回复条展示：旧消息统一收拢在底端渲染；新消息语音卡已内联到工具段位
+                if (message.contentSegments.isEmpty()) {
+                    val voiceCalls = message.mcpCalls.filter { isVoiceReplyTool(it.toolName) }
+                    if (voiceCalls.isNotEmpty()) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
+                            voiceCalls.forEach { call ->
+                                McpVoiceReplyItem(
+                                    call = call,
+                                    currentlyPlayingAudioId = currentlyPlayingAudioId,
+                                    currentlyPlayingAudioProgress = currentlyPlayingAudioProgress,
+                                    onPlayClick = onMcpVoicePlay
+                                )
+                            }
                         }
                     }
                 }

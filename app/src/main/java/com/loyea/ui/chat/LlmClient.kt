@@ -1624,22 +1624,31 @@ class LlmClient {
 
         // 3. 在已经滤除掉工具调用的 cleanStr 中，进行 <think> 与正文的处理
         var cursor = 0
+        var trimLeadingFromClose = false   // 紧跟 </think> 之后的正文段需去掉剥离残留的首行空行
         val len = cleanStr.length
         while (cursor < len) {
             val thinkStart = cleanStr.indexOf("<think>", cursor)
             if (thinkStart == -1) {
-                visibleContentAccumulator += cleanStr.substring(cursor)
+                val tail = cleanStr.substring(cursor)
+                visibleContentAccumulator += if (trimLeadingFromClose) tail.trimStart('\n', '\r', ' ') else tail
                 break
             }
 
             if (thinkStart > cursor) {
-                visibleContentAccumulator += cleanStr.substring(cursor, thinkStart)
+                val seg = cleanStr.substring(cursor, thinkStart)
+                if (trimLeadingFromClose) {
+                    visibleContentAccumulator += seg.trimStart('\n', '\r', ' ')
+                    trimLeadingFromClose = false
+                } else {
+                    visibleContentAccumulator += seg
+                }
             }
 
             val thinkEnd = cleanStr.indexOf("</think>", thinkStart)
             if (thinkEnd != -1) {
                 thoughtsAccumulator += cleanStr.substring(thinkStart + 7, thinkEnd)
                 cursor = thinkEnd + 8
+                trimLeadingFromClose = true
             } else {
                 thoughtsAccumulator += cleanStr.substring(thinkStart + 7)
                 break

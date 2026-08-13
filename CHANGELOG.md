@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] - 2026-08-13
+
+### Added (新增)
+- **AI 回复 Agent 式多轮分段展示（仅新消息生效）**：
+  - [Message.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/Message.kt) 新增扁平分段数据结构 `MessageContentSegment(type, text, mcpCallId)` 与 `Message.contentSegments`（Gson 序列化安全，旧数据经 [ChatStorageManager.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatStorageManager.kt) 自愈为空列表）。
+  - [ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 流式组装时同步构建分段序列：文本段在工具边界提交、工具卡段在工具执行时内联追加，回复按「思考块 → 文本段1 → [工具卡] → 文本段2 …」顺序落盘与渲染；编辑/出错/降级重试时清空分段退回旧路径。
+  - [ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt) 新消息按分段渲染（工具卡/语音回复卡内联原位），历史消息保持原整段样式不变。
+- **Thinking 实时计时器**（[ThinkingAndMcpComponents.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ThinkingAndMcpComponents.kt)）：思考中标题实时跳秒 `Thinking for Xs…`，结束后定格 `Thought for Xs`（最终轮重算整个多轮响应的总耗时）。
+
+### Changed (变更)
+- **Thinking 交互策略（对齐 Claude / DeepSeek App 呈现）**：
+  - 思考中默认展开并自动滚动，直到 Thinking 标题顶到屏幕顶端即停；用户手动触摸/滚动后完全交还控制权；用户手动折叠后后续思考不再主动展开。
+  - 多轮回复：中间轮有工具时思考块保持展开，最终轮自动折叠并回到底部展示完整回复；尾随加载点仅在全空时显示（与思考块去重）。
+
+### Fixed (修复)
+- **AI 回复偶尔连续多个空行**：根因是 `<think>` 块剥离后残留换行 + 渲染未归一化叠加。[LlmClient.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/LlmClient.kt) 在 `</think>` 剥离后 trimStart 残留空行；[ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt) 组装阶段将 `\n{2,}` 收敛为 `\n\n` 并去除首尾；历史消息展示同样折叠连续空行。
+
 ## [0.4.1] - 2026-08-12
 
 ### Fixed (修复)

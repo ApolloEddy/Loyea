@@ -19,13 +19,24 @@ data class McpCall(
     val output: String = ""
 )
 
+/**
+ * AI 回复多轮分段：type = "text"（回复文本段）| "tool"（工具卡段，经 mcpCallId 关联 mcpCalls）。
+ * 仅新消息携带（空列表走旧渲染路径），扁平数据类保证 Gson 序列化/反序列化安全。
+ */
+@Immutable
+data class MessageContentSegment(
+    val type: String,        // "text" | "tool"
+    val text: String = "",
+    val mcpCallId: String = ""
+)
+
 @Immutable
 data class Message(
     val id: String,
     val content: String,
     val sender: Sender,
     val timestamp: Long = System.currentTimeMillis(),
-    
+
     // AI 思考与 MCP 调用信息，提供默认值以向后兼容
     val thoughts: String? = null,
     val isThoughtsExpanded: Boolean = false,
@@ -45,7 +56,10 @@ data class Message(
 
     // AI 多版本回复与重新生成支持
     val versions: List<MessageVersion> = emptyList(),
-    val activeVersionIndex: Int = 0
+    val activeVersionIndex: Int = 0,
+
+    // Agent 式多轮回复分段（仅新消息；空列表走旧渲染路径）
+    val contentSegments: List<MessageContentSegment> = emptyList()
 )
 
 @Immutable

@@ -21,6 +21,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 
 // 1. MCP 工具调用项布局
 @Composable
@@ -258,6 +259,19 @@ fun ThinkingProcessLayout(
     isStillThinking: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    // 实时思考计时：思考中每秒递增，结束后定格为总耗时
+    var elapsedSec by remember { mutableIntStateOf(0) }
+    LaunchedEffect(isStillThinking) {
+        if (isStillThinking) {
+            while (true) {
+                delay(1000)
+                elapsedSec++
+            }
+        } else {
+            elapsedSec = durationSeconds
+        }
+    }
+
     // 小箭头随折叠状态平滑旋转 0 到 90 度
     val arrowRotation by animateFloatAsState(
         targetValue = if (isExpanded) 90f else 0f,
@@ -293,7 +307,7 @@ fun ThinkingProcessLayout(
             
             Text(
                 text = if (isStillThinking) {
-                    "Thinking..."
+                    "Thinking for ${elapsedSec}s…"
                 } else {
                     "Thought for ${durationSeconds}s"
                 },

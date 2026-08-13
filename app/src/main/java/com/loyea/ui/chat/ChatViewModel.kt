@@ -750,12 +750,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun updateSessionTitleIfNeeded(sessionId: String, currentMessages: List<Message>) {
         val currentSession = sessions.value.find { it.id == sessionId } ?: return
-        if (!isDefaultSessionTitle(currentSession.title)) return
+        // 已被 AI 总结过，不再自动覆盖
+        if (currentSession.isTitleSummarized == true) return
+        // 已有明确文字标题则跳过；语音/图片等占位标题可被后续文字消息升级
+        if (!isDefaultSessionTitle(currentSession.title) && !isFallbackPlaceholderTitle(currentSession.title)) return
         val firstUserMsg = currentMessages.firstOrNull { it.sender == Sender.USER } ?: return
         val cleanTitle = buildFallbackTitle(firstUserMsg)
         if (cleanTitle.isBlank()) return
+        // 兜底标题立即生效，但不置位 isTitleSummarized，保留 AI 精修资格
         applySessionTitle(sessionId, cleanTitle)
     }
+
+    /** 语音/图片等无文字首条消息生成的占位标题（可被文字消息或 AI 总结升级） */
+    private fun isFallbackPlaceholderTitle(title: String): Boolean =
+        title == "语音消息" || title == "图片消息" || title == "Voice Message" || title == "Image Message"
 
     /** 首条用户消息 → 兜底标题（立即生效、零成本；语音/图片首条消息不再出现空标题） */
     private fun buildFallbackTitle(firstUserMsg: Message): String {
@@ -778,13 +786,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         title == "新会话" || title == "New Chat" ||
             title.startsWith("欢迎会话") || title.startsWith("Welcome Chat")
 
-    private fun applySessionTitle(sessionId: String, newTitle: String) {
+    private fun applySessionTitle(sessionId: String, newTitle: String, isSummarized: Boolean? = null) {
         viewModelScope.launch(Dispatchers.IO) {
             var updatedList: List<ChatSession> = emptyList()
             storageManager.updateSessionList { diskSessions ->
                 val updated = diskSessions.map {
                     if (it.id == sessionId) {
-                        it.copy(title = newTitle, lastActiveTime = System.currentTimeMillis())
+                        it.copy(
+                            title = newTitle,
+                            lastActiveTime = System.currentTimeMillis(),
+                            // isSummarized 为空时保留原值；AI 总结成功后置 true 防止再次覆盖
+                            isTitleSummarized = isSummarized ?: it.isTitleSummarized
+                        )
                     } else {
                         it
                     }
@@ -799,12 +812,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 第一条 AI 回复完成后，用 LLM 为会话精修一次标题（4-12 字）。
+     * 第一条 AI 回复完成后，用 LLM 为会话精修一次标题。
+     * 用户明确要求了标题（如「标题叫XX」「命名为XX」）则采纳；否则默认总结 4-12 字精炼标题。
      * 仅执行一次且静默失败：异常/超时直接放弃，兜底标题已由 updateSessionTitleIfNeeded 提供。
      */
     private fun maybeGenerateSmartTitle(sessionId: String, history: List<Message>) {
         val currentSession = sessions.value.find { it.id == sessionId } ?: return
-        if (!isDefaultSessionTitle(currentSession.title)) return // 已被重命名过则跳过
+        if (currentSession.isTitleSummarized == true) return // 已被 AI 总结过则跳过
         if (!titleGenerationInFlight.add(sessionId)) return      // 同一会话只允许一次
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -812,8 +826,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     ?.take(120)?.trim().orEmpty()
                 val firstAiText = history.firstOrNull { it.sender == Sender.AI }?.content
                     ?.take(120)?.trim().orEmpty()
-                if (firstUserText.isBlank()) return@launch
-                val prompt = "根据这段对话的开头，生成一个 4-12 个字的精炼中文会话标题，只输出标题本身，不要引号、标点或任何解释。\n用户：$firstUserText\nAI：${firstAiText.ifBlank { "（暂无）" }}"
+                // 纯语音/图片首条（无文字）时，退化为根据 AI 回复总结
+                if (firstUserText.isBlank() && firstAiText.isBlank()) return@launch
+                val prompt = buildSmartTitlePrompt(firstUserText, firstAiText)
                 val titleBuilder = StringBuilder()
                 kotlinx.coroutines.withTimeoutOrNull(15_000) {
                     llmClient.sendChatCompletionStream(
@@ -831,8 +846,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 if (title.length >= 2 && !title.contains("\n") && !title.contains("标题")) {
                     withContext(Dispatchers.Main) {
                         val fresh = sessions.value.find { it.id == sessionId }
-                        if (fresh != null && isDefaultSessionTitle(fresh.title)) {
-                            applySessionTitle(sessionId, title)
+                        if (fresh != null && fresh.isTitleSummarized != true) {
+                            applySessionTitle(sessionId, title, isSummarized = true)
                         }
                     }
                 }
@@ -840,6 +855,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 // 静默降级：标题保持兜底值
             }
         }
+    }
+
+    /** 组装标题生成 Prompt：用户明确指定名称则采纳，否则默认自动总结 */
+    private fun buildSmartTitlePrompt(firstUserText: String, firstAiText: String): String {
+        val userPart = if (firstUserText.isNotBlank()) "用户：$firstUserText\n" else ""
+        val aiPart = "AI：${firstAiText.ifBlank { "（暂无）" }}"
+        return (
+            "根据这段对话的开头生成会话标题：如果用户明确要求了标题（如「标题叫XX」「命名为XX」「帮我起个名字」），" +
+                "则严格采用用户指定的名称；否则自动总结一个 4-12 个字的精炼中文标题。只输出标题本身，不要引号、标点或任何解释。\n" +
+                userPart + aiPart
+            )
     }
 
     private fun startAiResponseStream(
@@ -880,6 +906,35 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             var accumulatedContent = ""
             var accumulatedThoughts = ""
             var calculatedDuration: Int? = null
+
+            // —— Agent 式多轮分段构建（仅新消息）——
+            // segments：已提交的文本段 + 工具段；segmentCut：accumulatedContent 中当前文本段的起点。
+            // 工具段在工具执行期间显式写入（此时无 Content 事件），文本段在 ToolCalls/收尾时提交。
+            val segments = mutableListOf<MessageContentSegment>()
+            var segmentCut = 0
+
+            fun tailText(): String {
+                // 镜像 Content 事件的半截 [haptic: 过滤，再收敛换行、去段首残留（思考块剥离）空行
+                return cleanSegmentText(truncateIncompleteHaptic(accumulatedContent.substring(segmentCut)))
+            }
+
+            fun commitCurrentTextSegment() {
+                val t = tailText()
+                if (t.isNotBlank()) {
+                    segments.add(MessageContentSegment("text", text = t))
+                }
+                segmentCut = accumulatedContent.length
+            }
+
+            fun currentSegments(): List<MessageContentSegment> {
+                if (accumulatedContent.length <= segmentCut) return segments.toList()
+                val t = tailText()
+                return if (t.isNotBlank()) {
+                    segments + MessageContentSegment("text", text = t)
+                } else {
+                    segments.toList()
+                }
+            }
 
             // 获取 API 配置和 MCP 工具列表
             var apiConfig = activeApiConfig.value
@@ -1054,18 +1109,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                                 
                                 // 临时对准备渲染展示的内容进行半截过滤，不影响 accumulatedContent 的流拼接
-                                var displayContent = accumulatedContent
-                                try {
-                                    val lastOpen = displayContent.lastIndexOf('[')
-                                    if (lastOpen != -1 && lastOpen > displayContent.lastIndexOf(']')) {
-                                        val tail = displayContent.substring(lastOpen)
-                                        if ("[haptic:".startsWith(tail) || tail.startsWith("[haptic:")) {
-                                            displayContent = displayContent.substring(0, lastOpen)
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    // ignore
-                                }
+                                val displayContent = truncateIncompleteHaptic(accumulatedContent)
 
                                 if (calculatedDuration == null) {
                                     val duration = ((System.currentTimeMillis() - startTime) / 1000).toInt()
@@ -1074,7 +1118,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 currentList = messages.value.map { msg ->
                                     if (msg.id == aiMessageId) {
                                         msg.copy(
-                                            content = displayContent,
+                                            content = cleanFinalContent(displayContent),
+                                            contentSegments = currentSegments(),
                                             isStillThinking = false,
                                             thoughtDurationSeconds = calculatedDuration ?: 0
                                         )
@@ -1085,6 +1130,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 messages.value = currentList
                             }
                             is StreamEvent.ToolCalls -> {
+                                // 本轮回文本段到此收拢（此后进入工具执行阶段，文本段在分段序列中定格）
+                                commitCurrentTextSegment()
                                 streamToolCalls = event.calls
                             }
                             is StreamEvent.Error -> {
@@ -1112,6 +1159,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                     messages.value = currentList
                                     accumulatedContent = ""
                                     accumulatedThoughts = ""
+                                    segments.clear()
+                                    segmentCut = 0
                                 } else {
                                     // 流中断/出错时保留已生成的半截内容（附错误提示），不整体覆盖丢失，并落盘保存
                                     val partialContent = accumulatedContent.trim()
@@ -1120,10 +1169,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                     } else {
                                         event.message
                                     }
+                                    // 错误文本与分段序列不一致：清空分段，整条退回旧渲染路径
+                                    segments.clear()
+                                    segmentCut = accumulatedContent.length
                                     currentList = messages.value.map { msg ->
                                         if (msg.id == aiMessageId) {
                                             msg.copy(
                                                 content = errorDisplay,
+                                                contentSegments = emptyList(),
                                                 isStillThinking = false,
                                                 isError = true
                                             )
@@ -1135,7 +1188,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                             }
                             is StreamEvent.Done -> {
-                                if (calculatedDuration == null) {
+                                // 最终轮（无工具）时重算总耗时，让 "Thought for Xs" 覆盖整个多轮响应
+                                if (calculatedDuration == null || streamToolCalls.isEmpty()) {
                                     val duration = ((System.currentTimeMillis() - startTime) / 1000).toInt()
                                     calculatedDuration = if (accumulatedThoughts.isNotEmpty()) duration else 0
                                 }
@@ -1144,7 +1198,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                     if (msg.id == aiMessageId) {
                                         msg.copy(
                                             isStillThinking = streamToolCalls.isNotEmpty(),
-                                            isThoughtsExpanded = if (msg.hasUserToggledThoughts) msg.isThoughtsExpanded else (streamToolCalls.isEmpty() && (calculatedDuration ?: 0) > 0),
+                                            // 多轮 Agent 式：中间轮有工具继续 → 思考块保持展开；最终轮（无工具）→ 自动折叠
+                                            isThoughtsExpanded = if (msg.hasUserToggledThoughts) msg.isThoughtsExpanded else streamToolCalls.isNotEmpty(),
                                             thoughtDurationSeconds = calculatedDuration ?: 0
                                         )
                                     } else {
@@ -1205,9 +1260,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 input = toolCall.argumentsJson
                             )
                             
-                            // 更新 UI 展示 RUNNING 状态
+                            // 更新 UI 展示 RUNNING 状态（同时把工具卡追加进分段序列，让卡片出现在文本段之间）
+                            segments.add(MessageContentSegment("tool", mcpCallId = displayCallId))
                             currentList = updateAiMessage(currentList, aiMessageId) {
-                                it.copy(mcpCalls = it.mcpCalls + runningCall)
+                                it.copy(
+                                    mcpCalls = it.mcpCalls + runningCall,
+                                    contentSegments = segments.toList()
+                                )
                             }
                             messages.value = currentList
 
@@ -1392,9 +1451,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         if (appLanguage.value == "en") "[System] Tool call limit reached. Please reply directly with the information you already have."
                         else "[系统] 工具调用次数已达上限，请直接根据已有信息组织回复。"
                     }
+                    // 收拢最后一段文本；若模型未产出任何正文，把系统提示语作为末尾文本段，保证分段路径下可见
+                    commitCurrentTextSegment()
+                    if (accumulatedContent.isBlank()) {
+                        segments.add(MessageContentSegment("text", text = finalContent))
+                    }
                     currentList = currentList.map { msg ->
                         if (msg.id == aiMessageId) {
-                            msg.copy(content = finalContent, isStillThinking = false)
+                            msg.copy(
+                                content = cleanFinalContent(finalContent),
+                                contentSegments = segments.toList(),
+                                isStillThinking = false
+                            )
                         } else msg
                     }
                     messages.value = currentList
@@ -1423,6 +1491,30 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 isMcpRunning.value = false
                 currentVoiceEmotion.value = null // 情感分析重置
             }
+        }
+    }
+
+    /** 收敛连续换行：3+ 个 \n 折为 2 个（保留段落分隔），修复思考块剥离残留 + 模型输出导致的连续空行 */
+    private fun collapseReplyNewlines(s: String): String = s.replace(Regex("\\n{2,}"), "\n\n")
+
+    /** 段文本：折叠空行 + 去段首残留空行；保留段尾段落空行，让文本段与工具卡之间留空隙 */
+    private fun cleanSegmentText(s: String): String = collapseReplyNewlines(s).trimStart('\n', '\r')
+
+    /** 最终全文：折叠 + 去首尾（思考块剥离残留 + 结尾空行） */
+    private fun cleanFinalContent(s: String): String = collapseReplyNewlines(s).trim('\n', '\r')
+
+    /** 截掉未闭合的 [haptic: 尾部，避免半截标签进正文（抽取自流式 Content 事件处理） */
+    private fun truncateIncompleteHaptic(s: String): String {
+        return try {
+            val lastOpen = s.lastIndexOf('[')
+            if (lastOpen != -1 && lastOpen > s.lastIndexOf(']')) {
+                val tail = s.substring(lastOpen)
+                if ("[haptic:".startsWith(tail) || tail.startsWith("[haptic:")) {
+                    s.substring(0, lastOpen)
+                } else s
+            } else s
+        } catch (e: Exception) {
+            s
         }
     }
 
@@ -2013,6 +2105,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 if (idx == index) {
                     msg.copy(
                         content = newContent,
+                        // 编辑后分段序列失效，退回旧路径整段渲染
+                        contentSegments = emptyList(),
                         timestamp = System.currentTimeMillis()
                     )
                 } else {

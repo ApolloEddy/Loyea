@@ -100,6 +100,9 @@ class ChatStorageManager(private val context: Context) {
                 if (cleaned.versions == null) {
                     cleaned = cleaned.copy(versions = emptyList())
                 }
+                if (cleaned.contentSegments == null) {
+                    cleaned = cleaned.copy(contentSegments = emptyList())
+                }
                 cleaned
             } ?: emptyList()
         } catch (e: Exception) {
