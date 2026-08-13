@@ -766,6 +766,116 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
 
+    /**
+     * 重新生成最后一条 AI 回复：旧回复快照作为历史版本保留（versions），重新发起一轮流式回复。
+     * 失败/中断时由 applyRegenerateVersions 恢复旧回复，保证用户不丢失已有答案。
+     */
+    fun regenerateLastReply() {
+        if (responseJob?.isActive == true) {
+            android.widget.Toast.makeText(context, "AI 正在回复中，请稍候或点击停止", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        val current = messages.value
+        val lastAiIndex = current.indexOfLast { it.sender == Sender.AI }
+        if (lastAiIndex < 0) return
+        val lastAi = current[lastAiIndex]
+        // 流式占位气泡（空内容 / 仍在思考）不允许重新生成
+        if (lastAi.isStillThinking || (lastAi.content.isBlank() && lastAi.contentSegments.isEmpty())) return
+
+        val history = current.subList(0, lastAiIndex)
+        val sessionId = currentSessionId.value
+        val activeCard = activeCharacterCard.value
+        isThinking.value = true
+        // 先移除旧回复气泡，流式会重建占位；旧消息交给 startAiResponseStream 的 regenerateOf 归并
+        messages.value = history
+        startAiResponseStream(sessionId, history, activeCard, regenerateOf = lastAi)
+    }
+
+    /**
+     * 翻页切换 AI 回复版本（versions 列表 + activeVersionIndex）。
+     * 切到目标版本后把该版本内容镜像回顶层字段，由旧渲染路径展示。
+     */
+    fun switchMessageVersion(messageId: String, delta: Int) {
+        val sessionId = currentSessionId.value
+        if (sessionId.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            var updatedMsgs = emptyList<Message>()
+            storageManager.updateSessionMessages(sessionId) { diskMsgs ->
+                val updated = diskMsgs.map { msg ->
+                    if (msg.id == messageId && msg.versions.isNotEmpty()) {
+                        val n = msg.versions.size
+                        val newIdx = ((msg.activeVersionIndex + delta) % n + n) % n
+                        val v = msg.versions[newIdx]
+                        msg.copy(
+                            activeVersionIndex = newIdx,
+                            content = v.content,
+                            thoughts = v.thoughts,
+                            mcpCalls = v.mcpCalls,
+                            audioUrl = v.audioUrl,
+                            audioDuration = v.audioDuration,
+                            contentSegments = emptyList(), // 版本内容走旧渲染路径
+                            isError = false,
+                            isStillThinking = false
+                        )
+                    } else msg
+                }
+                updatedMsgs = updated
+                updated
+            }
+            withContext(Dispatchers.Main) {
+                messages.value = updatedMsgs
+            }
+        }
+    }
+
+    /**
+     * 重新生成完成后的版本归并：
+     * - 新回复成功：旧回复 + 新回复作为两个历史版本并入 versions，activeVersionIndex 指向新回复
+     * - 新回复失败 / 被中断 / 内容仍为空：恢复旧回复气泡
+     */
+    private fun applyRegenerateVersions(oldMessage: Message, newMessageId: String) {
+        val sessionId = currentSessionId.value
+        if (sessionId.isBlank()) return
+        val currentList = messages.value
+        val newIdx = currentList.indexOfFirst { it.id == newMessageId }
+        if (newIdx < 0) return
+        val newMsg = currentList[newIdx]
+
+        // 失败 / 中断 / 内容仍为空 → 恢复旧回复，避免用户丢失已有答案
+        if (newMsg.isError || newMsg.isStillThinking || newMsg.content.isBlank()) {
+            val restored = currentList.mapIndexed { i, m -> if (i == newIdx) oldMessage else m }
+            if (currentSessionId.value == sessionId) {
+                messages.value = restored
+            }
+            saveMessagesAsync(sessionId, restored)
+            return
+        }
+
+        val oldVersion = MessageVersion(
+            content = oldMessage.content,
+            thoughts = oldMessage.thoughts,
+            mcpCalls = oldMessage.mcpCalls,
+            audioUrl = oldMessage.audioUrl,
+            audioDuration = oldMessage.audioDuration
+        )
+        val newVersion = MessageVersion(
+            content = newMsg.content,
+            thoughts = newMsg.thoughts,
+            mcpCalls = newMsg.mcpCalls,
+            audioUrl = newMsg.audioUrl,
+            audioDuration = newMsg.audioDuration
+        )
+        // 已有历史版本 + 本次被替换的旧回复 + 新回复
+        val versions = oldMessage.versions + oldVersion + newVersion
+        val updated = currentList.mapIndexed { i, m ->
+            if (i == newIdx) m.copy(versions = versions, activeVersionIndex = versions.size - 1) else m
+        }
+        if (currentSessionId.value == sessionId) {
+            messages.value = updated
+        }
+        saveMessagesAsync(sessionId, updated)
+    }
+
     private fun updateSessionTitleIfNeeded(sessionId: String, currentMessages: List<Message>) {
         val currentSession = sessions.value.find { it.id == sessionId } ?: return
         // 已被 AI 总结过，不再自动覆盖
@@ -834,9 +944,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      * 用户明确要求了标题（如「标题叫XX」「命名为XX」）则采纳；否则默认总结 4-12 字精炼标题。
      * 仅执行一次且静默失败：异常/超时直接放弃，兜底标题已由 updateSessionTitleIfNeeded 提供。
      */
-    private fun maybeGenerateSmartTitle(sessionId: String, history: List<Message>) {
+    private fun maybeGenerateSmartTitle(sessionId: String, history: List<Message>, force: Boolean = false) {
         val currentSession = sessions.value.find { it.id == sessionId } ?: return
-        if (currentSession.isTitleSummarized == true) return // 已被 AI 总结过则跳过
+        if (!force && currentSession.isTitleSummarized == true) return // 已被 AI 总结过则跳过
         if (!titleGenerationInFlight.add(sessionId)) return      // 同一会话只允许一次
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -864,14 +974,56 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 if (title.length >= 2 && !title.contains("\n") && !title.contains("标题")) {
                     withContext(Dispatchers.Main) {
                         val fresh = sessions.value.find { it.id == sessionId }
-                        if (fresh != null && fresh.isTitleSummarized != true) {
+                        if (fresh != null && (force || fresh.isTitleSummarized != true)) {
                             applySessionTitle(sessionId, title, isSummarized = true)
                         }
                     }
                 }
             } catch (e: Exception) {
                 // 静默降级：标题保持兜底值
+            } finally {
+                titleGenerationInFlight.remove(sessionId)
             }
+        }
+    }
+
+    /**
+     * 手动重命名会话标题：置位 isTitleSummarized 防止后续 AI 自动总结覆盖手动命名
+     */
+    fun renameSession(sessionId: String, newTitle: String) {
+        val trimmed = newTitle.trim()
+        if (trimmed.isBlank() || trimmed.length > 50) return
+        viewModelScope.launch(Dispatchers.IO) {
+            var updatedList: List<ChatSession> = emptyList()
+            storageManager.updateSessionList { diskSessions ->
+                val updated = diskSessions.map {
+                    if (it.id == sessionId) it.copy(title = trimmed, isTitleSummarized = true) else it
+                }
+                updatedList = updated
+                updated
+            }
+            withContext(Dispatchers.Main) {
+                sessions.value = updatedList
+            }
+        }
+    }
+
+    /**
+     * AI 重新生成会话标题（用户手动触发，忽略一次性总结锁，可反复生成）。
+     * 会话未打开时从磁盘加载首条用户/AI 消息作为总结依据。
+     */
+    fun regenerateSessionTitle(sessionId: String) {
+        if (titleGenerationInFlight.contains(sessionId)) {
+            android.widget.Toast.makeText(context, "标题生成中，请稍候", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val history = if (currentSessionId.value == sessionId) {
+                messages.value
+            } else {
+                storageManager.loadSessionMessages(sessionId)
+            }
+            maybeGenerateSmartTitle(sessionId, history, force = true)
         }
     }
 
@@ -889,7 +1041,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private fun startAiResponseStream(
         sessionId: String,
         history: List<Message>,
-        characterCard: CharacterCard
+        characterCard: CharacterCard,
+        regenerateOf: Message? = null
     ) {
         responseJob = viewModelScope.launch {
             isThinking.value = true
@@ -1521,6 +1674,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 messages.value = currentList
             } finally {
+                // 重新生成路径：流结束后统一归并版本（成功合并进 versions / 失败恢复旧回复，避免丢失答案）
+                if (regenerateOf != null) {
+                    applyRegenerateVersions(regenerateOf, aiMessageId)
+                }
                 isThinking.value = false
                 isMcpRunning.value = false
                 currentVoiceEmotion.value = null // 情感分析重置

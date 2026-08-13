@@ -9,6 +9,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -256,7 +257,15 @@ fun ChatScreen(
                 // 占位，防止贴顶
                 item { Spacer(modifier = Modifier.height(8.dp)) }
 
-                items(messages, key = { it.id }) { message ->
+                itemsIndexed(messages, key = { _, m -> m.id }) { index, message ->
+                    // 时间间隔分隔：与上一条消息间隔超过阈值时，居中显示当前时间（参考 ChatGPT/豆包）
+                    if (index > 0) {
+                        val prev = messages[index - 1]
+                        val gap = message.timestamp - prev.timestamp
+                        if (gap >= TIME_GAP_DIVIDER_MS) {
+                            TimeGapDivider(timestamp = message.timestamp, appLanguage = appLanguage)
+                        }
+                    }
                     MessageItem(
                         message = message,
                         userBubbleColor = userBubbleColor,
@@ -312,7 +321,9 @@ fun ChatScreen(
                                     Toast.makeText(context, "语音文件已丢失，无法转写", Toast.LENGTH_SHORT).show()
                                 }
                             }
-                        }
+                        },
+                        onRegenerate = { viewModel?.regenerateLastReply() },
+                        onSwitchVersion = { delta -> viewModel?.switchMessageVersion(message.id, delta) }
                     )
                 }
 
@@ -991,7 +1002,9 @@ fun MessageItem(
     onSpeak: () -> Unit,
     onMcpVoicePlay: (String) -> Unit,
     onImageClick: (String) -> Unit,
-    onTranscribe: (Message) -> Unit
+    onTranscribe: (Message) -> Unit,
+    onRegenerate: () -> Unit = {},
+    onSwitchVersion: (Int) -> Unit = {}
 ) {
     val isUser = message.sender == Sender.USER
 
@@ -1613,93 +1626,100 @@ fun MessageItem(
                 
                 Spacer(modifier = Modifier.height(8.dp))
                 
-                // AI 动作条
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(start = 2.dp)
-                ) {
-                    val iconColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
-                    
-                    IconButton(onClick = onCopy, modifier = Modifier.size(28.dp)) {
-                        Icon(
-                            imageVector = Icons.Default.ContentCopy,
-                            contentDescription = "Copy",
-                            tint = iconColor,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                    
-                    // Speak 朗读按钮，带正在播放时的实时三柱均衡器动画，以及正在合成中的 Loading 状态
-                    val isSynthesizing = message.isAudioSynthesizing
-                    IconButton(
-                        onClick = { if (!isSynthesizing) onSpeak() }, 
-                        modifier = Modifier.size(28.dp),
-                        enabled = !isSynthesizing
+                // AI 动作条：流式回复未完成（isStillThinking）时不显示按钮与时间，等回复完全结束后再展示
+                if (!message.isStillThinking) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(start = 2.dp)
                     ) {
-                        if (isSynthesizing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(14.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        } else if (message.isAudioPlaying) {
-                            Row(
-                                modifier = Modifier.height(12.dp),
-                                horizontalArrangement = Arrangement.spacedBy(1.5.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                for (j in 0 until 3) {
-                                    val infiniteTransition = rememberInfiniteTransition(label = "audioPlayingAi_${message.id}_$j")
-                                    val heightPercent by infiniteTransition.animateFloat(
-                                        initialValue = 0.2f,
-                                        targetValue = 1.0f,
-                                        animationSpec = infiniteRepeatable(
-                                            animation = tween(400 + j * 120, easing = LinearEasing),
-                                            repeatMode = RepeatMode.Reverse
-                                        ),
-                                        label = "AudioHeightAi_${message.id}_$j"
-                                    )
-                                    Box(
-                                        modifier = Modifier
-                                            .width(2.dp)
-                                            .fillMaxHeight(heightPercent)
-                                            .clip(CircleShape)
-                                            .background(MaterialTheme.colorScheme.primary)
-                                    )
-                                }
-                            }
-                        } else {
+                        val iconColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+
+                        IconButton(onClick = onCopy, modifier = Modifier.size(28.dp)) {
                             Icon(
-                                imageVector = Icons.AutoMirrored.Filled.VolumeUp,
-                                contentDescription = "Speak",
+                                imageVector = Icons.Default.ContentCopy,
+                                contentDescription = "Copy",
                                 tint = iconColor,
                                 modifier = Modifier.size(16.dp)
                             )
                         }
-                    }
-                    IconButton(onClick = { /* TODO: Regenerate */ }, modifier = Modifier.size(28.dp)) {
-                        Icon(
-                            imageVector = Icons.Default.Autorenew,
-                            contentDescription = "Regenerate",
-                            tint = iconColor,
-                            modifier = Modifier.size(16.dp)
+
+                        // Speak 朗读按钮，带正在播放时的实时三柱均衡器动画，以及正在合成中的 Loading 状态
+                        val isSynthesizing = message.isAudioSynthesizing
+                        IconButton(
+                            onClick = { if (!isSynthesizing) onSpeak() },
+                            modifier = Modifier.size(28.dp),
+                            enabled = !isSynthesizing
+                        ) {
+                            if (isSynthesizing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            } else if (message.isAudioPlaying) {
+                                Row(
+                                    modifier = Modifier.height(12.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(1.5.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    for (j in 0 until 3) {
+                                        val infiniteTransition = rememberInfiniteTransition(label = "audioPlayingAi_${message.id}_$j")
+                                        val heightPercent by infiniteTransition.animateFloat(
+                                            initialValue = 0.2f,
+                                            targetValue = 1.0f,
+                                            animationSpec = infiniteRepeatable(
+                                                animation = tween(400 + j * 120, easing = LinearEasing),
+                                                repeatMode = RepeatMode.Reverse
+                                            ),
+                                            label = "AudioHeightAi_${message.id}_$j"
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .width(2.dp)
+                                                .fillMaxHeight(heightPercent)
+                                                .clip(CircleShape)
+                                                .background(MaterialTheme.colorScheme.primary)
+                                        )
+                                    }
+                                }
+                            } else {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                                    contentDescription = "Speak",
+                                    tint = iconColor,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+
+                        // 多版本回复翻页器：仅在有历史版本时显示 < N/M >
+                        if (message.versions.size > 1) {
+                            MessageVersionPager(
+                                currentIndex = message.activeVersionIndex,
+                                total = message.versions.size,
+                                iconColor = iconColor,
+                                onPrev = { onSwitchVersion(-1) },
+                                onNext = { onSwitchVersion(1) }
+                            )
+                        }
+
+                        // Regenerate 重新生成按钮
+                        IconButton(onClick = onRegenerate, modifier = Modifier.size(28.dp)) {
+                            Icon(
+                                imageVector = Icons.Default.Autorenew,
+                                contentDescription = "Regenerate",
+                                tint = iconColor,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = formatTime(message.timestamp),
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f)
                         )
                     }
-                    IconButton(onClick = { /* TODO: Good */ }, modifier = Modifier.size(28.dp)) {
-                        Icon(
-                            imageVector = Icons.Default.ThumbUp,
-                            contentDescription = "Up",
-                            tint = iconColor,
-                            modifier = Modifier.size(15.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = formatTime(message.timestamp),
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f)
-                    )
                 }
             }
         }
@@ -2387,6 +2407,89 @@ private fun cleanVoiceText(inputJson: String?): String {
 private fun formatTime(timestamp: Long): String {
     val sdf = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
     return sdf.format(java.util.Date(timestamp))
+}
+
+// 消息时间间隔分隔阈值：与上一条消息间隔超过该时长时，居中显示当前时间（参考 ChatGPT/豆包）
+private const val TIME_GAP_DIVIDER_MS = 30L * 60 * 1000 // 30 分钟
+
+/** 多版本回复翻页器 `< N/M >`：点击两侧箭头切换 AI 回复版本 */
+@Composable
+private fun MessageVersionPager(
+    currentIndex: Int,
+    total: Int,
+    iconColor: Color,
+    onPrev: () -> Unit,
+    onNext: () -> Unit
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.05f))
+            .padding(horizontal = 2.dp)
+    ) {
+        IconButton(onClick = onPrev, modifier = Modifier.size(22.dp)) {
+            Icon(
+                imageVector = Icons.Default.KeyboardArrowLeft,
+                contentDescription = "Previous version",
+                tint = iconColor,
+                modifier = Modifier.size(14.dp)
+            )
+        }
+        Text(
+            text = "${currentIndex + 1}/$total",
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f),
+            style = MaterialTheme.typography.bodySmall
+        )
+        IconButton(onClick = onNext, modifier = Modifier.size(22.dp)) {
+            Icon(
+                imageVector = Icons.Default.KeyboardArrowRight,
+                contentDescription = "Next version",
+                tint = iconColor,
+                modifier = Modifier.size(14.dp)
+            )
+        }
+    }
+}
+
+/** 时间间隔分隔条：居中显示消息所在时刻（当天仅时间，跨天带日期） */
+@Composable
+private fun TimeGapDivider(timestamp: Long, appLanguage: String) {
+    val label = remember(timestamp, appLanguage) { formatTimeGapLabel(timestamp, appLanguage) }
+    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Text(
+            text = label,
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f),
+            modifier = Modifier.padding(vertical = 2.dp)
+        )
+    }
+}
+
+private fun formatTimeGapLabel(timestamp: Long, appLanguage: String): String {
+    val cal = java.util.Calendar.getInstance()
+    cal.timeInMillis = timestamp
+    val now = java.util.Calendar.getInstance()
+    val today = cal.get(java.util.Calendar.YEAR) == now.get(java.util.Calendar.YEAR) &&
+        cal.get(java.util.Calendar.DAY_OF_YEAR) == now.get(java.util.Calendar.DAY_OF_YEAR)
+    val thisYear = cal.get(java.util.Calendar.YEAR) == now.get(java.util.Calendar.YEAR)
+    val hh = cal.get(java.util.Calendar.HOUR_OF_DAY)
+    val mm = cal.get(java.util.Calendar.MINUTE)
+    val month = cal.get(java.util.Calendar.MONTH) + 1
+    val day = cal.get(java.util.Calendar.DAY_OF_MONTH)
+    val year = cal.get(java.util.Calendar.YEAR)
+    return when {
+        today -> String.format(java.util.Locale.getDefault(), "%02d:%02d", hh, mm)
+        thisYear -> if (appLanguage == "en")
+            String.format(java.util.Locale.getDefault(), "%d/%d %02d:%02d", month, day, hh, mm)
+        else
+            String.format(java.util.Locale.getDefault(), "%d月%d日 %02d:%02d", month, day, hh, mm)
+        else -> if (appLanguage == "en")
+            String.format(java.util.Locale.getDefault(), "%d/%d/%d %02d:%02d", year, month, day, hh, mm)
+        else
+            String.format(java.util.Locale.getDefault(), "%d年%d月%d日 %02d:%02d", year, month, day, hh, mm)
+    }
 }
 
 @Composable

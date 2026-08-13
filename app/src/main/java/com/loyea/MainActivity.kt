@@ -197,6 +197,8 @@ class MainActivity : ComponentActivity() {
                                 onUpdateCoreMemories = { sid, memories -> chatViewModel.updateCoreMemories(sid, memories) },
                                 onTriggerManualMemorySummary = { chatViewModel.triggerManualMemorySummary() },
                                 onEditMessage = { id, text -> chatViewModel.editMessage(id, text) },
+                                onRenameSession = { sid, title -> chatViewModel.renameSession(sid, title) },
+                                onRegenerateSessionTitle = { sid -> chatViewModel.regenerateSessionTitle(sid) },
                                 getDraft = { chatViewModel.getDraft(it) },
                                 saveDraft = { id, text -> chatViewModel.saveDraft(id, text) },
                                 clearDraft = { chatViewModel.clearDraft(it) },

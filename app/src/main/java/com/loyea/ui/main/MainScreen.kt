@@ -71,6 +71,8 @@ fun MainScreen(
     onUpdateCoreMemories: (String, List<String>) -> Unit = { _, _ -> },
     onTriggerManualMemorySummary: () -> Unit = {},
     onEditMessage: (String, String) -> Unit = { _, _ -> },
+    onRenameSession: (String, String) -> Unit = { _, _ -> },
+    onRegenerateSessionTitle: (String) -> Unit = {},
     viewModel: com.loyea.ui.chat.ChatViewModel? = null,
     modifier: Modifier = Modifier
 ) {
@@ -112,6 +114,8 @@ fun MainScreen(
                             onUserNameSave = onUserNameChange,
                             onUpdateCoreMemories = onUpdateCoreMemories,
                             onTriggerManualMemorySummary = onTriggerManualMemorySummary,
+                            onRenameSession = onRenameSession,
+                            onRegenerateSessionTitle = onRegenerateSessionTitle,
                             onCloseDrawer = { isSidebarExpanded = false }
                         )
                     }
@@ -179,7 +183,9 @@ fun MainScreen(
                             onToggleSystemTime = onToggleSystemTime,
                             onUserNameSave = onUserNameChange,
                             onUpdateCoreMemories = onUpdateCoreMemories,
-                            onTriggerManualMemorySummary = onTriggerManualMemorySummary
+                            onTriggerManualMemorySummary = onTriggerManualMemorySummary,
+                            onRenameSession = onRenameSession,
+                            onRegenerateSessionTitle = onRegenerateSessionTitle
                         )
                     }
                 }
@@ -254,6 +260,8 @@ fun SidebarContent(
     onUserNameSave: (String) -> Unit,
     onUpdateCoreMemories: (String, List<String>) -> Unit = { _, _ -> },
     onTriggerManualMemorySummary: () -> Unit = {},
+    onRenameSession: (String, String) -> Unit = { _, _ -> },
+    onRegenerateSessionTitle: (String) -> Unit = {},
     onCloseDrawer: () -> Unit = {}
 ) {
     val isEn = appLanguage == "en"
@@ -261,6 +269,9 @@ fun SidebarContent(
     var activeMemorySessionId by remember { mutableStateOf<String?>(null) }
     var showEditNameDialog by remember { mutableStateOf(false) }
     var tempName by remember { mutableStateOf("") }
+    // 会话重命名对话框状态：sessionToRename 非空时弹出
+    var sessionToRename by remember { mutableStateOf<String?>(null) }
+    var renameText by remember { mutableStateOf("") }
     val historyGroups = remember(sessions, appLanguage) {
         val todayList = mutableListOf<ChatSession>()
         val yesterdayList = mutableListOf<ChatSession>()
@@ -564,6 +575,23 @@ fun SidebarContent(
                                 }
                             )
                             DropdownMenuItem(
+                                text = { Text(if (isEn) "Rename session" else "重命名会话", fontSize = 13.sp) },
+                                leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                                onClick = {
+                                    menuExpanded = false
+                                    sessionToRename = session.id
+                                    renameText = session.title
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (isEn) "AI regenerate title" else "AI 重新生成标题", fontSize = 13.sp) },
+                                leadingIcon = { Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onRegenerateSessionTitle(session.id)
+                                }
+                            )
+                            DropdownMenuItem(
                                 text = { Text("删除会话", color = MaterialTheme.colorScheme.error, fontSize = 13.sp) },
                                 leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp)) },
                                 onClick = {
@@ -685,6 +713,51 @@ fun SidebarContent(
             },
             dismissButton = {
                 TextButton(onClick = { sessionToDelete = null }) {
+                    Text(
+                        text = if (isEn) "Cancel" else "取消",
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                }
+            },
+            shape = RoundedCornerShape(16.dp),
+            containerColor = MaterialTheme.colorScheme.surface
+        )
+    }
+
+    // 会话重命名弹窗
+    if (sessionToRename != null) {
+        val targetSessionId = sessionToRename!!
+        AlertDialog(
+            onDismissRequest = { sessionToRename = null },
+            title = {
+                Text(
+                    text = if (isEn) "Rename session" else "重命名会话",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp
+                )
+            },
+            text = {
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it.take(50) },
+                    label = { Text(if (isEn) "Title" else "标题") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onRenameSession(targetSessionId, renameText)
+                        sessionToRename = null
+                    },
+                    enabled = renameText.trim().isNotBlank()
+                ) {
+                    Text(text = if (isEn) "Save" else "保存")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { sessionToRename = null }) {
                     Text(
                         text = if (isEn) "Cancel" else "取消",
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
