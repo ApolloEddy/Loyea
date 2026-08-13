@@ -19,3 +19,4 @@ desktop.ini
 # Signing
 *.jks
 *.keystore
+keystore.properties
