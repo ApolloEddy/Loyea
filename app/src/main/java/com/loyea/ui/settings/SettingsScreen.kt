@@ -51,6 +51,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.loyea.ui.theme.LoyeaTheme
 import com.loyea.bluetooth.WatchBluetoothClient
+import com.loyea.health.HealthEcosystem
+import com.loyea.health.HealthMetric
+import com.loyea.health.HealthPairingStatus
+import com.loyea.health.MetricAvailability
 
 enum class ThemeMode {
     LIGHT, DARK, SYSTEM
@@ -223,6 +227,8 @@ fun SettingsScreen(
                         onMockLocationSave = onMockLocationSave,
                         appLanguage = appLanguage,
                         onHealthConnectClick = onHealthConnectClick,
+                        healthPairingStatus = viewModel?.healthPairingStatus?.value,
+                        onRefreshHealthPairing = { viewModel?.refreshHealthPairingStatus() },
                         onBackClick = { subPage = SettingsSubPage.MAIN }
                     )
                 }
@@ -2372,9 +2378,16 @@ fun PhysicalSensorLayout(
     onMockLocationSave: (String) -> Unit,
     appLanguage: String,
     onHealthConnectClick: () -> Unit,
+    healthPairingStatus: HealthPairingStatus?,
+    onRefreshHealthPairing: () -> Unit,
     onBackClick: () -> Unit
 ) {
     val isEn = appLanguage == "en"
+
+    // 进入面板即探测一次健康连接配对状态
+    LaunchedEffect(Unit) {
+        onRefreshHealthPairing()
+    }
 
     Scaffold(
         topBar = {
@@ -2456,6 +2469,15 @@ fun PhysicalSensorLayout(
                     }
                 }
                 
+                if (healthPairingStatus != null) {
+                    PairingStatusCard(
+                        status = healthPairingStatus,
+                        isEn = isEn,
+                        onRefresh = onRefreshHealthPairing,
+                        onHealthConnectClick = onHealthConnectClick
+                    )
+                }
+
                 Text(
                     text = if (isEn) "Tips: Ensure your health app has enabled 'Health Connect' write access." else "提示：请确保您的健康应用（如系统健康、运动应用等）已开启“健康连接”的写入权限与数据同步选项。",
                     fontSize = 10.sp,
@@ -2812,6 +2834,159 @@ fun PhysicalSensorLayout(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PairingStatusCard(
+    status: HealthPairingStatus,
+    isEn: Boolean,
+    onRefresh: () -> Unit,
+    onHealthConnectClick: () -> Unit
+) {
+    val sdkOk = status.hasSdkAvailable
+    val ecoLabel = when (status.ecosystem) {
+        HealthEcosystem.XIAOMI -> if (isEn) "Xiaomi" else "小米运动健康"
+        HealthEcosystem.HUAWEI -> if (isEn) "Huawei" else "华为运动健康"
+        HealthEcosystem.SAMSUNG -> if (isEn) "Samsung" else "三星健康"
+        HealthEcosystem.OPPO -> "OPPO"
+        HealthEcosystem.OTHER -> if (isEn) "Other" else "其他"
+        HealthEcosystem.NONE -> if (isEn) "Not detected" else "未检测到"
+    }
+    val syncText = status.lastSyncTimeMillis?.let { ts ->
+        val diff = System.currentTimeMillis() - ts
+        when {
+            diff < 60_000L -> if (isEn) "just now" else "刚刚"
+            diff < 3_600_000L -> if (isEn) "${diff / 60_000L} min ago" else "${diff / 60_000L} 分钟前"
+            diff < 86_400_000L -> if (isEn) "${diff / 3_600_000L} h ago" else "${diff / 3_600_000L} 小时前"
+            else -> if (isEn) "${diff / 86_400_000L} d ago" else "${diff / 86_400_000L} 天前"
+        }
+    }
+
+    val metricLabels = listOf(
+        HealthMetric.HEART_RATE to (if (isEn) "Heart Rate" else "心率"),
+        HealthMetric.STEPS to (if (isEn) "Steps" else "步数"),
+        HealthMetric.SLEEP to (if (isEn) "Sleep" else "睡眠"),
+        HealthMetric.BLOOD_PRESSURE to (if (isEn) "Blood Pressure" else "血压"),
+        HealthMetric.RESTING_HEART_RATE to (if (isEn) "Resting HR" else "静息心率")
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        // 头部：配对状态 + SDK 级别
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = if (isEn) "PAIRING STATUS" else "配对状态",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+            )
+            status.apiLevelNote?.let {
+                Text(
+                    text = it,
+                    fontSize = 11.sp,
+                    color = if (sdkOk) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                )
+            }
+        }
+
+        // SDK 可用时展示数据来源 / 最近同步 / 各指标可用性
+        if (sdkOk) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(
+                    text = if (isEn) "Data Source" else "数据来源",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                )
+                Text(
+                    text = ecoLabel,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+            }
+            if (status.dataOrigins.isNotEmpty()) {
+                Text(
+                    text = status.dataOrigins.joinToString(", "),
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f)
+                )
+            }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(
+                    text = if (isEn) "Last Sync" else "最近同步",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                )
+                Text(
+                    text = syncText ?: (if (isEn) "Never" else "从未"),
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+            }
+
+            metricLabels.forEach { (metric, label) ->
+                val avail = status.metrics[metric]
+                val (dotColor, availLabel) = when (avail) {
+                    MetricAvailability.GRANTED_WITH_DATA -> Color(0xFF4CAF50) to (if (isEn) "Connected" else "已连接")
+                    MetricAvailability.GRANTED_NO_DATA -> Color(0xFF9E9E9E) to (if (isEn) "No data" else "暂无数据")
+                    MetricAvailability.NO_PERMISSION -> Color(0xFFFF9800) to (if (isEn) "Not granted" else "未授权")
+                    else -> Color(0xFFBDBDBD) to (if (isEn) "Unavailable" else "不可用")
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(dotColor)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(text = label, fontSize = 13.sp, color = MaterialTheme.colorScheme.onBackground)
+                    }
+                    Text(text = availLabel, fontSize = 13.sp, color = dotColor)
+                }
+            }
+        }
+
+        // 引导文案（SDK 不可用时为安装/更新指引）
+        if (status.guidanceText.isNotBlank()) {
+            Text(
+                text = status.guidanceText,
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f)
+            )
+        }
+
+        // 操作：连接/重新授权 + 刷新
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Button(
+                onClick = onHealthConnectClick,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(if (isEn) "Connect / Re-grant" else "连接 / 重新授权", fontSize = 13.sp)
+            }
+            OutlinedButton(
+                onClick = onRefresh,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(if (isEn) "Refresh" else "刷新", fontSize = 13.sp)
             }
         }
     }

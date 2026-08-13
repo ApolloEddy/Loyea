@@ -49,6 +49,10 @@ class MainActivity : ComponentActivity() {
         if (granted.isNotEmpty()) {
             Toast.makeText(this, "健康授权已更新", Toast.LENGTH_SHORT).show()
         }
+        // 授权返回后刷新配对状态，让设置页面板立即反映最新权限
+        if (::chatViewModel.isInitialized) {
+            chatViewModel.refreshHealthPairingStatus()
+        }
     }
 
     private val HEALTH_PERMISSIONS = setOf(

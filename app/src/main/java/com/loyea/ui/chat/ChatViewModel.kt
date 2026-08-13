@@ -16,6 +16,8 @@ import com.loyea.mcp.McpServerStatus
 import com.loyea.mcp.McpConfigStorage
 import com.loyea.mcp.McpManager
 import com.loyea.mcp.McpTool
+import com.loyea.health.HealthConnectCoordinator
+import com.loyea.health.HealthPairingStatus
 import com.loyea.perception.HapticManager
 import com.loyea.perception.PhysicalContextManager
 import kotlinx.coroutines.flow.StateFlow
@@ -54,6 +56,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private val hapticManager = HapticManager(application)
     val perceptionManager = PhysicalContextManager(context)
+
+    private val healthCoordinator = HealthConnectCoordinator(context)
+
+    /** 健康连接配对状态（设置页『健康数据集成』面板用）。 */
+    var healthPairingStatus = mutableStateOf<HealthPairingStatus?>(null)
+        private set
+
+    fun refreshHealthPairingStatus() {
+        viewModelScope.launch(Dispatchers.IO) {
+            healthPairingStatus.value = healthCoordinator.buildPairingStatus()
+        }
+    }
 
     var mcpConfigList = mutableStateOf<List<McpServerConfig>>(emptyList())
         private set
@@ -915,7 +929,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             fun tailText(): String {
                 // 镜像 Content 事件的半截 [haptic: 过滤，再收敛换行、去段首残留（思考块剥离）空行
-                return cleanSegmentText(truncateIncompleteHaptic(accumulatedContent.substring(segmentCut)))
+                // 防御：完整 [haptic:xxx] 跨提交边界被 removeRange 剥离后，accumulatedContent 会短于 segmentCut，
+                // 越界 substring 会抛异常导致整条回复被外层 catch 打成错误气泡，这里 coerce 到当前长度
+                val start = segmentCut.coerceAtMost(accumulatedContent.length)
+                return cleanSegmentText(truncateIncompleteHaptic(accumulatedContent.substring(start)))
             }
 
             fun commitCurrentTextSegment() {
