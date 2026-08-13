@@ -28,9 +28,26 @@ sealed class StreamEvent {
     data class Thoughts(val text: String) : StreamEvent()
     data class Error(val message: String) : StreamEvent()
     data class ToolCalls(val calls: List<LlmToolCall>) : StreamEvent()
-    data class Usage(val promptTokens: Long, val completionTokens: Long, val totalTokens: Long) : StreamEvent()
+    data class Usage(
+        val promptTokens: Long,
+        val completionTokens: Long,
+        val totalTokens: Long,
+        val promptCacheHitTokens: Long = 0,
+        val promptCacheMissTokens: Long = 0
+    ) : StreamEvent()
     object Done : StreamEvent()
 }
+
+/**
+ * 解析出的 usage 计量（OpenAI 兼容；DeepSeek 额外带前缀缓存命中/未命中）。
+ */
+data class LlmUsage(
+    val promptTokens: Long?,
+    val completionTokens: Long?,
+    val totalTokens: Long?,
+    val promptCacheHitTokens: Long? = null,
+    val promptCacheMissTokens: Long? = null
+)
 
 /**
  * 远程 LLM 服务非流式响应实体
@@ -42,7 +59,9 @@ data class LlmResponse(
     val toolCalls: List<LlmToolCall> = emptyList(),
     val promptTokens: Long? = null,
     val completionTokens: Long? = null,
-    val totalTokens: Long? = null
+    val totalTokens: Long? = null,
+    val promptCacheHitTokens: Long? = null,
+    val promptCacheMissTokens: Long? = null
 )
 
 data class LlmToolCall(
@@ -213,7 +232,9 @@ class LlmClient {
                                 emit(StreamEvent.Usage(
                                     promptTokens = usage.get("prompt_tokens")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
                                     completionTokens = usage.get("completion_tokens")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
-                                    totalTokens = usage.get("total_tokens")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
+                                    totalTokens = usage.get("total_tokens")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
+                                    promptCacheHitTokens = usage.get("prompt_cache_hit_tokens")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
+                                    promptCacheMissTokens = usage.get("prompt_cache_miss_tokens")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
                                 ))
                             }
                             val choices = chunkJson.getAsJsonArray("choices")
@@ -486,9 +507,11 @@ class LlmClient {
                 return@withContext LlmResponse(
                     content = finalContent,
                     thoughts = finalThoughts,
-                    promptTokens = usage?.first,
-                    completionTokens = usage?.second,
-                    totalTokens = usage?.third
+                    promptTokens = usage?.promptTokens,
+                    completionTokens = usage?.completionTokens,
+                    totalTokens = usage?.totalTokens,
+                    promptCacheHitTokens = usage?.promptCacheHitTokens,
+                    promptCacheMissTokens = usage?.promptCacheMissTokens
                 )
             }
         } catch (e: Exception) {
@@ -527,7 +550,9 @@ class LlmClient {
             emit(StreamEvent.Usage(
                 promptTokens = response.promptTokens ?: 0L,
                 completionTokens = response.completionTokens ?: 0L,
-                totalTokens = response.totalTokens ?: ((response.promptTokens ?: 0L) + (response.completionTokens ?: 0L))
+                totalTokens = response.totalTokens ?: ((response.promptTokens ?: 0L) + (response.completionTokens ?: 0L)),
+                promptCacheHitTokens = response.promptCacheHitTokens ?: 0L,
+                promptCacheMissTokens = response.promptCacheMissTokens ?: 0L
             ))
         }
         emit(StreamEvent.Done)
@@ -847,9 +872,11 @@ class LlmClient {
                 content = finalContent,
                 thoughts = finalThoughts,
                 toolCalls = combinedToolCalls,
-                promptTokens = usage?.first,
-                completionTokens = usage?.second,
-                totalTokens = usage?.third
+                promptTokens = usage?.promptTokens,
+                completionTokens = usage?.completionTokens,
+                totalTokens = usage?.totalTokens,
+                promptCacheHitTokens = usage?.promptCacheHitTokens,
+                promptCacheMissTokens = usage?.promptCacheMissTokens
             )
         } catch (e: Exception) {
             e.printStackTrace()
@@ -861,12 +888,15 @@ class LlmClient {
      * 从非流式响应 JSON 中解析 usage（OpenAI 兼容格式），缺失时返回 null。
      * 供 sendChatCompletion 与 parseChatCompletionResponse 两个解析点共用。
      */
-    private fun parseUsage(responseJson: JsonObject): Triple<Long?, Long?, Long?>? {
+    private fun parseUsage(responseJson: JsonObject): LlmUsage? {
         val usage = responseJson.get("usage")?.takeIf { !it.isJsonNull && it.isJsonObject }?.asJsonObject ?: return null
-        val prompt = usage.get("prompt_tokens")?.takeIf { !it.isJsonNull }?.asLong
-        val completion = usage.get("completion_tokens")?.takeIf { !it.isJsonNull }?.asLong
-        val total = usage.get("total_tokens")?.takeIf { !it.isJsonNull }?.asLong
-        return Triple(prompt, completion, total)
+        return LlmUsage(
+            promptTokens = usage.get("prompt_tokens")?.takeIf { !it.isJsonNull }?.asLong,
+            completionTokens = usage.get("completion_tokens")?.takeIf { !it.isJsonNull }?.asLong,
+            totalTokens = usage.get("total_tokens")?.takeIf { !it.isJsonNull }?.asLong,
+            promptCacheHitTokens = usage.get("prompt_cache_hit_tokens")?.takeIf { !it.isJsonNull }?.asLong,
+            promptCacheMissTokens = usage.get("prompt_cache_miss_tokens")?.takeIf { !it.isJsonNull }?.asLong
+        )
     }
 
     private fun parseToolCalls(toolCallsArray: JsonArray?): List<LlmToolCall> {

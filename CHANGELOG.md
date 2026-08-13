@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.3] - 2026-08-14
+
+### Added (新增)
+- **每会话独立世界书（per-session World Info）**：
+  - 数据模型（[ChatStorageManager.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatStorageManager.kt)）新增 `WorldInfoBook(entries, config)`——一本完整世界书 = 条目 + 匹配配置，按会话单独存取：`sessions/world_info_<sessionId>.json`，复用 `atomicWrite` 原子写；`deleteSession` 连带清理该文件。
+  - 存储路由（[ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt)）：新增 `sessionWorldInfo` 状态（null = 未配置）；`selectSession` 切换会话时重载会话书；`saveWorldInfo`/`saveWorldInfoConfig` 增加 `scope` 参数（`GLOBAL` 默认 = 既有全局路径不变，`SESSION` = 写当前会话书）；`clearSessionWorldInfo()` 删书回退全局；`createSessionWorldInfo()` 以全局书为种子生成本会话独立副本。匹配时 `buildWorldInfoBlock` 经 `resolveWorldInfoBook()` 取当前生效书：会话已配置 → 完全替代全局；未配置 → 回退全局。
+  - 配置 JSON 编解码（[WorldInfoConfig.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/WorldInfoConfig.kt)）：`WorldInfoConfigStorage` 补 `toJson`/`fromJson`（逐字段 null-merge 兜底），供会话书文件内嵌 config；新增 `WorldInfoScope` 枚举。
+  - UI（[WorldInfoSettings.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/settings/WorldInfoSettings.kt)）：`WorldInfoSettingsLayout` 加 `scope` 参数（默认 GLOBAL，设置页既有入口不变）；SESSION 模式顶部横幅区分「正在使用全局世界书（编辑即生成本会话独立副本）」/「本会话使用独立世界书」，提供「创建独立副本」与「恢复全局」（带确认框）；导入/导出/条目编辑/配置修改均按 scope 路由。
+  - 入口（[ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt)）：聊天页顶栏新增 📖 会话世界书按钮（始终显示，不受"已有用户发言"门控），点开即会话级全屏编辑器。
+  - 单测（[ChatStorageManagerTest.kt](file:///D:/CodingProjects/Android/Loyea/app/src/test/java/com/loyea/ui/chat/ChatStorageManagerTest.kt)）：会话书 round-trip（entries + config 全字段）、文件缺失 → null、`deleteSession` 连带删除会话书文件、残缺会话书 JSON 缺 config → 默认、`WorldInfoConfig` toJson/fromJson round-trip + 缺字段兜底。
+
+### Changed (变更)
+- 版本号升级至 v0.5.3（versionCode 9，可覆盖安装 v0.5.2）。
+
+### Fixed (修复)
+- **「AI 重新总结核心事实记忆」秒闪退**（[ChatViewModel.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatViewModel.kt)）：手动总结与后台问候共两处 `OutOfQuotaPolicy.valueOf("RUN_AS_FOREGROUND_SERVICE")`，该枚举常量在 WorkManager 2.9.0 中不存在，字符串转枚举在运行时抛 `IllegalArgumentException`；改为编译期安全的 `OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST`（配额不足时降级为普通请求，不丢任务）。
+- **会话世界书编辑器退不出**（[ChatScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatScreen.kt)）：ChatScreen 此前无 `BackHandler`，系统返回键/手势在编辑器覆盖层上无响应；补 `BackHandler(enabled = showWorldInfoEditor)`，系统返回与顶栏箭头均可关闭编辑器。
+- **Token 用量弹窗遮挡且点外部不关闭**（[TokenUsageWidget.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/TokenUsageWidget.kt)）：按用户偏好移除右上角药丸 + Popup，用量改为模型选择下拉列表**顶部**的用量头（迷你环形图 + 本会话已用 + Prompt/回复 + 缓存命中率 + 上下文窗口条）；仅一个模型配置但本会话有用量时也可展开下拉查看。
+
+## [0.5.2] - 2026-08-14
+
+### Fixed (修复)
+- **设置主页不可滚动回归**（[SettingsScreen.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/settings/SettingsScreen.kt)）：`SettingsMainLayout` 根 Column 加 `verticalScroll`，解锁被挤出屏幕底部的 World Info / 外部工具授权 / 多模态 / 版本彩蛋等全部入口（v0.5.1 新增第 8 个入口后小屏手机够不着底部）。
+- **Token 用量气泡点外部不关闭**（[TokenUsageWidget.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/TokenUsageWidget.kt)）：`PopupProperties` 补 `dismissOnBackPress` + `dismissOnClickOutside`，点气泡外任意位置/返回键自动收起。
+
+### Added (新增)
+- **世界书全字段对齐 SillyTavern v2**：
+  - 数据模型（[ChatStorageManager.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/ChatStorageManager.kt)）`WorldInfoEntry` 补 11 个 ST v2 camelCase 字段：`selectiveLogic/group/probability/useProbability/delayUntilRecursion/preventRecursion/allowRecursion/excludeRecursion/keysContainedIn/position/weight`；`loadWorldInfo`/`updateWorldInfo` 统一走 `selfHealWorldInfo` null-merge（修复 update 路径缺兜底的不一致）。
+  - 匹配引擎重写为纯函数（[WorldInfoMatcher.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/WorldInfoMatcher.kt)）：selective 四种逻辑（AND_ANY/NOT_ALL/NOT_ANY/AND_ALL）、逐条目 depth 窗口、概率触发、递归链（allowRecursion/excludeRecursion/preventRecursion/delayUntilRecursion/recursionDepthCap）、分组邻接、`keysContainedIn` 多源扫描（chat/user/system/world）、排序模式、token 预算裁剪；输出字节稳定，注入集合由「会话 id + 最后一条用户消息」稳定种子决定（DeepSeek 前缀缓存友好）。
+  - 全局配置（[WorldInfoConfig.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/WorldInfoConfig.kt)）：扫描深度 / 注入位置 / 排序模式（5 种）/ token 预算 / 递归上限 / 递归总开关 / 分组头输出，世界书设置页 TopAppBar 齿轮进入配置对话框。
+  - 编辑器（[WorldInfoSettings.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/settings/WorldInfoSettings.kt)）长表单滚动化，暴露全部字段（次关键词/选择性/分组/概率/深度/递归三开关/延迟轮次/keysContainedIn 多源 chip/weight/position）；卡片 meta 行追加 group/p%/depth/src 摘要；导入导出 round-trip 补全全部 camelCase 字段。
+- **DeepSeek 前缀缓存命中展示**（[LlmClient.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/LlmClient.kt)、[TokenUsageWidget.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/TokenUsageWidget.kt)）：解析 `prompt_cache_hit_tokens`/`prompt_cache_miss_tokens`（流式 + 非流式），落库 `ChatSession` 累计，Token 气泡新增「缓存命中 xx.x%  (hit / hit+miss)」行。不加任何请求参数——DeepSeek 前缀缓存是自动的。
+- **世界书注入位置可选 top**（[PromptAssembler.kt](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/ui/chat/PromptAssembler.kt)）：`worldInfoPosition` 参数，`"top"` 注入到联网块之后、角色名之前（ST 语义）；默认 `"bottom"` 保持 Prompt 静态前缀字节稳定以命中前缀缓存（UI 已注明 top 的缓存代价）。
+- **单测**（[WorldInfoMatcherTest.kt](file:///D:/CodingProjects/Android/Loyea/app/src/test/java/com/loyea/ui/chat/WorldInfoMatcherTest.kt)）：覆盖常驻/关键词/深度窗口/多源扫描/selective 四逻辑/概率门控/分组邻接/四种排序/预算裁剪/递归链（exclude/delay/prevent/cap/allow）；[ChatStorageManagerTest.kt](file:///D:/CodingProjects/Android/Loyea/app/src/test/java/com/loyea/ui/chat/ChatStorageManagerTest.kt) 补旧 JSON 缺新字段自愈兜底 + `updateSessionTokens` 缓存参数累加。
+
+### Changed (变更)
+- **行为变化（ST 对齐）**：旧条目默认 `depth=4`，聊天关键词扫描窗口从旧 `takeLast(10)` 收窄为 `takeLast(4)`。老 world_info.json（无新字段）正常加载不崩：String 字段缺省兜底，`probability` 退化为 0、`allowRecursion` 退化为 false（= 旧行为：无概率、不参与递归）。
+- 版本号升级至 v0.5.2（versionCode 8，可覆盖安装 v0.5.1）。
+
 ## [0.5.1] - 2026-08-14
 
 ### Added (新增)

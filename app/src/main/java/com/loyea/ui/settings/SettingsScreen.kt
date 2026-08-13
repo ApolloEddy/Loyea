@@ -311,6 +311,7 @@ fun SettingsMainLayout(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .verticalScroll(rememberScrollState())
                 .padding(paddingValues)
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp)
@@ -695,7 +696,7 @@ fun SettingsMainLayout(
             var showAdultConfirm by remember { mutableStateOf(false) }
             val easterEggContext = LocalContext.current
             Text(
-                text = if (adultContentEnabled) "Loyea v0.5.1 *" else "Loyea v0.5.1",
+                text = if (adultContentEnabled) "Loyea v0.5.3 *" else "Loyea v0.5.3",
                 modifier = Modifier
                     .align(Alignment.CenterHorizontally)
                     .clickable {

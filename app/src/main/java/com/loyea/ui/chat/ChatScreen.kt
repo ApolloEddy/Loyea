@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.loyea.ui.theme.LoyeaTheme
 import com.loyea.ui.settings.ApiConfig
+import com.loyea.ui.settings.WorldInfoSettingsLayout
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
@@ -57,7 +58,9 @@ import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.draw.paint
 import androidx.compose.ui.layout.ContentScale
 import com.loyea.ui.chat.PromptAssembler
+import com.loyea.ui.chat.WorldInfoScope
 import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.PickVisualMediaRequest
@@ -115,6 +118,9 @@ fun ChatScreen(
 
     var inputText by remember { mutableStateOf(TextFieldValue("")) }
     var showPersonaSelector by remember { mutableStateOf(false) }
+    var showWorldInfoEditor by remember { mutableStateOf(false) }
+    // 世界书编辑器覆盖层打开时，系统返回键关闭编辑器（顶栏返回箭头在 WorldInfoSettingsLayout 内）
+    BackHandler(enabled = showWorldInfoEditor) { showWorldInfoEditor = false }
     var lastSessionId by remember { mutableStateOf(currentSessionId) }
 
     val selectedImagePath = remember { mutableStateOf<String?>(null) }
@@ -184,7 +190,8 @@ fun ChatScreen(
                         activeCharacterCard = activeCharacterCard,
                         selectedModelName = apiConfig.name,
                         apiConfigList = apiConfigList,
-                        onActiveConfigChange = onActiveConfigChange
+                        onActiveConfigChange = onActiveConfigChange,
+                        session = viewModel?.activeSession?.value
                     )
                 },
                 navigationIcon = {
@@ -217,6 +224,15 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    // 本会话世界书入口（每会话独立配置；未配置回退全局书）
+                    IconButton(onClick = { showWorldInfoEditor = true }) {
+                        Icon(
+                            imageVector = Icons.Default.MenuBook,
+                            contentDescription = if (isEn) "Session World Info" else "会话世界书",
+                            tint = MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
                     val hasUserSpoken = remember(messages) {
                         messages.any { it.sender == Sender.USER }
                     }
@@ -256,16 +272,6 @@ fun ChatScreen(
                     }
                 )
         ) {
-            // 会话级 Token 用量控件（置顶不随滚动；新会话无用量自动隐藏）
-            TokenUsageWidget(
-                session = viewModel?.activeSession?.value,
-                modelName = apiConfig.modelName,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .padding(top = 4.dp)
-            )
-
             // 消息流
             LazyColumn(
                 state = listState,
@@ -699,6 +705,16 @@ fun ChatScreen(
             }
         }
 
+        // 会话世界书全屏编辑器（SESSION scope：编辑本会话独立书，未配置回退全局书）
+        if (showWorldInfoEditor) {
+            WorldInfoSettingsLayout(
+                viewModel = viewModel,
+                appLanguage = appLanguage,
+                onBackClick = { showWorldInfoEditor = false },
+                scope = WorldInfoScope.SESSION
+            )
+        }
+
         if (lightboxImagePath != null) {
             Dialog(
                 onDismissRequest = { lightboxImagePath = null },
@@ -739,12 +755,16 @@ fun ModelSelector(
     activeCharacterCard: CharacterCard,
     selectedModelName: String,
     apiConfigList: List<com.loyea.ui.settings.ApiConfig>,
-    onActiveConfigChange: (String) -> Unit
+    onActiveConfigChange: (String) -> Unit,
+    session: ChatSession? = null // 会话 Token 用量（显示在下拉列表顶部）
 ) {
     var expanded by remember { mutableStateOf(false) }
     val enabledConfigs = remember(apiConfigList) {
         apiConfigList.filter { it.isEnabled }
     }
+    // 仅一个模型配置时，只要本会话有用量也可展开下拉查看用量
+    val hasUsage = (session?.promptTokens ?: 0L) + (session?.completionTokens ?: 0L) > 0L
+    val canOpen = enabledConfigs.size > 1 || hasUsage
 
     val avatarBitmap = rememberAvatarPainter(activeCharacterCard.avatarUri)
 
@@ -756,7 +776,7 @@ fun ModelSelector(
                 .clip(RoundedCornerShape(24.dp))
                 .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f), RoundedCornerShape(24.dp))
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f))
-                .clickable { if (enabledConfigs.size > 1) expanded = true }
+                .clickable { if (canOpen) expanded = true }
                 .padding(horizontal = 14.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center
@@ -820,7 +840,7 @@ fun ModelSelector(
                 )
             }
             
-            if (enabledConfigs.size > 1) {
+            if (canOpen) {
                 Spacer(modifier = Modifier.width(6.dp))
                 Icon(
                     imageVector = Icons.Default.ArrowDropDown,
@@ -831,12 +851,26 @@ fun ModelSelector(
             }
         }
 
-        if (enabledConfigs.size > 1) {
+        if (canOpen) {
             DropdownMenu(
                 expanded = expanded,
                 onDismissRequest = { expanded = false },
-                modifier = Modifier.background(MaterialTheme.colorScheme.surface)
+                modifier = Modifier
+                    .background(MaterialTheme.colorScheme.surface)
+                    .widthIn(min = 220.dp)
             ) {
+                // Token 用量头：下拉列表顶部（原药丸弹窗移入此处）
+                if (hasUsage) {
+                    TokenUsageMenuHeader(
+                        session = session,
+                        modelName = selectedModelName,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 4.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                    )
+                }
                 enabledConfigs.forEach { config ->
                     DropdownMenuItem(
                         text = { Text(config.name, color = MaterialTheme.colorScheme.onBackground) },

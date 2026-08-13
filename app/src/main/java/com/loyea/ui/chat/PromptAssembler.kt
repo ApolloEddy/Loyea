@@ -31,6 +31,7 @@ object PromptAssembler {
         coreMemories: List<String> = emptyList(),
         graphMemory: String? = null,
         worldInfo: String? = null,
+        worldInfoPosition: String = "bottom", // "bottom"=易变尾最末尾（保前缀缓存）；"top"=web-search 之后、角色名之前
         enableHaptic: Boolean = true,
         enableVoice: Boolean = true,
         enableAdultContent: Boolean = false,
@@ -121,6 +122,13 @@ object PromptAssembler {
             sb.append("- `BuiltinPerception__web_search`: query real-time events, facts, or news across the web.\n")
             sb.append("- `BuiltinPerception__read_url`: open a SPECIFIC webpage (official website, docs, news article) and read its full text content. Use it when the user names a specific site/link, or when search snippets are not enough and you need the details on a page. When you only know the topic, first `web_search` to locate the official/authoritative URL, then `read_url` to read that page.\n")
             sb.append("- Decide autonomously: search when you don't know the source; read_url directly when you have (or can find) the exact official URL.\n\n")
+        }
+
+        // 世界书顶部注入（ST "top" 语义）：置于 web-search 之后、角色基础名称之前。
+        // ★ 代价：该点之后的块（角色名/设定/工具规范/输出约束）会随会话内容前移变化，
+        //   打破静态前缀字节稳定 → DeepSeek 自动前缀缓存失效。默认保持 bottom 以保缓存。
+        if (worldInfoPosition == "top") {
+            appendWorldInfoBlock(sb, worldInfo)
         }
 
         // 2. 角色基础名称
@@ -239,18 +247,26 @@ object PromptAssembler {
             }
         }
 
-        // 插入全局世界观（World Info）：跨会话关键词触发记忆，置于最末尾易变段（随会话内容变化）
+        // 插入全局世界观（World Info）：默认置于最末尾易变段（随会话内容变化），
         // 保持前部静态前缀字节级稳定，不影响 DeepSeek 自动前缀缓存
-        if (!worldInfo.isNullOrBlank()) {
-            sb.append("[WORLD INFO / 世界观]\n")
-            sb.append("以下是与当前话题相关的全局世界观设定（跨会话长期存在，可能随时被引用）。当条目与当前对话相关时，请自然地在扮演中体现并遵守：\n")
-            sb.append(worldInfo.trim()).append("\n\n")
+        if (worldInfoPosition != "top") {
+            appendWorldInfoBlock(sb, worldInfo)
         }
 
         val rawPrompt = sb.toString().trimEnd()
 
         // 8. 进行占位符 (Macros) 的渲染替换
         return replaceMacros(rawPrompt, card.name, userName)
+    }
+
+    /**
+     * 追加 [WORLD INFO / 世界观] 注入块（顶部/底部两处复用，保证字节格式一致）
+     */
+    private fun appendWorldInfoBlock(sb: StringBuilder, worldInfo: String?) {
+        if (worldInfo.isNullOrBlank()) return
+        sb.append("[WORLD INFO / 世界观]\n")
+        sb.append("以下是与当前话题相关的全局世界观设定（跨会话长期存在，可能随时被引用）。当条目与当前对话相关时，请自然地在扮演中体现并遵守：\n")
+        sb.append(worldInfo.trim()).append("\n\n")
     }
 
     /**

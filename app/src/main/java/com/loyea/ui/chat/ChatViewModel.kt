@@ -127,6 +127,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     var worldInfoEntries = mutableStateOf<List<WorldInfoEntry>>(emptyList())
         private set
 
+    // 8.2 全局世界观匹配配置（跨会话，存 SharedPreferences）
+    var worldInfoConfig = mutableStateOf(WorldInfoConfig())
+        private set
+
+    // 8.3 当前会话专属世界书（null = 未配置，回退到全局书）
+    var sessionWorldInfo = mutableStateOf<WorldInfoBook?>(null)
+        private set
+
     val activeCharacterCard = derivedStateOf {
         val currentSession = sessions.value.find { it.id == currentSessionId.value }
         val charId = currentSession?.characterId ?: "char_loyea_default"
@@ -430,6 +438,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             withContext(Dispatchers.Main) {
                 worldInfoEntries.value = worldInfo
             }
+            val worldInfoCfg = WorldInfoConfigStorage.load(prefs)
+            withContext(Dispatchers.Main) {
+                worldInfoConfig.value = worldInfoCfg
+            }
             val watchConn = perceptionManager.watchProvider.isWatchConnected()
             val watchMov = perceptionManager.watchProvider.getMovementState() == "Moving"
             val useRealLoc = perceptionManager.locationProvider.isUsingRealLocation()
@@ -549,8 +561,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         prefs.edit().putString("current_session_id", sessionId).apply()
         viewModelScope.launch(Dispatchers.IO) {
             val msgs = storageManager.loadSessionMessages(sessionId)
+            // 会话专属世界书随会话切换重载（null = 未配置，回退全局书）
+            val sessionBook = storageManager.loadSessionWorldInfo(sessionId)
             withContext(Dispatchers.Main) {
                 messages.value = msgs
+                sessionWorldInfo.value = sessionBook
             }
         }
     }
@@ -1108,6 +1123,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             var accumulatedPromptTokens = 0L
             var accumulatedCompletionTokens = 0L
             var lastContextPromptTokens = 0L
+            // —— DeepSeek 前缀缓存 token 累计（仅主聊天流，最终统一落库）——
+            var accumulatedCacheHitTokens = 0L
+            var accumulatedCacheMissTokens = 0L
             var hasRealUsage = false
 
             // —— Agent 式多轮分段构建（仅新消息）——
@@ -1236,6 +1254,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 coreMemories = activeSession.value?.coreMemories ?: emptyList(),
                 graphMemory = graphMemory,
                 worldInfo = worldInfo,
+                worldInfoPosition = if (worldInfoConfig.value.position == "top") "top" else "bottom",
                 enableHaptic = toolAuthHaptic.value,
                 enableVoice = hasTtsCapability(),
                 enableAdultContent = enableAdultContent.value,
@@ -1401,6 +1420,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 accumulatedPromptTokens += event.promptTokens
                                 accumulatedCompletionTokens += event.completionTokens
                                 lastContextPromptTokens = event.promptTokens
+                                accumulatedCacheHitTokens += event.promptCacheHitTokens
+                                accumulatedCacheMissTokens += event.promptCacheMissTokens
                                 hasRealUsage = true
                             }
                             is StreamEvent.Done -> {
@@ -1735,7 +1756,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     sessionId,
                     promptTokens,
                     completionTokens,
-                    lastContext = if (hasRealUsage) lastContextPromptTokens else promptTokens
+                    lastContext = if (hasRealUsage) lastContextPromptTokens else promptTokens,
+                    cacheHitTokens = accumulatedCacheHitTokens,
+                    cacheMissTokens = accumulatedCacheMissTokens
                 )
             }
         }
@@ -1744,23 +1767,28 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * 累计本会话 token 用量到存储与内存（加性，跨多次调用累加）。
      * lastContext 仅主聊天流传入（覆盖上下文窗口展示值），其它调用传 null 保留旧值。
+     * cacheHitTokens/cacheMissTokens 仅主聊天流传入（DeepSeek 前缀缓存），其它调用传 null 不累计。
      */
     private fun persistSessionTokens(
         sessionId: String,
         promptTokens: Long,
         completionTokens: Long,
-        lastContext: Long? = null
+        lastContext: Long? = null,
+        cacheHitTokens: Long? = null,
+        cacheMissTokens: Long? = null
     ) {
         if (sessionId.isBlank() || (promptTokens <= 0L && completionTokens <= 0L)) return
         viewModelScope.launch(Dispatchers.IO) {
-            storageManager.updateSessionTokens(sessionId, promptTokens, completionTokens, lastContext)
+            storageManager.updateSessionTokens(sessionId, promptTokens, completionTokens, lastContext, cacheHitTokens, cacheMissTokens)
             withContext(Dispatchers.Main) {
                 sessions.value = sessions.value.map { s ->
                     if (s.id == sessionId) {
                         s.copy(
                             promptTokens = s.promptTokens + promptTokens,
                             completionTokens = s.completionTokens + completionTokens,
-                            lastContextTokens = lastContext ?: s.lastContextTokens
+                            lastContextTokens = lastContext ?: s.lastContextTokens,
+                            promptCacheHitTokens = s.promptCacheHitTokens + (cacheHitTokens ?: 0),
+                            promptCacheMissTokens = s.promptCacheMissTokens + (cacheMissTokens ?: 0)
                         )
                     } else s
                 }
@@ -2027,7 +2055,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val workData = workDataOf("session_id" to sessionId)
             val workRequest = OneTimeWorkRequestBuilder<com.loyea.worker.MemoryConsolidationWorker>()
                 .setInputData(workData)
-                .setExpedited(androidx.work.OutOfQuotaPolicy.valueOf("RUN_AS_FOREGROUND_SERVICE"))
+                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
                 .build()
                 
             WorkManager.getInstance(context).enqueueUniqueWork(
@@ -2068,9 +2096,26 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 保存全局世界观条目列表（设置页编辑/导入/导出后调用）：落库 + 更新内存 state
+     * 保存世界观条目列表：按 scope 路由。
+     * - GLOBAL（默认）：全局书落库 + 更新内存 state（设置页既有行为不变）
+     * - SESSION：写当前会话专属书（保留会话 config），覆盖全局书
      */
-    fun saveWorldInfo(entries: List<WorldInfoEntry>) {
+    fun saveWorldInfo(entries: List<WorldInfoEntry>, scope: WorldInfoScope = WorldInfoScope.GLOBAL) {
+        if (scope == WorldInfoScope.SESSION) {
+            val sessionId = currentSessionId.value
+            if (sessionId.isBlank()) return
+            val book = WorldInfoBook(
+                entries = entries,
+                config = sessionWorldInfo.value?.config ?: WorldInfoConfig()
+            )
+            viewModelScope.launch(Dispatchers.IO) {
+                storageManager.saveSessionWorldInfo(sessionId, book)
+                withContext(Dispatchers.Main) {
+                    sessionWorldInfo.value = book
+                }
+            }
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             storageManager.saveWorldInfo(entries)
             withContext(Dispatchers.Main) {
@@ -2080,35 +2125,87 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 从近 10 条历史消息中做世界观关键词匹配，拼接注入块。
-     * - enabled=false 的条目不参与匹配
-     * - constant=true 的条目无条件注入（ST 常驻语义）
-     * - 关键词命中采用 contains（ignoreCase），对子串/部分命中宽松匹配
+     * 保存世界观匹配配置：按 scope 路由。
+     * - GLOBAL（默认）：落 prefs + 更新内存 state
+     * - SESSION：写当前会话专属书（保留会话 entries），覆盖全局书
+     */
+    fun saveWorldInfoConfig(config: WorldInfoConfig, scope: WorldInfoScope = WorldInfoScope.GLOBAL) {
+        if (scope == WorldInfoScope.SESSION) {
+            val sessionId = currentSessionId.value
+            if (sessionId.isBlank()) return
+            val book = WorldInfoBook(
+                // 会话已有专属书 → 保留其条目；否则以全局条目为种子（避免"空书覆盖全局"的脚枪）
+                entries = sessionWorldInfo.value?.entries ?: worldInfoEntries.value,
+                config = config
+            )
+            viewModelScope.launch(Dispatchers.IO) {
+                storageManager.saveSessionWorldInfo(sessionId, book)
+                withContext(Dispatchers.Main) {
+                    sessionWorldInfo.value = book
+                }
+            }
+            return
+        }
+        WorldInfoConfigStorage.save(prefs, config)
+        worldInfoConfig.value = config
+    }
+
+    /**
+     * 清空当前会话专属世界书（删除文件 + state 置 null），该会话恢复回退全局书。
+     */
+    fun clearSessionWorldInfo() {
+        val sessionId = currentSessionId.value
+        if (sessionId.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            storageManager.deleteSessionWorldInfo(sessionId)
+            withContext(Dispatchers.Main) {
+                sessionWorldInfo.value = null
+            }
+        }
+    }
+
+    /**
+     * 为当前会话创建独立世界书，以全局书（条目 + 配置）为种子。
+     * 之后该会话完全使用自己的副本，不再受全局书影响。
+     */
+    fun createSessionWorldInfo() {
+        val sessionId = currentSessionId.value
+        if (sessionId.isBlank()) return
+        val book = WorldInfoBook(
+            entries = worldInfoEntries.value,
+            config = worldInfoConfig.value
+        )
+        viewModelScope.launch(Dispatchers.IO) {
+            storageManager.saveSessionWorldInfo(sessionId, book)
+            withContext(Dispatchers.Main) {
+                sessionWorldInfo.value = book
+            }
+        }
+    }
+
+    /**
+     * 解析匹配时使用的世界书：会话已配置专属书 → 用它；否则回退全局书。
+     */
+    private fun resolveWorldInfoBook(): WorldInfoBook =
+        sessionWorldInfo.value ?: WorldInfoBook(worldInfoEntries.value, worldInfoConfig.value)
+
+    /**
+     * 世界观关键词匹配并拼接注入块（委托 WorldInfoMatcher 纯函数，语义对齐 SillyTavern v2）。
+     * - "system" 关键词扫描源使用角色卡 systemPrompt（persona）近似系统设定
+     * - 概率随机源用「会话 id + 最后一条用户消息」稳定种子：同轮重试可复现同一注入集合 → 保前缀缓存
      */
     private fun buildWorldInfoBlock(history: List<Message>): String? {
-        val entries = worldInfoEntries.value
-        if (entries.isEmpty()) return null
-        val recentText = history.takeLast(10).joinToString("\n") { it.content }
-        if (recentText.isBlank()) return null
-
-        val matched = entries
-            .filter { entry -> entry.enabled }
-            .filter { entry ->
-                entry.constant || entry.keywords.any { keyword ->
-                    keyword.isNotBlank() && recentText.contains(keyword, ignoreCase = true)
-                }
-            }
-            .sortedBy { it.order }
-        if (matched.isEmpty()) return null
-
-        return buildString {
-            matched.forEach { entry ->
-                val content = entry.content.trim()
-                if (content.isNotBlank()) {
-                    append("- ").append(content).append("\n")
-                }
-            }
-        }.trimEnd()
+        val seedKey = (activeSession.value?.id ?: "") + "|" +
+            history.lastOrNull { it.sender == Sender.USER }?.content.orEmpty()
+        val book = resolveWorldInfoBook()
+        return WorldInfoMatcher.worldInfoBlockFor(
+            entries = book.entries,
+            historyContents = history.map { it.content },
+            userName = userName.value,
+            systemPrompt = activeCharacterCard.value?.systemPrompt.orEmpty(),
+            config = book.config,
+            random = kotlin.random.Random(seedKey.hashCode().toLong())
+        )
     }
 
     /**
@@ -2199,7 +2296,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val workData = workDataOf("session_id" to sessionId)
         val workRequest = OneTimeWorkRequestBuilder<com.loyea.worker.MemoryConsolidationWorker>()
             .setInputData(workData)
-            .setExpedited(androidx.work.OutOfQuotaPolicy.valueOf("RUN_AS_FOREGROUND_SERVICE"))
+            .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
             .build()
             
         WorkManager.getInstance(context).enqueueUniqueWork(
