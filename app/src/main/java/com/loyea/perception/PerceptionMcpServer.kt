@@ -22,6 +22,7 @@ class PerceptionMcpServer(private val context: Context) {
     private val gson = Gson()
 
     var webSearchProvider: (suspend (String) -> String)? = null
+    var webPageFetcher: (suspend (String) -> String)? = null
 
     fun getTools(): List<McpTool> {
         return listOf(
@@ -118,6 +119,20 @@ class PerceptionMcpServer(private val context: Context) {
                     ),
                     "required" to listOf("query")
                 )
+            ),
+            McpTool(
+                name = "read_url",
+                description = "抓取并读取指定网页（如官方网站、官方文档、新闻页）的正文内容。当用户明确提到某个具体网站或链接、或 web_search 返回的摘要不足以回答、需要某一页面的具体细节时使用。注意：仅能读取静态渲染的 HTML 页面，JS 动态渲染页面可能提取不到有效内容。",
+                inputSchema = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "url" to mapOf(
+                            "type" to "string",
+                            "description" to "要读取的完整网页 URL（必须以 http:// 或 https:// 开头）"
+                        )
+                    ),
+                    "required" to listOf("url")
+                )
             )
         )
     }
@@ -200,6 +215,14 @@ class PerceptionMcpServer(private val context: Context) {
                         "Error: Search query cannot be empty."
                     } else {
                         webSearchProvider?.invoke(query) ?: "Error: Web search engine is not initialized."
+                    }
+                }
+                "read_url" -> {
+                    val url = arguments?.get("url")?.toString() ?: ""
+                    if (url.isBlank()) {
+                        "Error: URL cannot be empty."
+                    } else {
+                        webPageFetcher?.invoke(url) ?: "Error: Web page fetcher is not initialized."
                     }
                 }
                 else -> throw IllegalArgumentException("Unknown tool: $name")

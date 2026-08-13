@@ -313,6 +313,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 llmClient.performFreeWebSearch(query)
             }
         }
+        // read_url：抓取指定网页正文（Agent 化浏览，模型自主抉择「搜索」还是「直接读官网」）
+        mcpManager.registerWebPageFetcher { url ->
+            llmClient.fetchWebPage(url)
+        }
         mcpManager.start()
         cleanOldTtsCacheAsync()
     }
@@ -1071,7 +1075,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     val availableMcpTools = mcpManager.getAggregateTools().filter { tool ->
                         val lowName = tool.name.lowercase()
                         when {
-                            lowName.contains("web_search") -> apiConfig.enableSearch
+                            lowName.contains("web_search") || lowName.contains("read_url") -> apiConfig.enableSearch
                             lowName.contains("send_voice_reply") -> hasTtsCapability()
                             lowName.contains("location") -> toolAuthLocation.value
                             lowName.contains("weather") || lowName.contains("forecast") -> toolAuthWeather.value
@@ -1263,11 +1267,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         for (toolCall in streamToolCalls) {
                             val displayCallId = "${toolCall.id}_${System.currentTimeMillis()}"
                             val parsedArgs = llmClient.parseArgumentsMap(toolCall.argumentsJson)
-                            val customActionText = if (toolCall.name.lowercase().contains("web_search")) {
-                                val query = parsedArgs.get("query")?.toString() ?: ""
-                                if (query.isNotEmpty()) "搜索网页：$query" else "搜索网页"
-                            } else {
-                                translateToolName(toolCall.name)
+                            val customActionText = when {
+                                toolCall.name.lowercase().contains("web_search") -> {
+                                    val query = parsedArgs.get("query")?.toString() ?: ""
+                                    if (query.isNotEmpty()) "搜索网页：$query" else "搜索网页"
+                                }
+                                toolCall.name.lowercase().contains("read_url") -> {
+                                    val url = parsedArgs.get("url")?.toString() ?: ""
+                                    if (url.isNotEmpty()) "打开网页：$url" else "打开网页"
+                                }
+                                else -> translateToolName(toolCall.name)
                             }
                             val runningCall = McpCall(
                                 id = displayCallId,
@@ -1300,9 +1309,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             var success: Boolean
 
                             val useSystemTime = activeSession.value?.useSystemTime ?: false
-                            val isWebSearch = toolCall.name.equals("web_search", ignoreCase = true) || 
-                                              toolCall.name.endsWith("__web_search", ignoreCase = true) || 
+                            val isWebSearch = toolCall.name.equals("web_search", ignoreCase = true) ||
+                                              toolCall.name.endsWith("__web_search", ignoreCase = true) ||
                                               toolCall.name.endsWith(".web_search", ignoreCase = true)
+                            val isReadUrl = toolCall.name.equals("read_url", ignoreCase = true) ||
+                                            toolCall.name.endsWith("__read_url", ignoreCase = true) ||
+                                            toolCall.name.endsWith(".read_url", ignoreCase = true)
 
                             if (isDuplicate) {
                                 toolOutput = "[系统拦截] 检测到重复的工具调用。您在本次回答中已调用过 ${toolCall.name} 且参数完全一致，请不要重复调用，直接根据已有信息组织最终语言回复用户。"
@@ -1311,7 +1323,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 executedToolsSignature.add(toolSignature)
                                 toolOutput = "语音回复已发送"
                                 success = true
-                            } else if (!useSystemTime && !isWebSearch) {
+                            } else if (!useSystemTime && !isWebSearch && !isReadUrl) {
                                 toolOutput = "Permission Denied: Physical perception is globally disabled by the user."
                                 success = false
                             } else {
@@ -1419,13 +1431,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             )
                         }
 
-                        val executedToolsStr = streamToolCalls.joinToString("、") { 
+                        val executedToolsStr = streamToolCalls.joinToString("、") {
                             val parsedArgs = llmClient.parseArgumentsMap(it.argumentsJson)
-                            if (it.name.lowercase().contains("web_search")) {
-                                val query = parsedArgs.get("query")?.toString() ?: ""
-                                if (query.isNotEmpty()) "搜索网页：$query" else "搜索网页"
-                            } else {
-                                translateToolName(it.name)
+                            when {
+                                it.name.lowercase().contains("web_search") -> {
+                                    val query = parsedArgs.get("query")?.toString() ?: ""
+                                    if (query.isNotEmpty()) "搜索网页：$query" else "搜索网页"
+                                }
+                                it.name.lowercase().contains("read_url") -> {
+                                    val url = parsedArgs.get("url")?.toString() ?: ""
+                                    if (url.isNotEmpty()) "打开网页：$url" else "打开网页"
+                                }
+                                else -> translateToolName(it.name)
                             }
                         }
                         accumulatedThoughts += "\n\n💡 *（已在此处调用接口感知状态：$executedToolsStr）*\n\n"
@@ -1556,6 +1573,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             lowName.contains("time") -> "同步系统时间"
             lowName.contains("physical_perception") -> "感知身体与环境状态"
             lowName.contains("web_search") || lowName.contains("google_search") -> "搜索实时互联网信息"
+            lowName.contains("read_url") || lowName.contains("fetch_url") || lowName.contains("open_url") -> "读取网页正文"
             else -> "执行操作: ${name.substringAfterLast(".")}"
         }
     }

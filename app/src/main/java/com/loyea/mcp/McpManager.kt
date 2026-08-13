@@ -337,6 +337,10 @@ class McpManager(private val context: Context) {
         perceptionServer.webSearchProvider = provider
     }
 
+    fun registerWebPageFetcher(provider: suspend (String) -> String) {
+        perceptionServer.webPageFetcher = provider
+    }
+
     internal fun registerClientForTest(id: String, client: McpClient) {
         activeClients[id] = client
     }

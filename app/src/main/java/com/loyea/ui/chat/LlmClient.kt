@@ -1072,6 +1072,70 @@ class LlmClient {
         }
     }
 
+    /**
+     * 抓取指定网页的正文内容（Agent 化浏览：搜索锁定官网/权威页后，直接读取正文细节）。
+     * 仅支持 http/https；带浏览器 UA 通过基础反爬；限读 1MB 防超大页面内存尖峰；
+     * Jsoup 优先提取正文容器并截断回喂，失败时返回明确错误供模型优雅降级。
+     */
+    suspend fun fetchWebPage(url: String): String = withContext(Dispatchers.IO) {
+        val trimmedUrl = url.trim()
+        if (!trimmedUrl.startsWith("http://") && !trimmedUrl.startsWith("https://")) {
+            return@withContext "\n\n[网页读取失败: 仅支持 http/https 链接]\n\n"
+        }
+        val client = okhttp3.OkHttpClient.Builder()
+            .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(12, java.util.concurrent.TimeUnit.SECONDS)
+            .followRedirects(true)
+            .build()
+        try {
+            val request = okhttp3.Request.Builder()
+                .url(trimmedUrl)
+                .addHeader(
+                    "User-Agent",
+                    "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+                )
+                .addHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                .addHeader("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    return@withContext "\n\n[网页读取失败: HTTP ${response.code}]\n\n"
+                }
+                val body = response.body ?: return@withContext "\n\n[网页读取失败: 响应为空]\n\n"
+                // 限读 1MB 上限，防止超大页面整页读入造成内存尖峰
+                val limitedBytes = body.byteStream().use { ins ->
+                    val bos = java.io.ByteArrayOutputStream()
+                    val buffer = ByteArray(8192)
+                    var total = 0
+                    val cap = 1_048_576
+                    while (total < cap) {
+                        val n = ins.read(buffer)
+                        if (n < 0) break
+                        val toWrite = minOf(n, cap - total)
+                        bos.write(buffer, 0, toWrite)
+                        total += toWrite
+                    }
+                    bos.toByteArray()
+                }
+                // Jsoup 直接解析字节流，自动从 BOM/meta 检测字符集（兼容 GBK 等中文站点）
+                val doc = org.jsoup.Jsoup.parse(java.io.ByteArrayInputStream(limitedBytes), null, trimmedUrl)
+                // 优先提取正文容器（文章/内容区），回退到 body 全文
+                val mainEl = doc.selectFirst(
+                    "article, main, .article, .content, .article-content, #content, .post-content, .entry-content"
+                )
+                val rawText = (mainEl ?: doc.body() ?: doc)?.text().orEmpty()
+                val clean = rawText.replace(Regex("\\s+"), " ").trim()
+                if (clean.isBlank()) {
+                    return@withContext "\n\n[网页读取失败: 页面未提取到有效正文，可能为 JS 动态渲染页面]\n\n"
+                }
+                val excerpt = clean.take(4000)
+                "\n\n=== [网页正文读取 (来源: $trimmedUrl)] ===\n$excerpt\n=========================\n\n"
+            }
+        } catch (e: Exception) {
+            "\n\n[网页读取失败: ${e.message ?: "网络错误"}]\n\n"
+        }
+    }
+
     private fun resolveImagesGenerationsUrl(config: com.loyea.ui.settings.ApiConfig): String {
         val baseUrl = config.apiUrl.trim()
         val cleaned = baseUrl.substringBefore("/chat/completions").removeSuffix("/")

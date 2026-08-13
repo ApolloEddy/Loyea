@@ -116,8 +116,10 @@ object PromptAssembler {
         // 联网搜索功能说明
         if (enableSearch) {
             sb.append("[WEB SEARCH CAPABILITY / 联网搜索功能]\n")
-            sb.append("You currently have internet search access enabled. The tool `BuiltinPerception__web_search` is available to you.\n")
-            sb.append("- You can use `BuiltinPerception__web_search` to look up real-time events, facts, or news when helpful to answer the user's questions.\n\n")
+            sb.append("You currently have internet search access enabled. The tools `BuiltinPerception__web_search` and `BuiltinPerception__read_url` are available to you.\n")
+            sb.append("- `BuiltinPerception__web_search`: query real-time events, facts, or news across the web.\n")
+            sb.append("- `BuiltinPerception__read_url`: open a SPECIFIC webpage (official website, docs, news article) and read its full text content. Use it when the user names a specific site/link, or when search snippets are not enough and you need the details on a page. When you only know the topic, first `web_search` to locate the official/authoritative URL, then `read_url` to read that page.\n")
+            sb.append("- Decide autonomously: search when you don't know the source; read_url directly when you have (or can find) the exact official URL.\n\n")
         }
 
         // 2. 角色基础名称
@@ -176,12 +178,14 @@ object PromptAssembler {
         }
         if (enableSearch) {
             sb.append("- `BuiltinPerception__web_search`: Use this tool to query real-time news, current events, or search the web for facts.\n")
+            sb.append("- `BuiltinPerception__read_url`: Use this tool to open a specific URL (e.g. an official website, documentation, or news article) and read its full page content, when the user names a site or you need details beyond search snippets.\n")
         }
         sb.append("\nHow to trigger tools:\n")
         sb.append("1. **Standard Tool Calls**: If supported by your API, return the tool call structured fields natively.\n")
         sb.append("2. **Text-based XML Fallback**: If standard tool calling is not working, or if you prefer text invocation, you can trigger any tool by outputting the XML format directly in your response text. The system will parse and execute it behind the scenes, and the tag will NOT be shown to the user. Format: `<tool_call>ToolName(arg1=\"value1\", arg2=\"value2\")</tool_call>`.\n")
         sb.append("   - Example: `<tool_call>BuiltinPerception__get_live_weather(location=\"北京\")</tool_call>`\n")
         sb.append("   - Example: `<tool_call>BuiltinPerception__web_search(query=\"今日头条热搜\")</tool_call>`\n")
+        sb.append("   - Example: `<tool_call>BuiltinPerception__read_url(url=\"https://www.mi.com/\")</tool_call>`\n")
         sb.append("   - IMPORTANT: Do NOT invent or call any non-existent tools. Keep your replies natural, blending the sensor data seamlessly into your persona once you receive the tool outputs.\n\n")
 
         // 8. 严格输出格式约束 (OUTPUT FORMAT CONSTRAINT)

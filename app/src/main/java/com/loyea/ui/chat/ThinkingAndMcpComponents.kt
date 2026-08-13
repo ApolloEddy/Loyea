@@ -75,6 +75,7 @@ fun McpCallItem(
         mcpCall.toolName.contains("blood_pressure") -> "🩸"
         mcpCall.toolName.contains("time") -> "🕒"
         mcpCall.toolName.contains("web_search") || mcpCall.toolName.contains("google_search") -> "🔍"
+        mcpCall.toolName.contains("read_url") -> "📄"
         else -> "🛠️"
     }
 
