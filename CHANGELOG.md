@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5] - 2026-08-13
+
+### Added (新增)
+- **通用健康数据接口（Health Connect，厂商中立）**：
+  - 新增 [com.loyea.health](file:///D:/CodingProjects/Android/Loyea/app/src/main/java/com/loyea/health) 类型化管线：`HealthSnapshot` / `HealthDataResult` 替代原 HealthProvider 的 String 哨兵协议；`HealthConnectDataSource`（通用健康连接源，小米运动健康 / 三星健康等写入方均可接入）、`SmartwatchBluetoothDataSource`（蓝牙手表实时值）、`SimulatedDataSource`（模拟兜底）三源按「蓝牙 > 健康连接 > 模拟」合并，15s TTL 缓存。
+  - 统一 Prompt 组装：`PhysicalContextManager` 健康段与 `get_health_data` 工具均走 `HealthContextBuilder`，输出同源同格式；`HealthProvider.kt` 已删除。健康数据遵循「不主动注入」原则——仅当健康连接读取权限 + `tool_auth_health` 授权 + 物理感知开关三者满足时，AI 经 `get_health_data` 按需获取。
+  - 配对面板内嵌设置页「健康数据集成」分组：SDK 状态 / 数据来源生态识别（小米/华为/三星/OPPO）/ 5 类指标可用性 / 最近同步时间 / 厂商引导文案；授权返回自动刷新。
+
+### Fixed (修复)
+- 步数 `"0 steps"` 不再误判为无数据而错误触发模拟兜底；MCP 版血压/睡眠不再把 `Permission Denied` / `No Data` 噪音注入大模型上下文。
+
+### Changed (变更)
+- 版本号升级至 v0.5（versionCode 6，可覆盖安装 v0.4.1）；同步更新根目录 `app-release.apk`。
+
 ## [Unreleased] - 2026-08-13
 
 ### Added (新增)
