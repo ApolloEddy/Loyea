@@ -164,7 +164,7 @@ Loyea 是一个运行在 Android 上的本地优先（local-first）的 AI 对�
 ```bash
 # 需要 JDK 17
 ./gradlew.bat :app:assembleDebug   # 调试包
-./gradlew.bat :app:assembleRelease # 发布包（需本地签名凭据）
+./gradlew.bat --no-build-cache --rerun-tasks :app:clean :app:testReleaseUnitTest :app:assembleRelease # 全量验证并生成发布包（需本地签名凭据）
 ```
 
 发布签名：在项目根目录放置 `keystore.properties`（该文件已被 `.gitignore` 忽略），内容如下：

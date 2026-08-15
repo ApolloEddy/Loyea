@@ -6,7 +6,9 @@ local.properties
 
 # IDE
 .idea/
+.vscode/
 *.iml
+*.swp
 .DS_Store
 
 # Kotlin
@@ -20,3 +22,22 @@ desktop.ini
 *.jks
 *.keystore
 keystore.properties
+
+# Secrets
+.env
+*.key
+*.pem
+credentials.json
+secrets.yaml
+
+# Runtime / cache
+__pycache__/
+*.pyc
+*.log
+tmp/
+temp/
+dump.rdb
+
+# Local agent state
+.gemini/
+server/data/vector_store/

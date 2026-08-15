@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.4] - 2026-08-15
+
+### Changed (变更)
+- 用户可见版本号升级至 v0.5.4；Android 内部 `versionCode` 同步升级至 10，可覆盖安装 v0.5.3。
+- **发布构建可复现性**：发布命令固定为 `:app:clean` + `--no-build-cache --rerun-tasks`，在执行 Release 单元测试后从当前源码全量生成并同步根目录 `app-release.apk`，避免复用旧中间产物或旧资源。
+- **仓库安全忽略规则**：补齐编辑器缓存、常见密钥文件、运行日志与临时目录的忽略项；签名文件仍仅保留在本机。
+
 ## [0.5.3] - 2026-08-14
 
 ### Added (新增)
