@@ -4,6 +4,10 @@ build/
 app/build/
 local.properties
 
+# Release artifacts (publish through GitHub Releases, never commit to the source tree)
+*.apk
+*.aab
+
 # IDE
 .idea/
 .vscode/

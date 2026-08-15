@@ -695,8 +695,9 @@ fun SettingsMainLayout(
             var lastVersionTapTime by remember { mutableStateOf(0L) }
             var showAdultConfirm by remember { mutableStateOf(false) }
             val easterEggContext = LocalContext.current
+            val displayVersion = "Loyea v${com.loyea.BuildConfig.VERSION_NAME}"
             Text(
-                text = if (adultContentEnabled) "Loyea v0.5.3 *" else "Loyea v0.5.3",
+                text = if (adultContentEnabled) "$displayVersion *" else displayVersion,
                 modifier = Modifier
                     .align(Alignment.CenterHorizontally)
                     .clickable {

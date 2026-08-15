@@ -6,8 +6,15 @@ All notable changes to this project will be documented in this file.
 
 ### Changed (变更)
 - 用户可见版本号升级至 v0.5.4；Android 内部 `versionCode` 同步升级至 10，可覆盖安装 v0.5.3。
-- **发布构建可复现性**：发布命令固定为 `:app:clean` + `--no-build-cache --rerun-tasks`，在执行 Release 单元测试后从当前源码全量生成并同步根目录 `app-release.apk`，避免复用旧中间产物或旧资源。
+- **版本展示单一数据源**：设置页不再硬编码版本文本，改为读取 `BuildConfig.VERSION_NAME`，使手机内显示版本始终与 APK Manifest / Gradle 配置一致。
+- **发布产物与源码仓库解耦**：APK/AAB 加入 Git 忽略规则，源码树不再保存安装包；签名 APK 改为 `Loyea-v0.5.4.apk`，仅通过 GitHub Releases 分发。
+- **发布构建可复现性**：发布命令固定为 `:app:clean` + `--no-build-cache --rerun-tasks`，先执行 Release 单元测试，再从当前源码全量生成安装包，避免复用旧中间产物或旧资源。
+- **README 同步当前实现**：新增 v0.5.4 下载与安装入口、源码/安装包边界说明，并把 Token 用量入口更新为当前的「模型选择器下拉列表顶部」。
 - **仓库安全忽略规则**：补齐编辑器缓存、常见密钥文件、运行日志与临时目录的忽略项；签名文件仍仅保留在本机。
+
+### Fixed (修复)
+- 修复设置页仍显示 `Loyea v0.5.3`、发布文档却声明 v0.5.4 的版本漂移。
+- 修复 v0.5.4 安装包被错误提交到仓库根目录的问题，恢复「Git 保存源码、GitHub Releases 保存可安装二进制」的发布边界。
 
 ## [0.5.3] - 2026-08-14
 

@@ -4,10 +4,13 @@
   <img src="https://img.shields.io/badge/Platform-Android-green?style=flat-square" alt="Platform" />
   <img src="https://img.shields.io/badge/UI-Jetpack%20Compose%20M3-red?style=flat-square" alt="UI" />
   <img src="https://img.shields.io/badge/Architecture-MCP-purple?style=flat-square" alt="MCP" />
+  <a href="https://github.com/ApolloEddy/Loyea/releases/latest"><img src="https://img.shields.io/github/v/release/ApolloEddy/Loyea?display_name=tag&style=flat-square" alt="Latest Release" /></a>
   <img src="https://img.shields.io/github/license/ApolloEddy/Loyea?color=orange&style=flat-square" alt="License" />
 </p>
 
 Loyea 是一个运行在 Android 上的本地优先（local-first）的 AI 对话应用，源码开源。它把大模型对话与端侧物理感知、记忆系统、多模态能力结合，可通过 MCP（Model Context Protocol）让 AI 主动调用本地工具与联网工具。
+
+当前稳定版：**v0.5.4**（Android 8.0 / API 26 及以上）。
 
 > 本文档只描述当前代码中**已实际实现**的功能。未实现的功能不会出现在列表中。
 
@@ -15,12 +18,25 @@ Loyea 是一个运行在 Android 上的本地优先（local-first）的 AI 对�
 
 ## 目录
 
+- [下载与安装](#下载与安装)
 - [功能总览](#功能总览)
 - [使用指南](#使用指南)
 - [安全与隐私](#安全与隐私)
 - [构建与签名](#构建与签名)
 - [已知限制](#已知限制)
 - [许可证](#许可证)
+
+---
+
+## 下载与安装
+
+安装包统一发布在 [GitHub Releases](https://github.com/ApolloEddy/Loyea/releases)，当前版本请进入 [Loyea v0.5.4](https://github.com/ApolloEddy/Loyea/releases/tag/v0.5.4) 下载 `Loyea-v0.5.4.apk`。
+
+1. 下载 APK 到 Android 设备。
+2. 如系统提示，允许当前浏览器或文件管理器「安装未知应用」。
+3. 打开 APK 完成安装；v0.5.4 的内部 `versionCode` 为 10，可覆盖安装 v0.5.3。
+
+> Git 仓库只跟踪源码、测试和文档。APK/AAB 二进制安装包不会提交到源码树，均作为对应版本的 GitHub Release 附件分发。
 
 ---
 
@@ -37,7 +53,7 @@ Loyea 是一个运行在 Android 上的本地优先（local-first）的 AI 对�
 | 生图 | 输入框以 `/draw 提示词` 或设置页触发图像生成。 |
 | LaTeX 渲染 | `$$...$$` 块级与 `$...$` 行内公式离线渲染。 |
 | 时间分隔 | 当两条消息间隔超过 30 分钟时，回复间居中显示当前时间（类似 ChatGPT / 豆包）。 |
-| Token 用量控件 | 会话顶部小控件，点击弹出环形图 + 上下文窗口占用条；按会话独立统计对话与系统调用（标题生成 / 记忆提炼 / 图谱提取 / 后台问候）的 token 数量（不计价格），DeepSeek / OpenAI 读真实 usage，MiMo 走字符估算兜底；DeepSeek 自动前缀缓存命中率实时展示（缓存命中 xx.x%）。 |
+| Token 用量控件 | 展开顶部模型选择器后，在下拉列表顶部显示用量头、环形图和上下文窗口占用条；按会话独立统计对话与系统调用（标题生成 / 记忆提炼 / 图谱提取 / 后台问候）的 token 数量（不计价格），DeepSeek / OpenAI 读真实 usage，MiMo 走字符估算兜底；DeepSeek 自动前缀缓存命中率实时展示。 |
 
 ### 2. 端侧物理感知（MCP 本地工具）
 
@@ -177,6 +193,8 @@ keyPassword=***
 ```
 
 > 未提供 `keystore.properties` 时仍可正常构建调试包，仅 release 包无法签名。
+
+Release 构建产物位于 `app/build/outputs/apk/release/app-release.apk`。该目录和所有 `*.apk` / `*.aab` 均被 Git 忽略；正式安装包应重命名为版本化文件（如 `Loyea-v0.5.4.apk`）并上传到 GitHub Releases，不应复制到仓库根目录或提交进 Git。
 
 ---
 
