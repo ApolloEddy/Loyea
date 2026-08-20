@@ -16,6 +16,7 @@ import com.loyea.MainActivity
 import com.loyea.R
 import com.loyea.perception.PhysicalContextManager
 import com.loyea.ui.chat.PromptAssembler
+import com.loyea.ui.chat.BackgroundPromptTemplates
 import com.loyea.ui.chat.ChatSession
 import com.loyea.ui.chat.ChatStorageManager
 import com.loyea.ui.chat.LlmClient
@@ -100,25 +101,29 @@ class GreetingWorker(
                 null
             }
 
-            val baseSystemPrompt = PromptAssembler.assembleSystemPrompt(
+            val eventTime = System.currentTimeMillis()
+            val promptParts = PromptAssembler.assemblePromptParts(
                 card = activeCard,
                 userName = userName,
                 useSystemTime = sessionUsesSystemTime,
                 physicalContext = physicalContext,
-                trustedCard = activeCard.isBuiltIn
+                trustedCard = activeCard.isBuiltIn,
+                snapshotTimeMillis = eventTime
             )
 
             // 4. Prepare Prompt
             val history = storageManager.loadSessionMessages(sessionId).takeLast(10)
-            val systemPrompt = """
-                $baseSystemPrompt
-                
-                [TASK]
-                The user '$userName' is not looking at the app right now. This is a background scheduled event.
-                You should generate a VERY SHORT (1-2 sentences, max 30 words) proactive greeting message.
-                For example, a morning greeting, evening check-in, or just a random sweet thought.
-                Do NOT output any XML or thinking process. Just output the final message.
-            """.trimIndent()
+            val systemPrompt = BackgroundPromptTemplates.greetingSystem(
+                promptParts.stableSystemPrompt,
+                userName
+            )
+            val eventInput = BackgroundPromptTemplates.greetingEventInput(promptParts.turnContextSnapshot)
+            val requestHistory = history + Message(
+                id = "background-greeting-event",
+                content = eventInput,
+                sender = Sender.USER,
+                timestamp = eventTime
+            )
 
             var generatedText = ""
             // 问候计费累计器：服务端返回 usage 时用真实值，否则估算兜底
@@ -129,7 +134,7 @@ class GreetingWorker(
                 llmClient.sendChatCompletionStream(
                     config = activeConfig.copy(enableReasoning = false), // Disable reasoning for quick greeting
                     systemPrompt = systemPrompt,
-                    history = history
+                    history = requestHistory
                 ).collect { event ->
                     when (event) {
                         is StreamEvent.Content -> generatedText += event.text
@@ -150,7 +155,7 @@ class GreetingWorker(
             if (generatedText.isBlank()) return@withContext Result.retry()
 
             // 后台主动问候计入解析出的那个会话用量（系统调用）；lastContext 仅主聊天流写，这里保持 null
-            val historyText = history.joinToString("\n") { it.content }
+            val historyText = requestHistory.joinToString("\n") { it.content }
             storageManager.updateSessionTokens(
                 sessionId,
                 promptTokens = if (hasRealUsage) accumulatedPrompt else estimateTokens(systemPrompt) + estimateTokens(historyText),

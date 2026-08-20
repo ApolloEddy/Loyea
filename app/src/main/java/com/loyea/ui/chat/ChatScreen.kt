@@ -305,6 +305,7 @@ fun ChatScreen(
                     MessageItem(
                         message = message,
                         userBubbleColor = userBubbleColor,
+                        appLanguage = appLanguage,
                         currentlyPlayingAudioId = viewModel?.currentlyPlayingAudioId?.value,
                         currentlyPlayingAudioProgress = viewModel?.currentlyPlayingAudioProgress?.value ?: 0f,
                         onCopy = {
@@ -769,6 +770,7 @@ fun ModelSelector(
     val avatarBitmap = rememberAvatarPainter(activeCharacterCard.avatarUri)
 
     Box(
+        modifier = Modifier.widthIn(min = 240.dp, max = 320.dp),
         contentAlignment = Alignment.Center
     ) {
         Row(
@@ -857,7 +859,7 @@ fun ModelSelector(
                 onDismissRequest = { expanded = false },
                 modifier = Modifier
                     .background(MaterialTheme.colorScheme.surface)
-                    .widthIn(min = 220.dp)
+                    .widthIn(min = 240.dp, max = 320.dp)
             ) {
                 // Token 用量头：下拉列表顶部（原药丸弹窗移入此处）
                 if (hasUsage) {
@@ -867,13 +869,14 @@ fun ModelSelector(
                         modifier = Modifier.fillMaxWidth()
                     )
                     HorizontalDivider(
-                        modifier = Modifier.padding(vertical = 4.dp),
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
                     )
                 }
                 enabledConfigs.forEach { config ->
                     DropdownMenuItem(
                         text = { Text(config.name, color = MaterialTheme.colorScheme.onBackground) },
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                         onClick = {
                             onActiveConfigChange(config.id)
                             expanded = false
@@ -1058,6 +1061,7 @@ private fun isVoiceReplyTool(toolName: String): Boolean =
 fun MessageItem(
     message: Message,
     userBubbleColor: String,
+    appLanguage: String = "zh",
     currentlyPlayingAudioId: String?,
     currentlyPlayingAudioProgress: Float = 0f,
     onCopy: () -> Unit,
@@ -1404,7 +1408,7 @@ fun MessageItem(
                         .padding(top = 4.dp, end = 4.dp)
                 ) {
                     Text(
-                        text = formatTime(message.timestamp),
+                        text = formatTime(message.timestamp, appLanguage),
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f)
                     )
@@ -1779,7 +1783,7 @@ fun MessageItem(
                         }
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = formatTime(message.timestamp),
+                            text = formatTime(message.timestamp, appLanguage),
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.35f)
                         )
@@ -1812,6 +1816,7 @@ fun ChatInputBar(
     val isActive = isThinking || isMcpRunning
     var isVoiceMode by remember { mutableStateOf(false) }
     var showFullEditor by remember { mutableStateOf(false) }
+    var renderedLineCount by remember { mutableStateOf(1) }
 
     Row(
         modifier = Modifier
@@ -1926,10 +1931,13 @@ fun ChatInputBar(
                         )
                     }
                     // 长文本时浮现“全屏放大编辑”入口（与主流 AI 聊天软件一致的体验）
-                    val showExpandBtn = value.text.length >= 150
+                    val showExpandBtn = !isTextEmpty && shouldShowExpandedEditor(renderedLineCount)
                     BasicTextField(
                         value = value,
                         onValueChange = onValueChange,
+                        onTextLayout = { layoutResult ->
+                            renderedLineCount = layoutResult.lineCount
+                        },
                         textStyle = TextStyle(
                             fontFamily = FontFamily.Default,
                             fontSize = 16.sp,
@@ -2468,10 +2476,8 @@ private fun cleanVoiceText(inputJson: String?): String {
     return result.trim()
 }
 
-private fun formatTime(timestamp: Long): String {
-    val sdf = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
-    return sdf.format(java.util.Date(timestamp))
-}
+private fun formatTime(timestamp: Long, appLanguage: String): String =
+    MessageTimeFormatter.format(timestampMillis = timestamp, appLanguage = appLanguage)
 
 // 消息时间间隔分隔阈值：与上一条消息间隔超过该时长时，居中显示当前时间（参考 ChatGPT/豆包）
 private const val TIME_GAP_DIVIDER_MS = 30L * 60 * 1000 // 30 分钟
@@ -2517,7 +2523,7 @@ private fun MessageVersionPager(
     }
 }
 
-/** 时间间隔分隔条：居中显示消息所在时刻（当天仅时间，跨天带日期） */
+/** 时间间隔分隔条：居中显示消息所在时刻，并与消息操作栏使用相同的本地化格式。 */
 @Composable
 private fun TimeGapDivider(timestamp: Long, appLanguage: String) {
     val label = remember(timestamp, appLanguage) { formatTimeGapLabel(timestamp, appLanguage) }
@@ -2531,30 +2537,8 @@ private fun TimeGapDivider(timestamp: Long, appLanguage: String) {
     }
 }
 
-private fun formatTimeGapLabel(timestamp: Long, appLanguage: String): String {
-    val cal = java.util.Calendar.getInstance()
-    cal.timeInMillis = timestamp
-    val now = java.util.Calendar.getInstance()
-    val today = cal.get(java.util.Calendar.YEAR) == now.get(java.util.Calendar.YEAR) &&
-        cal.get(java.util.Calendar.DAY_OF_YEAR) == now.get(java.util.Calendar.DAY_OF_YEAR)
-    val thisYear = cal.get(java.util.Calendar.YEAR) == now.get(java.util.Calendar.YEAR)
-    val hh = cal.get(java.util.Calendar.HOUR_OF_DAY)
-    val mm = cal.get(java.util.Calendar.MINUTE)
-    val month = cal.get(java.util.Calendar.MONTH) + 1
-    val day = cal.get(java.util.Calendar.DAY_OF_MONTH)
-    val year = cal.get(java.util.Calendar.YEAR)
-    return when {
-        today -> String.format(java.util.Locale.getDefault(), "%02d:%02d", hh, mm)
-        thisYear -> if (appLanguage == "en")
-            String.format(java.util.Locale.getDefault(), "%d/%d %02d:%02d", month, day, hh, mm)
-        else
-            String.format(java.util.Locale.getDefault(), "%d月%d日 %02d:%02d", month, day, hh, mm)
-        else -> if (appLanguage == "en")
-            String.format(java.util.Locale.getDefault(), "%d/%d/%d %02d:%02d", year, month, day, hh, mm)
-        else
-            String.format(java.util.Locale.getDefault(), "%d年%d月%d日 %02d:%02d", year, month, day, hh, mm)
-    }
-}
+private fun formatTimeGapLabel(timestamp: Long, appLanguage: String): String =
+    MessageTimeFormatter.format(timestampMillis = timestamp, appLanguage = appLanguage)
 
 @Composable
 fun RecordingOverlay(

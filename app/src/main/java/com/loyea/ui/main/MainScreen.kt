@@ -75,7 +75,7 @@ fun MainScreen(
     saveDraft: (String, String) -> Unit,
     clearDraft: (String) -> Unit,
     onUpdateCoreMemories: (String, List<String>) -> Unit = { _, _ -> },
-    onTriggerManualMemorySummary: () -> Unit = {},
+    onTriggerManualMemorySummary: (String) -> Boolean = { false },
     onEditMessage: (String, String) -> Unit = { _, _ -> },
     onRenameSession: (String, String) -> Unit = { _, _ -> },
     onRegenerateSessionTitle: (String) -> Unit = {},
@@ -273,7 +273,7 @@ fun SidebarContent(
     onToggleSystemTime: () -> Unit,
     onUserNameSave: (String) -> Unit,
     onUpdateCoreMemories: (String, List<String>) -> Unit = { _, _ -> },
-    onTriggerManualMemorySummary: () -> Unit = {},
+    onTriggerManualMemorySummary: (String) -> Boolean = { false },
     onRenameSession: (String, String) -> Unit = { _, _ -> },
     onRegenerateSessionTitle: (String) -> Unit = {},
     onCloseDrawer: () -> Unit = {}
@@ -847,7 +847,7 @@ fun CoreMemoryDialog(
     session: ChatSession,
     onDismissRequest: () -> Unit,
     onUpdateMemories: (String, List<String>) -> Unit,
-    onTriggerSummary: () -> Unit
+    onTriggerSummary: (String) -> Boolean
 ) {
     var memories by remember(session.coreMemories) { mutableStateOf(session.coreMemories) }
     var editingIndex by remember { mutableStateOf<Int?>(null) }
@@ -1118,9 +1118,17 @@ fun CoreMemoryDialog(
                 ) {
                     FilledTonalButton(
                         onClick = {
-                            onTriggerSummary()
-                            Toast.makeText(context, "AI 正在后台重新总结提炼本会话记忆事实，请稍候...", Toast.LENGTH_SHORT).show()
-                            onDismissRequest()
+                            val enqueued = onTriggerSummary(session.id)
+                            Toast.makeText(
+                                context,
+                                if (enqueued) {
+                                    "AI 正在后台重新总结提炼本会话记忆事实，请稍候..."
+                                } else {
+                                    "记忆总结任务启动失败，请稍后重试"
+                                },
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            if (enqueued) onDismissRequest()
                         },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(10.dp),
@@ -1167,4 +1175,3 @@ fun CoreMemoryDialog(
         }
     )
 }
-

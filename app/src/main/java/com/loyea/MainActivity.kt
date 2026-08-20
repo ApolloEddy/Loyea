@@ -72,7 +72,12 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         if (::chatViewModel.isInitialized) {
-            if (!chatViewModel.isThinking.value && !chatViewModel.isMcpRunning.value) {
+            // Activity 因横竖屏切换重建时 ViewModel 与 MediaPlayer 会保留；
+            // 此处若重选同一会话，selectSession() 会主动 stopAudio()，从而误中断播放。
+            if (!chatViewModel.isThinking.value &&
+                !chatViewModel.isMcpRunning.value &&
+                chatViewModel.currentlyPlayingAudioId.value == null
+            ) {
                 val currId = chatViewModel.currentSessionId.value
                 if (currId.isNotEmpty()) {
                     chatViewModel.selectSession(currId)
@@ -195,7 +200,9 @@ class MainActivity : ComponentActivity() {
                                 useSystemTime = activeSession?.useSystemTime ?: false,
                                 onToggleSystemTime = { chatViewModel.toggleCurrentSessionSystemTime() },
                                 onUpdateCoreMemories = { sid, memories -> chatViewModel.updateCoreMemories(sid, memories) },
-                                onTriggerManualMemorySummary = { chatViewModel.triggerManualMemorySummary() },
+                                onTriggerManualMemorySummary = { sessionId ->
+                                    chatViewModel.triggerManualMemorySummary(sessionId)
+                                },
                                 onEditMessage = { id, text -> chatViewModel.editMessage(id, text) },
                                 onRenameSession = { sid, title -> chatViewModel.renameSession(sid, title) },
                                 onRegenerateSessionTitle = { sid -> chatViewModel.regenerateSessionTitle(sid) },

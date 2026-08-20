@@ -47,6 +47,12 @@ data class Message(
     val isError: Boolean = false,
     val characterId: String? = null,
 
+    // 仅供 LLM 请求使用的“该用户消息发送当时”上下文快照；不参与 UI 正文渲染。
+    // 一旦生成便保持不变，使后续多轮请求可以逐字复用此前输入前缀。
+    val llmContextSnapshot: String? = null,
+    // 发送时区与 timestamp 一起固化；设备以后切换时区也不会重写历史 provider 前缀。
+    val llmTimeZoneId: String? = java.util.TimeZone.getDefault().id,
+
     // 多模态 Vision 与 Speech 新增字段，带默认值以兼容旧数据
     val imageUrl: String? = null,
     val audioUrl: String? = null,
@@ -70,5 +76,3 @@ data class MessageVersion(
     val audioUrl: String? = null,
     val audioDuration: Int = 0
 )
-
-

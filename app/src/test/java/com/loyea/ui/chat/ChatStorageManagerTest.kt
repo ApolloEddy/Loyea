@@ -79,6 +79,33 @@ class ChatStorageManagerTest {
     }
 
     @Test
+    fun testLlmContextSnapshotRoundTripAndLegacyCompatibility() = runBlocking {
+        val sessionId = "snapshot_roundtrip"
+        storageManager.saveSessionMessages(
+            sessionId,
+            listOf(
+                Message(
+                    id = "m1",
+                    content = "hello",
+                    sender = Sender.USER,
+                    llmContextSnapshot = "[TURN CONTEXT SNAPSHOT]\nstable"
+                )
+            )
+        )
+        assertEquals(
+            "[TURN CONTEXT SNAPSHOT]\nstable",
+            storageManager.loadSessionMessages(sessionId).single().llmContextSnapshot
+        )
+
+        val legacyId = "legacy_without_snapshot"
+        val legacyFile = File(tempFolder.root, "files/sessions/session_$legacyId.json")
+        legacyFile.writeText("""[{"id":"old","content":"legacy","sender":"USER","timestamp":1}]""")
+        val legacyMessage = storageManager.loadSessionMessages(legacyId).single()
+        assertNull(legacyMessage.llmContextSnapshot)
+        assertNotNull(legacyMessage.llmTimeZoneId)
+    }
+
+    @Test
     fun testOldWorldInfoJsonMissingNewFieldsGetsDefaults() = runBlocking {
         // v0.5.1 时代只有 12 字段的 world_info.json；新字段缺失时 selfHeal 兜底
         val oldJson = """

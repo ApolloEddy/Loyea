@@ -727,7 +727,7 @@ class LlmClient {
 
     private fun toProviderTools(tools: List<McpTool>): JsonArray {
         val array = JsonArray()
-        tools.forEach { tool ->
+        LlmRequestCanonicalizer.canonicalizeTools(tools).forEach { tool ->
             array.add(JsonObject().apply {
                 addProperty("type", "function")
                 add("function", JsonObject().apply {
@@ -1932,5 +1932,4 @@ class LlmClient {
         return result
     }
 }
-
 

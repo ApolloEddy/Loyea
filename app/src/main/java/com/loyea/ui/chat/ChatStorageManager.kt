@@ -146,19 +146,16 @@ class ChatStorageManager(private val context: Context) {
             val json = file.readText()
             val type = object : TypeToken<List<Message>>() {}.type
             val list = gson.fromJson<List<Message>>(json, type)
-            // 确保 mcpCalls 和 versions 不会因为反序列化可能出现的 null 而崩溃
+            // Gson 对旧 JSON 缺失的非空集合字段会写入运行时 null；必须一次性归一化。
+            // 分多次 copy 会把尚未修复的另一个 null 传入 Kotlin 非空参数并触发 NPE。
             list?.map { msg ->
-                var cleaned = msg
-                if (cleaned.mcpCalls == null) {
-                    cleaned = cleaned.copy(mcpCalls = emptyList())
-                }
-                if (cleaned.versions == null) {
-                    cleaned = cleaned.copy(versions = emptyList())
-                }
-                if (cleaned.contentSegments == null) {
-                    cleaned = cleaned.copy(contentSegments = emptyList())
-                }
-                cleaned
+                msg.copy(
+                    mcpCalls = msg.mcpCalls ?: emptyList(),
+                    versions = msg.versions ?: emptyList(),
+                    contentSegments = msg.contentSegments ?: emptyList(),
+                    llmTimeZoneId = msg.llmTimeZoneId?.takeIf { it.isNotBlank() }
+                        ?: java.util.TimeZone.getDefault().id
+                )
             } ?: emptyList()
         } catch (e: Exception) {
             e.printStackTrace()

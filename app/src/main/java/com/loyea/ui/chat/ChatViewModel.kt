@@ -23,9 +23,11 @@ import com.loyea.perception.PhysicalContextManager
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.withLock
 import java.io.File
 import android.media.MediaRecorder
@@ -987,7 +989,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 kotlinx.coroutines.withTimeoutOrNull(15_000) {
                     llmClient.sendChatCompletionStream(
                         activeApiConfig.value,
-                        listOf(LlmChatMessage(role = "user", content = prompt)),
+                        listOf(
+                            LlmChatMessage(
+                                role = "system",
+                                content = BackgroundPromptTemplates.SMART_TITLE_SYSTEM
+                            ),
+                            LlmChatMessage(role = "user", content = prompt)
+                        ),
                         emptyList()
                     ).collect { ev ->
                         when (ev) {
@@ -1016,7 +1024,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 // 标题生成也计入会话用量（系统调用），但不更新上下文窗口展示值
                 persistSessionTokens(
                     sessionId,
-                    promptTokens = if (hasRealUsage) usagePrompt else estimateTokens(prompt),
+                    promptTokens = if (hasRealUsage) usagePrompt else {
+                        estimateTokens(BackgroundPromptTemplates.SMART_TITLE_SYSTEM) + estimateTokens(prompt)
+                    },
                     completionTokens = if (hasRealUsage) usageCompletion else estimateTokens(titleBuilder.toString()),
                     lastContext = null
                 )
@@ -1068,15 +1078,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** 组装标题生成 Prompt：用户明确指定名称则采纳，否则默认自动总结 */
+    /** 标题任务的易变对话数据只进入 user payload，稳定规则由模板统一提供。 */
     private fun buildSmartTitlePrompt(firstUserText: String, firstAiText: String): String {
-        val userPart = if (firstUserText.isNotBlank()) "用户：$firstUserText\n" else ""
-        val aiPart = "AI：${firstAiText.ifBlank { "（暂无）" }}"
-        return (
-            "根据这段对话的开头生成会话标题：如果用户明确要求了标题（如「标题叫XX」「命名为XX」「帮我起个名字」），" +
-                "则严格采用用户指定的名称；否则自动总结一个 4-12 个字的精炼中文标题。只输出标题本身，不要引号、标点或任何解释。\n" +
-                userPart + aiPart
-            )
+        return BackgroundPromptTemplates.smartTitleInput(firstUserText, firstAiText)
     }
 
     private fun startAiResponseStream(
@@ -1199,74 +1203,121 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val includeAudioInput = currentMsgHasAudio &&
                 providerSupportsAudioInput(apiConfig.provider, apiConfig.modelName)
 
-            // 判定当前角色是否是 Loyea 核心角色（仅 Loyea 支持物理感知和设备数据读取，隔离跨角色隐私泄露）
-            // 策略调整：不再在每次发送消息时自动调出所有工具物理信息，而是将“系统当前时间”作为必要物理信息随消息附带。
-            // 同时在上下文附上当前会话最近10分钟内成功调用的工具记录，过期数据将被自动丢弃。
-            val now = System.currentTimeMillis()
-            val tenMinutesAgo = now - 10 * 60 * 1000 // 10分钟前
-            val recentToolCallsStr = history
-                .filter { it.timestamp >= tenMinutesAgo }
-                .flatMap { msg ->
-                    val diffMs = now - msg.timestamp
-                    val timeDesc = when {
-                        diffMs < 30 * 1000 -> "刚刚"
-                        diffMs < 60 * 1000 -> "1分钟内"
-                        else -> "${diffMs / (60 * 1000)}分钟前"
-                    }
-                    msg.mcpCalls
-                        .filter { it.status == McpStatus.SUCCESS && it.toolName != "send_voice_reply" }
-                        .map { call ->
-                            "- ${timeDesc}成功调用了 `${call.toolName}` 工具，返回结果为：${call.output.trim().take(1500)}"
+            // 每个用户回合的动态上下文只生成一次并固化到该 Message：
+            // 后续重生成/多轮请求复用原快照，避免当前时间、图谱或世界书改写历史前缀。
+            val requestUserMessage = history.lastOrNull { it.sender == Sender.USER }
+            val snapshotTime = requestUserMessage?.timestamp?.takeIf { it > 0L } ?: System.currentTimeMillis()
+            val existingTurnSnapshot = requestUserMessage?.llmContextSnapshot?.takeIf { it.isNotBlank() }
+            val needsTurnSnapshot = existingTurnSnapshot == null
+            val sessionUsesSystemTime = activeSession.value?.useSystemTime == true
+            val tenMinutesAgo = snapshotTime - 10 * 60 * 1000
+            val recentToolCallsStr = if (needsTurnSnapshot) {
+                history
+                    .filter { it.timestamp in tenMinutesAgo..snapshotTime }
+                    .flatMap { msg ->
+                        val diffMs = snapshotTime - msg.timestamp
+                        val timeDesc = when {
+                            diffMs < 30 * 1000 -> "刚刚"
+                            diffMs < 60 * 1000 -> "1分钟内"
+                            else -> "${diffMs / (60 * 1000)}分钟前"
                         }
-                }
-                .joinToString("\n")
+                        msg.mcpCalls
+                            .filter { it.status == McpStatus.SUCCESS && it.toolName != "send_voice_reply" }
+                            .map { call ->
+                                "- ${timeDesc}成功调用了 `${call.toolName}` 工具，返回结果为：${call.output.trim().take(1500)}"
+                            }
+                    }
+                    .joinToString("\n")
+            } else {
+                ""
+            }
 
-            val physicalContextData = buildString {
-                if (enableVoiceEmotionPerception.value && !currentVoiceEmotion.value.isNullOrBlank()) {
-                    append("[Acoustic Emotion]\n")
-                    append("User's Voice Tone: ${currentVoiceEmotion.value}\n\n")
-                }
-                if (recentToolCallsStr.isNotBlank()) {
-                    append("[RECENT PERCEPTION TOOL CALLS (10MIN CACHE)]\n")
-                    append(recentToolCallsStr)
-                }
-            }.trim().takeIf { it.isNotEmpty() }
+            val physicalContextData = if (needsTurnSnapshot) {
+                buildString {
+                    if (enableVoiceEmotionPerception.value && !currentVoiceEmotion.value.isNullOrBlank()) {
+                        append("[Acoustic Emotion]\n")
+                        append("User's Voice Tone: ${currentVoiceEmotion.value}\n\n")
+                    }
+                    if (recentToolCallsStr.isNotBlank()) {
+                        append("[RECENT PERCEPTION TOOL CALLS (10MIN CACHE)]\n")
+                        append(recentToolCallsStr)
+                    }
+                }.trim().takeIf { it.isNotEmpty() }
+            } else {
+                null
+            }
 
-            val graphMemory = if (enableGraphMemory.value) {
+            val graphMemory = if (needsTurnSnapshot && enableGraphMemory.value) {
                 graphMemoryManager.retrieveRelationalContext(
                     characterId = characterCard.id,
                     sessionId = sessionId,
-                    userInput = history.lastOrNull { it.sender == Sender.USER }?.content ?: ""
+                    userInput = requestUserMessage?.content ?: ""
                 )
             } else {
                 null
             }
 
-            // 全局世界观（World Info）关键词匹配：命中则拼块注入 system prompt 尾部
-            val worldInfo = buildWorldInfoBlock(history)
+            // bottom 世界书固化进回合快照；显式 top 模式保留原有前置语义，因此每次仍需重建。
+            val worldInfoPosition = if (worldInfoConfig.value.position == "top") "top" else "bottom"
+            val worldInfo = if (needsTurnSnapshot || worldInfoPosition == "top") {
+                buildWorldInfoBlock(history)
+            } else {
+                null
+            }
 
-            val systemPrompt = PromptAssembler.assembleSystemPrompt(
+            val promptParts = PromptAssembler.assemblePromptParts(
                 card = characterCard,
                 userName = userName.value,
-                useSystemTime = activeSession.value?.useSystemTime ?: false,
+                useSystemTime = sessionUsesSystemTime,
+                includeSystemTimeInSnapshot = false,
                 physicalContext = physicalContextData,
                 enableSearch = apiConfig.enableSearch,
                 coreMemories = activeSession.value?.coreMemories ?: emptyList(),
                 graphMemory = graphMemory,
                 worldInfo = worldInfo,
-                worldInfoPosition = if (worldInfoConfig.value.position == "top") "top" else "bottom",
+                worldInfoPosition = worldInfoPosition,
                 enableHaptic = toolAuthHaptic.value,
                 enableVoice = hasTtsCapability(),
                 enableAdultContent = enableAdultContent.value,
-                trustedCard = characterCard.isBuiltIn
+                trustedCard = characterCard.isBuiltIn,
+                snapshotTimeMillis = snapshotTime
             )
+
+            val turnSnapshot = existingTurnSnapshot ?: promptParts.turnContextSnapshot
+            var requestHistory = history
+            if (requestUserMessage != null && existingTurnSnapshot == null && turnSnapshot.isNotBlank()) {
+                requestHistory = history.map { message ->
+                    if (message.id == requestUserMessage.id) {
+                        message.copy(llmContextSnapshot = turnSnapshot)
+                    } else {
+                        message
+                    }
+                }
+                currentList = messages.value.map { message ->
+                    if (message.id == requestUserMessage.id) {
+                        message.copy(llmContextSnapshot = turnSnapshot)
+                    } else {
+                        message
+                    }
+                }
+                messages.value = currentList
+                persistLlmContextSnapshot(
+                    sessionId = sessionId,
+                    messageId = requestUserMessage.id,
+                    expectedTimestamp = requestUserMessage.timestamp,
+                    snapshot = turnSnapshot
+                )
+            }
 
             // 构建初始会话上下文（按目标模型能力决定图片/音频是否进入 payload）
             var conversation = buildLlmConversation(
-                systemPrompt, history,
+                promptParts.stableSystemPrompt, requestHistory,
                 includeVision = includeVision,
                 includeAudio = includeAudioInput,
-                compressedSummary = activeSession.value?.compressedSummary ?: ""
+                compressedSummary = activeSession.value?.compressedSummary ?: "",
+                includeMessageTimestamps = sessionUsesSystemTime,
+                allowPhysicalContext = sessionUsesSystemTime,
+                allowGraphContext = enableGraphMemory.value
             )
             var round = 0
             val maxRounds = 5
@@ -1851,48 +1902,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         history: List<Message>,
         includeVision: Boolean = true,
         includeAudio: Boolean = true,
-        compressedSummary: String = ""
-    ): List<LlmChatMessage> {
-        val list = mutableListOf<LlmChatMessage>()
-        if (!systemPrompt.isNullOrBlank()) {
-            list.add(LlmChatMessage(role = "system", content = systemPrompt))
-        }
-        // 长会话早期摘要：滑窗外的旧消息被压缩后，以系统级上下文注入，保持早期故事脉络
-        if (compressedSummary.isNotBlank()) {
-            list.add(
-                LlmChatMessage(
-                    role = "system",
-                    content = "[EARLY CONVERSATION SUMMARY / 会话早期摘要]\n$compressedSummary"
-                )
-            )
-        }
-        val filteredHistory = history.filter {
-            (it.content.isNotBlank() || !it.imageUrl.isNullOrBlank() || !it.audioUrl.isNullOrBlank()) && !it.content.startsWith("[错误]") && !it.content.startsWith("[Error]")
-        }
-        // 线性滑动窗口只取最新 20 条消息
-        val recentHistory = filteredHistory.takeLast(20)
-        recentHistory.forEachIndexed { index, msg ->
-            // 多模态能力过滤：模型不支持视觉/音频输入时，媒体降级为文本占位符（仅影响本次请求，不污染存储）
-            val effectiveImage = if (includeVision && !msg.imageUrl.isNullOrBlank()) msg.imageUrl else null
-            val effectiveAudio = if (includeAudio && index == recentHistory.lastIndex && !msg.audioUrl.isNullOrBlank()) msg.audioUrl else null
-            var textContent = msg.content ?: ""
-            if (effectiveImage == null && !msg.imageUrl.isNullOrBlank()) {
-                textContent = (if (textContent.isBlank()) "" else "$textContent\n") + "[图片]"
-            }
-            if (effectiveAudio == null && !msg.audioUrl.isNullOrBlank() && textContent.isBlank()) {
-                textContent = "[语音消息]"
-            }
-            list.add(
-                LlmChatMessage(
-                    role = if (msg.sender == Sender.USER) "user" else "assistant",
-                    content = textContent,
-                    imageUrl = effectiveImage,
-                    audioUrl = effectiveAudio
-                )
-            )
-        }
-        return list
-    }
+        compressedSummary: String = "",
+        includeMessageTimestamps: Boolean = false,
+        allowPhysicalContext: Boolean = true,
+        allowGraphContext: Boolean = true
+    ): List<LlmChatMessage> = LlmConversationBuilder.build(
+        systemPrompt = systemPrompt,
+        history = history,
+        includeVision = includeVision,
+        includeAudio = includeAudio,
+        compressedSummary = compressedSummary,
+        includeMessageTimestamps = includeMessageTimestamps,
+        allowPhysicalContext = allowPhysicalContext,
+        allowGraphContext = allowGraphContext
+    )
 
     private fun updateAiMessage(
         currentList: List<Message>,
@@ -1949,6 +1972,30 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 // 防止流式保存与切会话的竞态把旧会话消息覆盖到新会话界面
                 if (currentSessionId.value == sessionId) {
                     messages.value = finalMsgs
+                }
+            }
+        }
+    }
+
+    /** 只补写 provider 快照，不把尚未完成的 AI 占位气泡提前持久化。 */
+    private fun persistLlmContextSnapshot(
+        sessionId: String,
+        messageId: String,
+        expectedTimestamp: Long,
+        snapshot: String
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            storageManager.updateSessionMessages(sessionId) { diskMessages ->
+                diskMessages.map { message ->
+                    if (
+                        message.id == messageId &&
+                        message.timestamp == expectedTimestamp &&
+                        message.llmContextSnapshot.isNullOrBlank()
+                    ) {
+                        message.copy(llmContextSnapshot = snapshot)
+                    } else {
+                        message
+                    }
                 }
             }
         }
@@ -2051,32 +2098,55 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         messageCountBySession[sessionId] = sessionCount
         if (sessionCount >= triggerThreshold) {
             messageCountBySession[sessionId] = 0
-            
-            val workData = workDataOf("session_id" to sessionId)
+            if (!enqueueMemoryConsolidation(sessionId)) {
+                // 入队失败时保留“已达阈值”状态，让下一条消息可以重试，而不是静默再等一个完整周期。
+                messageCountBySession[sessionId] = triggerThreshold
+            }
+        }
+    }
+
+    /**
+     * 统一创建记忆整理任务，并把 WorkManager 的同步异常隔离在 UI 事件之外。
+     * 返回 false 表示任务未成功入队；终态监听使用 first，避免每次点击遗留永久 collect 协程。
+     */
+    private fun enqueueMemoryConsolidation(sessionId: String): Boolean {
+        if (sessionId.isBlank()) return false
+
+        return try {
             val workRequest = OneTimeWorkRequestBuilder<com.loyea.worker.MemoryConsolidationWorker>()
-                .setInputData(workData)
+                .setInputData(workDataOf("session_id" to sessionId))
                 .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
                 .build()
-                
-            WorkManager.getInstance(context).enqueueUniqueWork(
+
+            val workManager = WorkManager.getInstance(context)
+            workManager.enqueueUniqueWork(
                 "memory_consolidation_$sessionId",
                 ExistingWorkPolicy.REPLACE,
                 workRequest
             )
 
-            // 监听后台提取状态，完成后重新加载本地数据更新 UI 状态
             viewModelScope.launch(Dispatchers.Main) {
-                WorkManager.getInstance(context)
-                    .getWorkInfoByIdFlow(workRequest.id)
-                    .collect { workInfo ->
-                        if (workInfo != null && (workInfo.state == WorkInfo.State.SUCCEEDED || workInfo.state == WorkInfo.State.FAILED)) {
-                            val sessionsList = withContext(Dispatchers.IO) {
-                                storageManager.loadSessionList()
-                            }
-                            sessions.value = sessionsList
-                        }
+                try {
+                    workManager.getWorkInfoByIdFlow(workRequest.id).first { workInfo ->
+                        workInfo != null && workInfo.state in setOf(
+                            WorkInfo.State.SUCCEEDED,
+                            WorkInfo.State.FAILED,
+                            WorkInfo.State.CANCELLED
+                        )
                     }
+                    sessions.value = withContext(Dispatchers.IO) {
+                        storageManager.loadSessionList()
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e("ChatViewModel", "监听记忆总结任务失败: $sessionId", e)
+                }
             }
+            true
+        } catch (e: Exception) {
+            Log.e("ChatViewModel", "记忆总结任务入队失败: $sessionId", e)
+            false
         }
     }
 
@@ -2244,27 +2314,24 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     apiConfigList.value.find { it.id == memoryApiId } ?: activeApiConfig.value
                 }
 
-                val summaryPrompt = """
-                    你是一个长对话摘要器。请把以下早期对话压缩为一份简洁但保留关键情节的中文摘要（不超过 200 字），供 AI 在后续对话中保持上下文连续。
-                    要求：
-                    1. 保留：重要事件、人物关系变化、用户的承诺与约定、双方的重要约定与习惯、关键情感节点。
-                    2. 去除：寒暄、日常琐碎、重复内容。
-                    3. 直接输出摘要正文，严禁包含任何前言、后记或分析过程。
-
-                    ${if (existingSummary.isNotBlank()) "【已有早期摘要】（在此基础上整合新增内容，不要重复）:\n$existingSummary\n" else ""}
-                    【新增对话段落】：
-                    $segmentText
-                """.trimIndent()
+                val summaryInput = BackgroundPromptTemplates.compressionInput(existingSummary, segmentText)
 
                 val response = llmClient.sendChatCompletion(
                     config = targetConfig,
-                    systemPrompt = summaryPrompt,
-                    history = emptyList()
+                    systemPrompt = BackgroundPromptTemplates.CONVERSATION_COMPRESSION_SYSTEM,
+                    history = listOf(
+                        Message(
+                            id = "conversation-compression-input",
+                            content = summaryInput,
+                            sender = Sender.USER
+                        )
+                    )
                 )
                 // 压缩也计入会话用量（系统调用），但不更新上下文窗口展示值
                 persistSessionTokens(
                     sessionId,
-                    promptTokens = response.promptTokens ?: estimateTokens(summaryPrompt),
+                    promptTokens = response.promptTokens ?:
+                        estimateTokens(BackgroundPromptTemplates.CONVERSATION_COMPRESSION_SYSTEM) + estimateTokens(summaryInput),
                     completionTokens = response.completionTokens ?: estimateTokens(response.content),
                     lastContext = null
                 )
@@ -2289,35 +2356,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun triggerManualMemorySummary() {
-        val sessionId = currentSessionId.value
-        if (sessionId.isBlank()) return
-        
-        val workData = workDataOf("session_id" to sessionId)
-        val workRequest = OneTimeWorkRequestBuilder<com.loyea.worker.MemoryConsolidationWorker>()
-            .setInputData(workData)
-            .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
-            .build()
-            
-        WorkManager.getInstance(context).enqueueUniqueWork(
-            "memory_consolidation_$sessionId",
-            ExistingWorkPolicy.REPLACE,
-            workRequest
-        )
-
-        viewModelScope.launch(Dispatchers.Main) {
-            WorkManager.getInstance(context)
-                .getWorkInfoByIdFlow(workRequest.id)
-                .collect { workInfo ->
-                    if (workInfo != null && (workInfo.state == WorkInfo.State.SUCCEEDED || workInfo.state == WorkInfo.State.FAILED)) {
-                        val sessionsList = withContext(Dispatchers.IO) {
-                            storageManager.loadSessionList()
-                        }
-                        sessions.value = sessionsList
-                    }
-                }
-        }
-    }
+    fun triggerManualMemorySummary(sessionId: String): Boolean =
+        enqueueMemoryConsolidation(sessionId)
 
     fun updateBackgroundGreeting(enabled: Boolean) {
         enableBackgroundGreeting.value = enabled
@@ -2530,6 +2570,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         content = newContent,
                         // 编辑后分段序列失效，退回旧路径整段渲染
                         contentSegments = emptyList(),
+                        // 用户正文和发送时刻已改变，旧 provider 上下文快照必须失效并按新回合重建
+                        llmContextSnapshot = null,
+                        llmTimeZoneId = java.util.TimeZone.getDefault().id,
                         timestamp = System.currentTimeMillis()
                     )
                 } else {
@@ -3736,4 +3779,3 @@ private val DEFAULT_TEMPLATES_JSON = """
   ]
 }
 """.trimIndent()
-
