@@ -22,7 +22,7 @@
 
 生成类型已经从普通发送、重新生成和后台 quiet 入口贯通到插件输入与暂存回合；准备阶段会拒绝 spec 与 input 类型不一致的请求。继续、代发、swipe 等 UI/请求入口尚未存在，必须在对应入口落地后再宣称完整支持。
 
-World Info 的 Include Names 已同时影响扫描缓冲和聊天消息前缀，preset 可覆盖默认策略；命名 outlet 通过 `{{outlet::Name}}` 按引用展开。Author’s Note 的独立文本、频率和深度尚未接入，不能用 CharacterBook 的 `an_top/an_bottom` 条目冒充。
+World Info 的 Include Names 已同时影响扫描缓冲和聊天消息前缀，preset 可覆盖默认策略；命名 outlet 通过 `{{outlet::Name}}` 按引用展开。Author’s Note 已支持会话级独立文本、`After Scenario`/`In-chat`、深度和频率，按用户输入回合计数并在请求启动时冻结；默认空文本不注入，频率为 `0` 时禁用，不能用 CharacterBook 的 `an_top/an_bottom` 条目冒充。
 
 ## 当前模块与依赖方向
 

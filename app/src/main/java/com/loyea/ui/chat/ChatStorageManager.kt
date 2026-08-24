@@ -58,7 +58,12 @@ data class ChatSession(
     val completionTokens: Long = 0, // 本会话累计 completion token
     val lastContextTokens: Long = 0, // 最近一次主聊天流请求的上下文 token（仅主聊天流更新，用于上下文窗口展示）
     val promptCacheHitTokens: Long = 0, // 本会话累计 DeepSeek 前缀缓存命中 token
-    val promptCacheMissTokens: Long = 0 // 本会话累计 DeepSeek 前缀缓存未命中 token
+    val promptCacheMissTokens: Long = 0, // 本会话累计 DeepSeek 前缀缓存未命中 token
+    // SillyTavern chat-specific Author's Note; defaults are intentionally inert.
+    val authorNote: String = "",
+    val authorNotePosition: String = "in_chat",
+    val authorNoteDepth: Int = 4,
+    val authorNoteFrequency: Int = 1
 )
 
 enum class BackgroundGreetingCommitStatus {

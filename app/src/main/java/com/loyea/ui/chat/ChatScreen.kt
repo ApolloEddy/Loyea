@@ -35,6 +35,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -59,6 +60,7 @@ import androidx.compose.ui.draw.paint
 import androidx.compose.ui.layout.ContentScale
 import com.loyea.ui.chat.PromptAssembler
 import com.loyea.ui.chat.WorldInfoScope
+import com.loyea.plugins.tavern.core.TavernAuthorNote
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -119,6 +121,7 @@ fun ChatScreen(
     var inputText by remember { mutableStateOf(TextFieldValue("")) }
     var showPersonaSelector by remember { mutableStateOf(false) }
     var showWorldInfoEditor by remember { mutableStateOf(false) }
+    var showAuthorNoteEditor by remember { mutableStateOf(false) }
     // 世界书编辑器覆盖层打开时，系统返回键关闭编辑器（顶栏返回箭头在 WorldInfoSettingsLayout 内）
     BackHandler(enabled = showWorldInfoEditor) { showWorldInfoEditor = false }
     var lastSessionId by remember { mutableStateOf(currentSessionId) }
@@ -233,6 +236,14 @@ fun ChatScreen(
                         Icon(
                             imageVector = Icons.Default.MenuBook,
                             contentDescription = if (isEn) "Session World Info" else "会话世界书",
+                            tint = MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+                    IconButton(onClick = { showAuthorNoteEditor = true }) {
+                        Icon(
+                            imageVector = Icons.Default.EditNote,
+                            contentDescription = if (isEn) "Author's Note" else "作者注释",
                             tint = MaterialTheme.colorScheme.onBackground,
                             modifier = Modifier.size(28.dp)
                         )
@@ -744,6 +755,18 @@ fun ChatScreen(
                 }
             }
         }
+
+        if (showAuthorNoteEditor) {
+            AuthorNoteEditorDialog(
+                session = viewModel?.activeSession?.value,
+                appLanguage = appLanguage,
+                onDismiss = { showAuthorNoteEditor = false },
+                onSave = { text, position, depth, frequency ->
+                    viewModel?.updateCurrentAuthorNote(text, position, depth, frequency)
+                    showAuthorNoteEditor = false
+                }
+            )
+        }
     } // 闭合 Scaffold
     
     if (viewModel?.isRecording?.value == true) {
@@ -754,6 +777,129 @@ fun ChatScreen(
     }
 } // 闭合 Box
 } // 闭合 ChatScreen
+
+@Composable
+private fun AuthorNoteEditorDialog(
+    session: ChatSession?,
+    appLanguage: String,
+    onDismiss: () -> Unit,
+    onSave: (String, String, Int, Int) -> Unit
+) {
+    val isEn = appLanguage == "en"
+    var noteText by remember(session?.id) { mutableStateOf(session?.authorNote.orEmpty()) }
+    var position by remember(session?.id) {
+        mutableStateOf(session?.authorNotePosition ?: TavernAuthorNote.POSITION_IN_CHAT)
+    }
+    var depthInput by remember(session?.id) { mutableStateOf((session?.authorNoteDepth ?: 4).toString()) }
+    var frequencyInput by remember(session?.id) { mutableStateOf((session?.authorNoteFrequency ?: 1).toString()) }
+    var positionMenuExpanded by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = { if (!saving) onDismiss() },
+        title = { Text(if (isEn) "Author's Note" else "作者注释") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = if (isEn) {
+                        "Chat-specific note. Frequency 0 disables it; depth 0 is the end of chat history."
+                    } else {
+                        "当前会话专属注释。频率 0 表示不插入；深度 0 表示放在聊天历史末尾。"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = noteText,
+                    onValueChange = { noteText = it.take(16_000) },
+                    label = { Text(if (isEn) "Note text" else "注释内容") },
+                    minLines = 4,
+                    maxLines = 8,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !saving
+                )
+                Box {
+                    OutlinedTextField(
+                        value = if (position == TavernAuthorNote.POSITION_AFTER_SCENARIO) {
+                            if (isEn) "After Scenario" else "场景之后"
+                        } else {
+                            if (isEn) "In chat" else "插入聊天"
+                        },
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text(if (isEn) "Placement" else "插入位置") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(enabled = !saving) { positionMenuExpanded = true },
+                        enabled = !saving
+                    )
+                    DropdownMenu(
+                        expanded = positionMenuExpanded,
+                        onDismissRequest = { positionMenuExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(if (isEn) "In chat" else "插入聊天") },
+                            onClick = {
+                                position = TavernAuthorNote.POSITION_IN_CHAT
+                                positionMenuExpanded = false
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (isEn) "After Scenario" else "场景之后") },
+                            onClick = {
+                                position = TavernAuthorNote.POSITION_AFTER_SCENARIO
+                                positionMenuExpanded = false
+                            }
+                        )
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = depthInput,
+                        onValueChange = { depthInput = it.filter(Char::isDigit).take(4) },
+                        label = { Text(if (isEn) "Depth" else "深度") },
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = KeyboardType.Number
+                        ),
+                        singleLine = true,
+                        enabled = !saving,
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = frequencyInput,
+                        onValueChange = { frequencyInput = it.filter(Char::isDigit).take(4) },
+                        label = { Text(if (isEn) "Frequency" else "频率") },
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = KeyboardType.Number
+                        ),
+                        singleLine = true,
+                        enabled = !saving,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !saving,
+                onClick = {
+                    saving = true
+                    onSave(
+                        noteText,
+                        position,
+                        depthInput.toIntOrNull()?.coerceAtLeast(0) ?: 4,
+                        frequencyInput.toIntOrNull()?.coerceAtLeast(0) ?: 1
+                    )
+                }
+            ) { Text(if (isEn) "Save" else "保存") }
+        },
+        dismissButton = {
+            TextButton(enabled = !saving, onClick = onDismiss) {
+                Text(if (isEn) "Cancel" else "取消")
+            }
+        }
+    )
+}
 
 // 1:1 复刻 Claude 顶部模型选择胶囊 (增强角色卡头像及双行文本解耦设计)
 @Composable

@@ -1539,6 +1539,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 turnContextText = existingTurnSnapshot ?: promptParts.turnContextSnapshot,
                 postHistoryText = promptParts.postHistoryInstructions
             )
+            val userTurnIndex = history.count { it.sender == Sender.USER }.toLong()
             val tavernTurnSpec = LegacyTavernTurnAdapter.spec(
                 card = characterCard,
                 userName = userName.value,
@@ -1547,7 +1548,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 worldInfoAtDepth = promptParts.worldInfoAtDepth,
                 generation = presetGeneration ?: GenerationPatch(),
                 prompt = requestedPrompt,
-                generationType = generationType
+                generationType = generationType,
+                authorNote = activeTavernAuthorNote(characterCard, userTurnIndex),
+                userTurnIndex = userTurnIndex
             )
             preparedTurn = if (personaRef.isNative) {
                 TavernPreparedTurnFactory.prepare(tavernTurnSpec)
@@ -2486,6 +2489,42 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Persists the chat-specific SillyTavern Author's Note settings for the active session. */
+    fun updateCurrentAuthorNote(
+        text: String,
+        position: String = TavernAuthorNote.POSITION_IN_CHAT,
+        depth: Int = 4,
+        frequency: Int = 1
+    ) {
+        val sessionId = currentSessionId.value
+        if (sessionId.isBlank()) return
+        val safePosition = position.trim().lowercase().ifBlank { TavernAuthorNote.POSITION_IN_CHAT }
+        val safeDepth = depth.coerceAtLeast(0)
+        val safeFrequency = frequency.coerceAtLeast(0)
+        viewModelScope.launch(Dispatchers.IO) {
+            var updatedList: List<ChatSession> = emptyList()
+            storageManager.updateSessionList { diskSessions ->
+                val updated = diskSessions.map { session ->
+                    if (session.id == sessionId) {
+                        session.copy(
+                            authorNote = text,
+                            authorNotePosition = safePosition,
+                            authorNoteDepth = safeDepth,
+                            authorNoteFrequency = safeFrequency
+                        )
+                    } else {
+                        session
+                    }
+                }
+                updatedList = updated
+                updated
+            }
+            withContext(Dispatchers.Main) {
+                sessions.value = updatedList
+            }
+        }
+    }
+
     fun saveMcpConfigs(newList: List<McpServerConfig>) {
         mcpConfigList.value = newList
         mcpManager.updateConfigs(newList)
@@ -2880,6 +2919,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             scripts = cardRegexScripts(card),
             context = TavernCardRegexAdapter.macroContext(card, userName.value)
         )
+    }
+
+    private fun activeTavernAuthorNote(card: CharacterCard, userTurnIndex: Long): TavernAuthorNote? {
+        val session = activeSession.value ?: return null
+        val raw = session.authorNote.trim()
+        if (raw.isBlank()) return null
+        val rendered = PromptAssembler.formatMessageContent(raw, card, userName.value).trim()
+        if (rendered.isBlank()) return null
+        return runCatching {
+            TavernAuthorNote(
+                text = rendered,
+                position = session.authorNotePosition,
+                depth = session.authorNoteDepth.coerceAtLeast(0),
+                frequency = session.authorNoteFrequency.coerceAtLeast(0)
+            )
+        }.getOrNull()?.takeIf { it.shouldInsert(userTurnIndex) }
     }
 
     /**

@@ -5,6 +5,7 @@ import com.loyea.context.core.*
 import com.loyea.plugin.api.ChatRole
 import com.loyea.plugin.api.ConversationText
 import com.loyea.plugin.api.GenerationPatch
+import com.loyea.plugin.api.InsertionAnchor
 import com.loyea.plugin.api.PersonaPluginRuntime
 import com.loyea.plugin.api.PersonaProjection
 import com.loyea.plugin.api.PersonaRef
@@ -123,6 +124,45 @@ class TavernPluginRuntimeTest {
         assertThrows(IllegalStateException::class.java) {
             runSuspend { runtime.resolve(PersonaRef.plugin(TavernPluginDefinition.ID, "card-1")) }
         }
+    }
+
+    @Test
+    fun authorNoteHonorsFrequencyPlacementAndDepth() {
+        val inChat = TavernPreparedTurnFactory.prepare(
+            TavernTurnSpec(
+                authorNote = TavernAuthorNote(
+                    text = "stay tense",
+                    position = "in_chat",
+                    depth = 4,
+                    frequency = 4
+                ),
+                userTurnIndex = 4
+            )
+        )
+        assertEquals(1, inChat.plan.insertions.size)
+        assertEquals(InsertionAnchor.AT_DEPTH_FROM_LATEST, inChat.plan.insertions.single().anchor)
+        assertEquals(4, inChat.plan.insertions.single().depthFromLatest)
+        assertEquals("[AUTHOR'S NOTE / 作者注释]\nstay tense", inChat.plan.insertions.single().content)
+
+        val afterScenario = TavernPreparedTurnFactory.prepare(
+            TavernTurnSpec(
+                authorNote = TavernAuthorNote(
+                    text = "use concise prose",
+                    position = "after_scenario",
+                    frequency = 1
+                ),
+                userTurnIndex = 1
+            )
+        )
+        assertEquals(InsertionAnchor.AFTER_SYSTEM_BEFORE_SUMMARY, afterScenario.plan.insertions.single().anchor)
+
+        val skipped = TavernPreparedTurnFactory.prepare(
+            TavernTurnSpec(
+                authorNote = TavernAuthorNote("skip", frequency = 4),
+                userTurnIndex = 3
+            )
+        )
+        assertEquals(0, skipped.plan.insertions.size)
     }
 
     private class FakeRepository(

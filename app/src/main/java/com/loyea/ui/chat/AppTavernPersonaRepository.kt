@@ -169,6 +169,8 @@ class AppTavernPersonaRepository(
             spec.macroContext.characterName.bytes() +
             spec.macroContext.description.bytes() +
             spec.macroContext.userName.bytes() +
+            spec.authorNote?.text.bytes() +
+            spec.authorNote?.position.bytes() +
             spec.generation.modelHint.bytes()
         total += spec.generation.stopStrings.sumOf { it.bytes() }
         total += spec.presetMessages.sumOf { prompt ->

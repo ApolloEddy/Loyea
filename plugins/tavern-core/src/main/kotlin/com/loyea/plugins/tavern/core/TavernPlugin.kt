@@ -64,10 +64,13 @@ class TavernTurnSpec(
     regexScripts: Collection<TavernRegexScript> = emptyList(),
     val macroContext: TavernMacroContext = TavernMacroContext(),
     val opaqueSnapshot: String? = null,
-    val generationType: String = "normal"
+    val generationType: String = "normal",
+    val authorNote: TavernAuthorNote? = null,
+    val userTurnIndex: Long = 0L
 ) {
     init {
         require(generationType.isNotBlank()) { "Tavern generation type must not be blank" }
+        require(userTurnIndex >= 0L) { "Tavern user turn index must not be negative" }
     }
 
     val presetMessages: List<TavernPresetPrompt> = presetMessages.map { it.copy() }
@@ -97,7 +100,9 @@ object TavernPreparedTurnFactory {
             regexScripts = spec.regexScripts,
             macroContext = spec.macroContext.copy(),
             opaqueSnapshot = spec.opaqueSnapshot,
-            generationType = spec.generationType
+            generationType = spec.generationType,
+            authorNote = spec.authorNote?.copy(),
+            userTurnIndex = spec.userTurnIndex
         )
         val insertions = buildList {
             frozenSpec.presetMessages.forEachIndexed { index, prompt ->
@@ -113,6 +118,20 @@ object TavernPreparedTurnFactory {
                 }
             }
             var order = frozenSpec.presetMessages.size
+            frozenSpec.authorNote
+                ?.takeIf { it.shouldInsert(frozenSpec.userTurnIndex) }
+                ?.let { note ->
+                    if (note.normalizedPosition() == TavernAuthorNote.POSITION_AFTER_SCENARIO) {
+                        add(
+                            ConversationInsertion(
+                                anchor = InsertionAnchor.AFTER_SYSTEM_BEFORE_SUMMARY,
+                                role = ChatRole.SYSTEM,
+                                content = "[AUTHOR'S NOTE / 作者注释]\n${note.text.trim()}",
+                                order = order++
+                            )
+                        )
+                    }
+                }
             frozenSpec.worldInfoAtDepth.forEach { (depth, blocks) ->
                 if (depth >= 0) {
                     blocks.forEach { block ->
@@ -130,6 +149,20 @@ object TavernPreparedTurnFactory {
                     }
                 }
             }
+            frozenSpec.authorNote
+                ?.takeIf { it.shouldInsert(frozenSpec.userTurnIndex) }
+                ?.takeIf { it.normalizedPosition() == TavernAuthorNote.POSITION_IN_CHAT }
+                ?.let { note ->
+                    add(
+                        ConversationInsertion(
+                            anchor = InsertionAnchor.AT_DEPTH_FROM_LATEST,
+                            role = ChatRole.SYSTEM,
+                            content = "[AUTHOR'S NOTE / 作者注释]\n${note.text.trim()}",
+                            depthFromLatest = note.depth,
+                            order = order++
+                        )
+                    )
+                }
         }
         val plan = PluginTurnPlan(
             prompt = frozenSpec.prompt,
