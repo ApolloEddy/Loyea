@@ -395,10 +395,9 @@ object PromptAssembler {
             if (worldInfoPosition != "top") appendWorldInfoBlock(contextSb, effectiveWorldInfo)
         } else {
             if (worldInfoPosition != "top") appendWorldInfoBlock(contextSb, legacyWorldInfo)
-            effectiveWorldInfoRender.outlets.toSortedMap().forEach { (outlet, block) ->
-                contextSb.append("[WORLD INFO OUTLET: $outlet]\n")
-                contextSb.append(block).append("\n\n")
-            }
+            // ST outlet entries are named injection targets. They are rendered only when
+            // a prompt contains {{outlet::Name}}, rather than being appended as an
+            // unconditional second world-info block.
         }
 
         val rawPrompt = sb.toString().trimEnd()
@@ -418,9 +417,9 @@ object PromptAssembler {
             effectivePreset?.explicitPostHistoryInstructions().orEmpty()
         ).filter { it.isNotBlank() }.joinToString("\n\n")
         return PromptParts(
-            stableSystemPrompt = replaceMacros(rawPrompt, card, userName),
-            turnContextSnapshot = replaceMacros(wrappedContext, card, userName),
-            postHistoryInstructions = replaceMacros(postHistory, card, userName),
+            stableSystemPrompt = replaceMacros(rawPrompt, card, userName, effectiveWorldInfoRender?.outlets.orEmpty()),
+            turnContextSnapshot = replaceMacros(wrappedContext, card, userName, effectiveWorldInfoRender?.outlets.orEmpty()),
+            postHistoryInstructions = replaceMacros(postHistory, card, userName, effectiveWorldInfoRender?.outlets.orEmpty()),
             worldInfoAtDepth = effectiveWorldInfoRender?.atDepthBlocks.orEmpty(),
             presetMessages = presetPrompts.filterNot { it.role.equals("system", ignoreCase = true) }
         )
@@ -491,7 +490,12 @@ object PromptAssembler {
     /**
      * 替换酒馆经典 Macros
      */
-    private fun replaceMacros(text: String, card: CharacterCard, userName: String): String {
+    private fun replaceMacros(
+        text: String,
+        card: CharacterCard,
+        userName: String,
+        outlets: Map<String, String> = emptyMap()
+    ): String {
         if (text.isBlank()) return text
         val safeUser = if (userName.isBlank()) "User" else userName
         val macroChar = card.nickname?.takeIf { it.isNotBlank() } ?: card.name
@@ -524,6 +528,14 @@ object PromptAssembler {
             // 兼容可能被多重花括号包裹的情形，如 {{{char}}} 或 {{{user}}}
             .replace("{{{char}}}", safeChar, ignoreCase = true)
             .replace("{{{user}}}", safeUser, ignoreCase = true)
+
+        if (outlets.isNotEmpty()) {
+            val normalizedOutlets = outlets.mapKeys { (name, _) -> name.trim().lowercase() }
+            result = Regex("\\{\\{outlet::\\s*([^}]+?)\\s*}}", RegexOption.IGNORE_CASE).replace(result) { match ->
+                val requested = match.groupValues[1].trim().lowercase()
+                normalizedOutlets[requested].orEmpty()
+            }
+        }
 
         return result
     }

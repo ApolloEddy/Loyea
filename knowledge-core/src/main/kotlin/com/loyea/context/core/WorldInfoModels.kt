@@ -32,7 +32,9 @@ data class WorldInfoConfig(
     val caseSensitive: Boolean = false,
     val matchWholeWords: Boolean = false,
     val useGroupScoring: Boolean = false,
-    val budgetCap: Long = 0
+    val budgetCap: Long = 0,
+    /** SillyTavern scans chat with participant name prefixes by default. */
+    val includeNames: Boolean = true
 )
 
 /** Full SillyTavern-compatible world-info entry owned by the Tavern plugin. */

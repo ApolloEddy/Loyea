@@ -1164,6 +1164,7 @@ private fun WorldInfoConfigDialog(
     var caseSensitiveInput by remember { mutableStateOf(config.caseSensitive) }
     var matchWholeWordsInput by remember { mutableStateOf(config.matchWholeWords) }
     var useGroupScoringInput by remember { mutableStateOf(config.useGroupScoring) }
+    var includeNamesInput by remember { mutableStateOf(config.includeNames) }
 
     val positionOptions = listOf(
         "bottom" to (if (isEn) "Bottom (end of prompt, keeps prefix cache)" else "底部（Prompt 最尾，保持前缀缓存）"),
@@ -1267,6 +1268,12 @@ private fun WorldInfoConfigDialog(
                     label = if (isEn) "Use inclusion-group scoring" else "启用分组关键词命中评分",
                     isEn = isEn
                 )
+                SwitchRow(
+                    checked = includeNamesInput,
+                    onCheckedChange = { includeNamesInput = it },
+                    label = if (isEn) "Include participant names in World Info scan" else "世界书扫描包含参与者名称",
+                    isEn = isEn
+                )
             }
         },
         confirmButton = {
@@ -1286,7 +1293,8 @@ private fun WorldInfoConfigDialog(
                             caseSensitive = caseSensitiveInput,
                             matchWholeWords = matchWholeWordsInput,
                             useGroupScoring = useGroupScoringInput,
-                            budgetCap = budgetCapInput.toLongOrNull()?.coerceAtLeast(0) ?: config.budgetCap
+                            budgetCap = budgetCapInput.toLongOrNull()?.coerceAtLeast(0) ?: config.budgetCap,
+                            includeNames = includeNamesInput
                         )
                     )
                 }

@@ -704,7 +704,8 @@ class ChatStorageManagerTest {
             tokenBudget = 512,
             recursionDepthCap = 1,
             allowRecursion = false,
-            emitGroupHeaders = true
+            emitGroupHeaders = true,
+            includeNames = false
         )
         assertEquals(cfg, WorldInfoConfigStorage.fromJson(WorldInfoConfigStorage.toJson(cfg)))
     }
@@ -723,5 +724,6 @@ class ChatStorageManagerTest {
         assertEquals(WorldInfoInsertionOrder.ORDER, partial.insertionOrderMode)
         assertEquals(2048L, partial.tokenBudget)
         assertEquals(true, partial.allowRecursion)
+        assertEquals(true, partial.includeNames)
     }
 }

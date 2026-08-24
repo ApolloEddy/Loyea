@@ -42,6 +42,8 @@ data class TavernPromptPreset(
     val repetitionPenalty: Double? = null,
     val stopStrings: List<String> = emptyList(),
     val wiFormat: String? = null,
+    /** Prompt Manager Include Names: null keeps the host/default strategy. */
+    val includeNames: Boolean? = null,
     val scenarioFormat: String? = null,
     val personalityFormat: String? = null,
     val prompts: List<TavernPresetPrompt> = emptyList(),
@@ -138,6 +140,18 @@ object TavernPresetCodec {
             }
         }
 
+        fun includeNames(): Boolean? {
+            obj["include_names"]?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.let { return it.asBoolean }
+            obj["includeNames"]?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.let { return it.asBoolean }
+            val behavior = string("name_behavior", "nameBehavior", "include_names_behavior")?.lowercase()
+                ?: return null
+            return when (behavior) {
+                "never", "off", "disabled", "0" -> false
+                "always", "on", "enabled", "1", "groups_and_past_personas", "groups" -> true
+                else -> null
+            }
+        }
+
         val promptElements = when (val value = obj["prompts"]) {
             null -> emptyList()
             else -> when {
@@ -180,6 +194,7 @@ object TavernPresetCodec {
             repetitionPenalty = double("repetition_penalty", "repetitionPenalty", "rep_pen"),
             stopStrings = strings("stop", "stop_strings", "stopStrings"),
             wiFormat = string("wi_format", "wiFormat"),
+            includeNames = includeNames(),
             scenarioFormat = string("scenario_format", "scenarioFormat"),
             personalityFormat = string("personality_format", "personalityFormat"),
             prompts = prompts,

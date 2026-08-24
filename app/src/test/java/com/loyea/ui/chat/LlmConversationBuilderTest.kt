@@ -94,6 +94,26 @@ class LlmConversationBuilderTest {
     }
 
     @Test
+    fun includeNamesPrefixesPromptHistoryWithoutChangingGenericDefault() {
+        val history = listOf(
+            Message("u", "hello", Sender.USER),
+            Message("a", "hi", Sender.AI)
+        )
+        val unnamed = LlmConversationBuilder.build("stable", history)
+        val named = LlmConversationBuilder.build(
+            "stable",
+            history,
+            includeNames = true,
+            userName = "Eddy",
+            characterName = "Lya"
+        )
+
+        assertEquals("hello", unnamed[1].content)
+        assertEquals("Eddy: hello", named[1].content)
+        assertEquals("Lya: hi", named[2].content)
+    }
+
+    @Test
     fun disablingPhysicalPerceptionStripsOldPhysicalSnapshotButKeepsWorldContext() {
         val message = Message(
             id = "u",

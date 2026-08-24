@@ -238,7 +238,8 @@ object TavernWorldBookCodec {
             matchWholeWords = root.booleanOrNull("match_whole_words", "matchWholeWords") ?: false,
             useGroupScoring = root.booleanOrNull("use_group_scoring", "useGroupScoring") ?: false,
             budgetCap = (root.intOrNull("budget_cap", "budgetCap") ?: 0).toLong(),
-            emitGroupHeaders = root.booleanOrNull("loyea_emit_group_headers", "emitGroupHeaders") ?: false
+            emitGroupHeaders = root.booleanOrNull("loyea_emit_group_headers", "emitGroupHeaders") ?: false,
+            includeNames = root.booleanOrNull("include_names", "includeNames") ?: true
         )
         WorldInfoBook(
             entries = entries,
@@ -265,6 +266,7 @@ object TavernWorldBookCodec {
             addProperty("match_whole_words", book.config.matchWholeWords)
             addProperty("use_group_scoring", book.config.useGroupScoring)
             addProperty("budget_cap", book.config.budgetCap)
+            addProperty("include_names", book.config.includeNames)
             addProperty("loyea_insertion_order_mode", book.config.insertionOrderMode.name)
             addProperty("loyea_emit_group_headers", book.config.emitGroupHeaders)
             add("extensions", parseObjectOrNull(book.extensionsJson) ?: JsonObject())

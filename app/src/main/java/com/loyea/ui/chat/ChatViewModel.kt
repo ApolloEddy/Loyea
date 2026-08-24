@@ -1595,6 +1595,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 pluginPrompt.stablePersonaText, requestHistory,
                 includeVision = includeVision,
                 includeAudio = includeAudioInput,
+                includeNames = boundPreset?.includeNames ?: resolveWorldInfoBook(characterCard).config.includeNames,
+                userName = userName.value,
+                characterName = characterCard.nickname?.takeIf { it.isNotBlank() } ?: characterCard.name,
                 compressedSummary = activeSession.value?.compressedSummary ?: "",
                 postHistoryInstructions = pluginPrompt.postHistoryText,
                 preparedTurn = preparedTurn,
@@ -2335,6 +2338,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         history: List<Message>,
         includeVision: Boolean = true,
         includeAudio: Boolean = true,
+        includeNames: Boolean = false,
+        userName: String = "User",
+        characterName: String = "Character",
         compressedSummary: String = "",
         postHistoryInstructions: String = "",
         preparedTurn: PreparedPersonaTurn? = null,
@@ -2346,6 +2352,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         history = history,
         includeVision = includeVision,
         includeAudio = includeAudio,
+        includeNames = includeNames,
+        userName = userName,
+        characterName = characterName,
         compressedSummary = compressedSummary,
         postHistoryInstructions = postHistoryInstructions,
         preparedTurn = preparedTurn,
@@ -2792,7 +2801,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             recursionDepthCap = configs.maxOfOrNull { it.recursionDepthCap } ?: base.config.recursionDepthCap,
             caseSensitive = configs.any { it.caseSensitive },
             matchWholeWords = configs.any { it.matchWholeWords },
-            useGroupScoring = configs.any { it.useGroupScoring }
+            useGroupScoring = configs.any { it.useGroupScoring },
+            includeNames = configs.all { it.includeNames }
         )
         return WorldInfoBook(
             entries = mergedEntries,
@@ -2826,9 +2836,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             else -> WorldInfoRuntimeState(bookSignature = bookSignature)
         }
         val lastUserMessage = history.lastOrNull { it.sender == Sender.USER }
+        val includeNames = book.config.includeNames
+        val safeUserName = userName.value.ifBlank { "User" }
+        val safeCharacterName = card.nickname?.takeIf { it.isNotBlank() } ?: card.name.ifBlank { "Character" }
+        val scanHistory = history.map { message ->
+            if (!includeNames) {
+                message.content
+            } else {
+                val speaker = if (message.sender == Sender.USER) safeUserName else safeCharacterName
+                "$speaker: ${message.content}"
+            }
+        }
         val render = WorldInfoMatcher.worldInfoRenderFor(
             entries = book.entries,
-            historyContents = history.map { it.content },
+            historyContents = scanHistory,
             userName = userName.value,
             systemPrompt = card.systemPrompt,
             config = book.config,

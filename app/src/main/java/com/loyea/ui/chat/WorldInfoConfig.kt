@@ -29,6 +29,7 @@ object WorldInfoConfigStorage {
     private const val K_WHOLE = "world_info_match_whole_words"
     private const val K_GROUP_SCORING = "world_info_group_scoring"
     private const val K_BUDGET_CAP = "world_info_budget_cap"
+    private const val K_INCLUDE_NAMES = "world_info_include_names"
 
     fun load(prefs: SharedPreferences): WorldInfoConfig = WorldInfoConfig(
         scanDepth = prefs.getInt(K_SCAN, 10),
@@ -46,7 +47,8 @@ object WorldInfoConfigStorage {
         caseSensitive = prefs.getBoolean(K_CASE, false),
         matchWholeWords = prefs.getBoolean(K_WHOLE, false),
         useGroupScoring = prefs.getBoolean(K_GROUP_SCORING, false),
-        budgetCap = prefs.getLong(K_BUDGET_CAP, 0)
+        budgetCap = prefs.getLong(K_BUDGET_CAP, 0),
+        includeNames = prefs.getBoolean(K_INCLUDE_NAMES, true)
     )
 
     fun save(prefs: SharedPreferences, config: WorldInfoConfig) {
@@ -62,6 +64,7 @@ object WorldInfoConfigStorage {
             .putBoolean(K_WHOLE, config.matchWholeWords)
             .putBoolean(K_GROUP_SCORING, config.useGroupScoring)
             .putLong(K_BUDGET_CAP, config.budgetCap)
+            .putBoolean(K_INCLUDE_NAMES, config.includeNames)
             .apply()
     }
 
@@ -83,6 +86,7 @@ object WorldInfoConfigStorage {
         obj.addProperty("matchWholeWords", config.matchWholeWords)
         obj.addProperty("useGroupScoring", config.useGroupScoring)
         obj.addProperty("budgetCap", config.budgetCap)
+        obj.addProperty("includeNames", config.includeNames)
         return obj.toString()
     }
 
@@ -107,7 +111,8 @@ object WorldInfoConfigStorage {
                 caseSensitive = if (obj.has("caseSensitive")) obj.get("caseSensitive").asBoolean else false,
                 matchWholeWords = if (obj.has("matchWholeWords")) obj.get("matchWholeWords").asBoolean else false,
                 useGroupScoring = if (obj.has("useGroupScoring")) obj.get("useGroupScoring").asBoolean else false,
-                budgetCap = if (obj.has("budgetCap")) obj.get("budgetCap").asLong else 0
+                budgetCap = if (obj.has("budgetCap")) obj.get("budgetCap").asLong else 0,
+                includeNames = if (obj.has("includeNames")) obj.get("includeNames").asBoolean else true
             )
         } catch (e: Exception) {
             WorldInfoConfig()

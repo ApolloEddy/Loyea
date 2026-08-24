@@ -20,6 +20,9 @@ object LlmConversationBuilder {
         history: List<Message>,
         includeVision: Boolean = true,
         includeAudio: Boolean = true,
+        includeNames: Boolean = false,
+        userName: String = "User",
+        characterName: String = "Character",
         compressedSummary: String = "",
         postHistoryInstructions: String = "",
         preparedTurn: PreparedPersonaTurn? = null,
@@ -103,6 +106,11 @@ object LlmConversationBuilder {
                         append(safeSnapshot)
                         append("\n\n[USER MESSAGE / 用户消息]\n")
                     }
+                }
+                if (includeNames) {
+                    val fallback = if (message.sender == Sender.USER) "User" else "Character"
+                    append((if (message.sender == Sender.USER) userName else characterName).ifBlank { fallback })
+                    append(": ")
                 }
                 append(textContent)
             }

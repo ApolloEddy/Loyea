@@ -82,7 +82,8 @@ object TavernCharacterBookAdapter {
             config = WorldInfoConfig(
                 scanDepth = book.scanDepth?.coerceAtLeast(0) ?: 10,
                 tokenBudget = book.tokenBudget?.toLong()?.coerceAtLeast(0) ?: 2048,
-                allowRecursion = book.recursiveScanning ?: true
+                allowRecursion = book.recursiveScanning ?: true,
+                includeNames = book.includeNames ?: true
             ),
             name = book.name.orEmpty(),
             description = book.description.orEmpty(),

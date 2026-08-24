@@ -65,6 +65,7 @@ data class CharacterBookDocument(
     val scanDepth: Int? = null,
     val tokenBudget: Int? = null,
     val recursiveScanning: Boolean? = null,
+    val includeNames: Boolean? = null,
     val extensionsJson: String = "{}",
     val entries: List<CharacterBookEntryDocument> = emptyList(),
     val rawJson: String? = null
@@ -382,6 +383,8 @@ object TavernCardCodec {
             tokenBudget = book.intOrNull("token_budget") ?: book.intOrNull("tokenBudget"),
             recursiveScanning = book.booleanOrNull("recursive_scanning")
                 ?: book.booleanOrNull("recursiveScanning"),
+            includeNames = book.booleanOrNull("include_names")
+                ?: book.booleanOrNull("includeNames"),
             extensionsJson = book.objectOrNull("extensions")?.toString() ?: "{}",
             entries = entries,
             rawJson = book.toString()
@@ -575,6 +578,7 @@ object TavernCardCodec {
         book.scanDepth?.let { result.addProperty("scan_depth", it) }
         book.tokenBudget?.let { result.addProperty("token_budget", it) }
         book.recursiveScanning?.let { result.addProperty("recursive_scanning", it) }
+        book.includeNames?.let { result.addProperty("include_names", it) }
         result.add("extensions", parseObjectOrNull(book.extensionsJson) ?: JsonObject())
         result.add("entries", book.entries.map { entryToJson(it) }.let { JsonArray().also { array -> it.forEach(array::add) } })
         return result

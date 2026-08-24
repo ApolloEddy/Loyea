@@ -14,6 +14,7 @@ class TavernPresetCoreTest {
               "top_p": 0.8,
               "openai_max_context": 8192,
               "openai_max_tokens": 512,
+              "name_behavior": "never",
               "stop": ["STOP", "END"],
               "post_history_instructions": "Stay in character.",
               "prompts": [
@@ -37,6 +38,7 @@ class TavernPresetCoreTest {
         assertEquals(listOf("world_rule", "main", "post_history"), preset.orderedPrompts().map { it.identifier })
         assertEquals("Stay in character.\n\nPOST SLOT", preset.explicitPostHistoryInstructions())
         assertEquals(512, preset.generationOverrides().maxOutputTokens)
+        assertEquals(false, preset.includeNames)
         assertEquals(8192, preset.generationOverrides().maxContextTokens)
         assertEquals(listOf("STOP", "END"), preset.generationOverrides().stopStrings)
         assertEquals(

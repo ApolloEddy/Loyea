@@ -16,6 +16,7 @@ class TavernPresetCodecTest {
           "openai_max_context": 8192,
           "openai_max_tokens": 512,
           "stop": ["STOP", "END"],
+          "include_names": false,
           "wi_format": "<world>{{world_info}}</world>",
           "post_history_instructions": "Stay in character.",
           "prompts": [
@@ -45,6 +46,7 @@ class TavernPresetCodecTest {
         val preset = TavernCardPresetAdapter.presetFrom(card)
         requireNotNull(preset)
         assertEquals(0.4, preset.temperature!!, 0.001)
+        assertEquals(false, preset.includeNames)
         assertEquals(8192, preset.maxContext)
         val generation = preset.generationOverrides()
         assertEquals(512, generation.maxOutputTokens)

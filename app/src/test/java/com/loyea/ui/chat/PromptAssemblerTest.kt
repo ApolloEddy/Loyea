@@ -136,6 +136,24 @@ class PromptAssemblerTest {
         assertEquals("历史之后仍要记住 作者备注 / 2.1", parts.postHistoryInstructions)
     }
 
+    @Test
+    fun outletMacroResolvesNamedWorldInfoWithoutUnconditionalLeakage() {
+        val parts = PromptAssembler.assemblePromptParts(
+            card = card(systemPrompt = "Use {{outlet::lore}} when relevant."),
+            userName = "Eddy",
+            worldInfoRender = com.loyea.context.core.WorldInfoMatcher.WorldInfoRenderResult(
+                all = "legacy should not be duplicated",
+                outlets = mapOf("Lore" to "secret lore")
+            ),
+            enableVoice = false,
+            trustedCard = true
+        )
+
+        assertTrue(parts.stableSystemPrompt.contains("secret lore"))
+        assertFalse(parts.turnContextSnapshot.contains("WORLD INFO OUTLET"))
+        assertFalse(parts.stableSystemPrompt.contains("{{outlet::"))
+    }
+
     private fun card(systemPrompt: String) = CharacterCard(
         id = "test-card",
         name = "Test Character",
