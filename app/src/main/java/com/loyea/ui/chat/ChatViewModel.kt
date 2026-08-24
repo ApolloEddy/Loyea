@@ -9,6 +9,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import com.loyea.LoyeaApplication
 import com.loyea.ui.settings.ApiConfig
 import com.loyea.ui.settings.ThemeMode
 import com.loyea.mcp.McpServerConfig
@@ -21,8 +22,15 @@ import com.loyea.health.HealthPairingStatus
 import com.loyea.perception.HapticManager
 import com.loyea.perception.PhysicalContextManager
 import com.loyea.plugin.api.GenerationPatch
+import com.loyea.plugin.api.ChatRole
+import com.loyea.plugin.api.ConversationText
+import com.loyea.plugin.api.PersonaRef
+import com.loyea.plugin.api.PluginTurnInput
 import com.loyea.plugin.api.PreparedPersonaTurn
+import com.loyea.plugin.api.PromptPatch
 import com.loyea.plugin.api.TextStage
+import com.loyea.plugin.host.PersonaRuntimeLease
+import com.loyea.plugin.host.acquirePersonaRuntime
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Dispatchers
@@ -147,12 +155,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     // 8.4 当前会话世界书的 timed runtime state（sticky/cooldown），与书内容分离持久化
     private var worldInfoRuntimeState = WorldInfoRuntimeState()
 
-    val activeCharacterCard = derivedStateOf {
+    private val boundCharacterCard = derivedStateOf {
         val currentSession = sessions.value.find { it.id == currentSessionId.value }
-        val charId = currentSession?.characterId ?: "char_loyea_default"
-        characterCardList.value.find { it.id == charId }
-            ?: characterCardList.value.firstOrNull { it.id == "char_loyea_default" }
-            ?: TavernCardParser.getBuiltInCards().first()
+        if (currentSession == null) {
+            CharacterPersonaOwnership.defaultNativeCard()
+        } else {
+            CharacterPersonaOwnership.resolveBoundCard(
+                currentSession.characterId,
+                characterCardList.value
+            )
+        }
+    }
+
+    /** UI compatibility projection only; request paths must use [boundCharacterCard]. */
+    val activeCharacterCard = derivedStateOf {
+        boundCharacterCard.value ?: CharacterPersonaOwnership.defaultNativeCard()
     }
 
     // 9. 思考/请求状态
@@ -766,6 +783,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * 发送用户消息并触发 SSE 真实的流式输出，支持传入多模态图片/语音信息
      */
+    private fun showPersonaUnavailableMessage() {
+        val message = if (appLanguage.value == "en") {
+            "This conversation's persona is unavailable. Restore or enable its plugin first."
+        } else {
+            "当前会话绑定的人格不可用，请先恢复角色卡或启用对应插件。"
+        }
+        android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
+    }
+
     fun sendMessage(inputText: String, imageUrl: String? = null, audioUrl: String? = null, audioDuration: Int = 0) {
         if (inputText.isBlank() && imageUrl.isNullOrBlank() && audioUrl.isNullOrBlank()) {
             return
@@ -789,8 +815,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
+        val activeCard = boundCharacterCard.value ?: run {
+            showPersonaUnavailableMessage()
+            return
+        }
         isThinking.value = true
-        val activeCard = activeCharacterCard.value
         
         // 发送新消息时，主动折叠之前的历史 Thinking 过程
         val collapsedHistory = messages.value.map { msg ->
@@ -844,7 +873,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         val history = current.subList(0, lastAiIndex)
         val sessionId = currentSessionId.value
-        val activeCard = activeCharacterCard.value
+        val activeCard = boundCharacterCard.value ?: run {
+            showPersonaUnavailableMessage()
+            return
+        }
         isThinking.value = true
         // 先移除旧回复气泡，流式会重建占位；旧消息交给 startAiResponseStream 的 regenerateOf 归并
         messages.value = history
@@ -1167,9 +1199,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             var accumulatedCacheMissTokens = 0L
             var hasRealUsage = false
             var lastStreamUiPublishNanos = 0L
-            val boundPreset = resolvePresetForCard(characterCard)
-            val presetGeneration = boundPreset?.generationOverrides()
             lateinit var preparedTurn: PreparedPersonaTurn
+            var tavernRuntimeLease: PersonaRuntimeLease? = null
+            var conversation = emptyList<LlmChatMessage>()
 
             fun shouldPublishStreamUi(force: Boolean = false): Boolean {
                 val now = System.nanoTime()
@@ -1216,6 +1248,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     segments.toList()
                 }
             }
+
+            try {
+            val personaRef = CharacterPersonaOwnership.refFor(characterCard)
+            if (!personaRef.isNative) {
+                val application = getApplication<LoyeaApplication>()
+                tavernRuntimeLease = application.pluginManager.acquirePersonaRuntime(personaRef.ownerId)
+                    ?: throw TavernPersonaUnavailableException(personaRef)
+            }
+            val boundPreset = resolvePresetForCard(characterCard)
+            val presetGeneration = boundPreset?.generationOverrides()
 
             // 获取 API 配置和 MCP 工具列表
             var apiConfig = activeApiConfig.value.let { config ->
@@ -1317,7 +1359,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             // bottom 世界书固化进回合快照；显式 top 模式保留原有前置语义，因此每次仍需重建。
             val worldInfoPosition = if (worldInfoConfig.value.position == "top") "top" else "bottom"
             val worldInfoRender = if (needsTurnSnapshot || worldInfoPosition == "top") {
-                buildWorldInfoRender(history)
+                buildWorldInfoRender(history, characterCard)
             } else {
                 null
             }
@@ -1339,19 +1381,39 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 enableHaptic = toolAuthHaptic.value,
                 enableVoice = hasTtsCapability(),
                 enableAdultContent = enableAdultContent.value,
-                trustedCard = characterCard.isBuiltIn,
+                trustedCard = personaRef.isNative,
                 snapshotTimeMillis = snapshotTime
             )
-            preparedTurn = LegacyTavernTurnAdapter.prepare(
+            val requestedPrompt = PromptPatch(
+                stablePersonaText = promptParts.stableSystemPrompt,
+                turnContextText = existingTurnSnapshot ?: promptParts.turnContextSnapshot,
+                postHistoryText = promptParts.postHistoryInstructions
+            )
+            val tavernTurnSpec = LegacyTavernTurnAdapter.spec(
                 card = characterCard,
                 userName = userName.value,
                 regexScripts = cardRegexScripts(characterCard),
                 presetMessages = promptParts.presetMessages,
                 worldInfoAtDepth = promptParts.worldInfoAtDepth,
-                generation = presetGeneration ?: GenerationPatch()
+                generation = presetGeneration ?: GenerationPatch(),
+                prompt = requestedPrompt
             )
+            preparedTurn = if (personaRef.isNative) {
+                TavernPreparedTurnFactory.prepare(tavernTurnSpec)
+            } else {
+                prepareTavernPersonaTurn(
+                    lease = checkNotNull(tavernRuntimeLease),
+                    ref = personaRef,
+                    sessionId = sessionId,
+                    requestId = aiMessageId,
+                    characterCard = characterCard,
+                    history = history,
+                    spec = tavernTurnSpec
+                )
+            }
+            val pluginPrompt = preparedTurn.plan.prompt
 
-            val turnSnapshot = existingTurnSnapshot ?: promptParts.turnContextSnapshot
+            val turnSnapshot = pluginPrompt.turnContextText
             var requestHistory = history
             if (requestUserMessage != null && existingTurnSnapshot == null && turnSnapshot.isNotBlank()) {
                 requestHistory = history.map { message ->
@@ -1378,12 +1440,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             // 构建初始会话上下文（按目标模型能力决定图片/音频是否进入 payload）
-            var conversation = buildLlmConversation(
-                promptParts.stableSystemPrompt, requestHistory,
+            conversation = buildLlmConversation(
+                pluginPrompt.stablePersonaText, requestHistory,
                 includeVision = includeVision,
                 includeAudio = includeAudioInput,
                 compressedSummary = activeSession.value?.compressedSummary ?: "",
-                postHistoryInstructions = promptParts.postHistoryInstructions,
+                postHistoryInstructions = pluginPrompt.postHistoryText,
                 preparedTurn = preparedTurn,
                 includeMessageTimestamps = sessionUsesSystemTime,
                 allowPhysicalContext = sessionUsesSystemTime,
@@ -1396,7 +1458,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             // 多模态失败降级重试标记：带图/带音频请求报错后，仅允许自动去掉媒体重试一次
             var degradedRetried = false
 
-            try {
                 while (round < maxRounds) {
                     round++
                     var streamToolCalls = emptyList<LlmToolCall>()
@@ -1425,7 +1486,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         config = apiConfig,
                         messages = conversation,
                         tools = sendTools,
-                        generation = presetGeneration
+                        generation = preparedTurn.plan.generation
                     ).collect { event ->
                         when (event) {
                             is StreamEvent.Thoughts -> {
@@ -1883,7 +1944,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     } else msg
                 }
                 messages.value = currentList
+                saveMessagesAsync(sessionId, currentList)
             } finally {
+                tavernRuntimeLease?.close()
                 // 重新生成路径：流结束后统一归并版本（成功合并进 versions / 失败恢复旧回复，避免丢失答案）
                 if (regenerateOf != null) {
                     applyRegenerateVersions(regenerateOf, aiMessageId)
@@ -1908,6 +1971,47 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     cacheMissTokens = accumulatedCacheMissTokens
                 )
             }
+        }
+    }
+
+    private suspend fun prepareTavernPersonaTurn(
+        lease: PersonaRuntimeLease,
+        ref: PersonaRef,
+        sessionId: String,
+        requestId: String,
+        characterCard: CharacterCard,
+        history: List<Message>,
+        spec: TavernTurnSpec
+    ): PreparedPersonaTurn {
+        val application = getApplication<LoyeaApplication>()
+        val staged = application.tavernPersonaRepository.stage(
+            sessionId = sessionId,
+            personaId = characterCard.id,
+            requestId = requestId,
+            generation = lease.generation,
+            spec = spec
+        )
+        return try {
+            lease.preparePersonaTurn(
+                ref = ref,
+                input = PluginTurnInput(
+                    sessionId = sessionId,
+                    turnId = requestId,
+                    turnIndex = history.count { it.sender == Sender.USER }.toLong(),
+                    userName = userName.value,
+                    history = history.mapIndexed { index, message ->
+                        ConversationText(
+                            id = message.id.ifBlank { "history-$index" },
+                            role = if (message.sender == Sender.USER) ChatRole.USER else ChatRole.ASSISTANT,
+                            content = message.content
+                        )
+                    }
+                ),
+                restoredSnapshot = null
+            )
+        } finally {
+            // Successful prepare consumes the stage; every failure path discards it here.
+            staged.close()
         }
     }
 
@@ -2448,9 +2552,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      * 解析匹配时使用的世界书：全局/会话书与当前角色卡绑定的 CharacterBook 叠加。
      * 会话书仍然覆盖“会话对全局书的配置”，但不会把角色卡自己的书丢掉。
      */
-    private fun resolveWorldInfoBook(): WorldInfoBook {
+    private fun resolveWorldInfoBook(card: CharacterCard): WorldInfoBook {
         val base = sessionWorldInfo.value ?: WorldInfoBook(worldInfoEntries.value, worldInfoConfig.value)
-        val card = activeCharacterCard.value
         val inline = card.characterBookJson
             ?.let(TavernCardCodec::parseCharacterBook)
             ?.let { TavernCharacterBookAdapter.toWorldInfoBook(it, "card:${card.id}") }
@@ -2511,10 +2614,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      * - "system" 关键词扫描源使用角色卡 systemPrompt（persona）近似系统设定
      * - 概率随机源用「会话 id + 最后一条用户消息」稳定种子：同轮重试可复现同一注入集合 → 保前缀缓存
      */
-    private fun buildWorldInfoRender(history: List<Message>): WorldInfoMatcher.WorldInfoRenderResult? {
+    private fun buildWorldInfoRender(
+        history: List<Message>,
+        card: CharacterCard
+    ): WorldInfoMatcher.WorldInfoRenderResult? {
         val seedKey = (activeSession.value?.id ?: "") + "|" +
             history.lastOrNull { it.sender == Sender.USER }?.content.orEmpty()
-        val book = resolveWorldInfoBook()
+        val book = resolveWorldInfoBook(card)
         val bookSignature = "${book.config.hashCode()}:${book.entries.hashCode()}"
         val runtimeForBook = when {
             worldInfoRuntimeState.bookSignature.isBlank() -> {
@@ -2528,16 +2634,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             entries = book.entries,
             historyContents = history.map { it.content },
             userName = userName.value,
-            systemPrompt = activeCharacterCard.value?.systemPrompt.orEmpty(),
+            systemPrompt = card.systemPrompt,
             config = book.config,
             random = kotlin.random.Random(seedKey.hashCode().toLong()),
-            characterDescription = activeCharacterCard.value?.description.orEmpty(),
-            characterPersonality = activeCharacterCard.value?.personality.orEmpty(),
-            characterDepthPrompt = activeCharacterCard.value?.systemPrompt.orEmpty(),
-            scenario = activeCharacterCard.value?.scenario.orEmpty(),
-            creatorNotes = activeCharacterCard.value?.creatorNotes.orEmpty(),
-            characterName = activeCharacterCard.value?.name.orEmpty(),
-            characterTags = activeCharacterCard.value?.tags.orEmpty(),
+            characterDescription = card.description,
+            characterPersonality = card.personality,
+            characterDepthPrompt = card.systemPrompt,
+            scenario = card.scenario,
+            creatorNotes = card.creatorNotes,
+            characterName = card.name,
+            characterTags = card.tags,
             runtimeState = runtimeForBook,
             turnKey = lastUserMessage?.id.orEmpty(),
             turnIndex = history.count { it.sender == Sender.USER }.toLong()
@@ -2553,8 +2659,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         return TavernRegexEngine.applyToWorldInfoRender(
             render = render,
-            scripts = cardRegexScripts(activeCharacterCard.value),
-            context = TavernCardRegexAdapter.macroContext(activeCharacterCard.value, userName.value)
+            scripts = cardRegexScripts(card),
+            context = TavernCardRegexAdapter.macroContext(card, userName.value)
         )
     }
 
@@ -2787,7 +2893,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun loadGraphMemoriesForCurrentSession() {
         val sessionId = currentSessionId.value
-        val characterId = activeCharacterCard.value?.id ?: "char_loyea_default"
+        val characterId = activeSession.value?.characterId ?: return
         if (sessionId.isBlank()) return
         viewModelScope.launch(Dispatchers.IO) {
             val filtered = graphMemoryManager.getTriplesForSession(characterId, sessionId)
@@ -2802,7 +2908,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun deleteGraphMemoryTriple(tripleId: Long) {
         val sessionId = currentSessionId.value
-        val characterId = activeCharacterCard.value?.id ?: "char_loyea_default"
+        val characterId = activeSession.value?.characterId ?: return
         if (sessionId.isBlank()) return
         viewModelScope.launch(Dispatchers.IO) {
             graphMemoryManager.deleteTriple(tripleId)
@@ -2818,7 +2924,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun clearAllGraphMemoriesForCurrentSession() {
         val sessionId = currentSessionId.value
-        val characterId = activeCharacterCard.value?.id ?: "char_loyea_default"
+        val characterId = activeSession.value?.characterId ?: return
         if (sessionId.isBlank()) return
         viewModelScope.launch(Dispatchers.IO) {
             graphMemoryManager.clearMemoriesForSession(characterId, sessionId)
@@ -2832,6 +2938,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun editMessage(messageId: String, newContent: String) {
         val sessionId = currentSessionId.value
         if (sessionId.isBlank()) return
+        val activeCard = boundCharacterCard.value ?: run {
+            showPersonaUnavailableMessage()
+            return
+        }
 
         stopResponse()
 
@@ -2866,7 +2976,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             withContext(Dispatchers.Main) {
                 messages.value = truncatedMsgs
-                startAiResponseStream(sessionId, truncatedMsgs, activeCharacterCard.value)
+                startAiResponseStream(sessionId, truncatedMsgs, activeCard)
             }
         }
     }
@@ -3726,8 +3836,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val sessionId = currentSessionId.value
         if (sessionId.isBlank()) return
 
+        val activeCard = boundCharacterCard.value ?: run {
+            showPersonaUnavailableMessage()
+            return
+        }
         isThinking.value = true
-        val activeCard = activeCharacterCard.value
 
         // 1. 发送消息
         val userMsg = Message(

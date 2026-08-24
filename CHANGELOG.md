@@ -9,6 +9,7 @@ All notable changes to this project will be documented in this file.
 - **插件宿主与请求租约**：新增纯 Kotlin/JVM `:plugin-host`，支持插件注册、兼容性隔离、运行失败重试、实时启停及线程安全的在途请求排空；`LoyeaApplication` 提供 UI 与后台任务共用的应用级组合根。
 - **通用人格回合契约**：`plugin-api` 新增 `PersonaProjection`、冻结回合输入、提示词 patch、结构化消息插入、通用生成参数与分阶段文本变换接口，为 Tavern 逻辑退出核心聊天类型签名提供稳定边界。
 - **Tavern 人格插件运行时**：`tavern-core` 实现稳定插件描述、人格查询仓库端口和请求级冻结回合工厂；Preset、深度世界书、生成参数及 Regex 输出链现在可完整投影到 `PersonaPluginRuntime`，并拒绝错误 owner 或已关闭运行代次。
+- **应用级 Tavern 插件注册**：`LoyeaApplication` 默认注册内置 Tavern 插件与无 UI/ViewModel 引用的 Android 仓库适配器；待处理回合按会话、人格、唯一 AI 请求 ID 与 runtime generation 隔离并原子单次消费，同时受条数、UTF-8 字节预算和 TTL 约束，在获取、准备、代次关闭或应用清理时释放。
 - **Tavern 纯核心模块**：新增 `:plugins:tavern-core`，首批迁入角色卡 JSON/PNG/CHARX 安全 codec 与规范化文档模型，并在模块内增加不依赖 Android/宿主模型的隔离测试。
 - **SillyTavern/Tavern 角色卡兼容层**：新增 V1/V2/V3 JSON、PNG `chara`/`ccv3` 与 V3 CHARX（受限读取根目录 `card.json`）解析、CRC/大小边界校验、原始未知字段保留、CharacterBook 全字段投影与稳定角色 ID；导出改为基于标准 codec，绑定世界书、扩展字段和第三方字段不会因 Loyea UI 未展示而丢失。
 - **角色卡绑定功能运行时**：内嵌 CharacterBook 会与当前会话/全局世界书合并，支持 `selective`、`constant`、`useRegex`、`position`、`insertion_order`、递归、分组、`groupOverride`/关键词评分/`groupWeight`、概率、sticky/cooldown/delay、全局扫描字段和深度 role 注入；CharacterBook 的 ST `extensions` 字段也会被读取并镜像导出。
@@ -30,6 +31,7 @@ All notable changes to this project will be documented in this file.
 - **世界书提示词插入**：世界书不再只拼成一个 legacy system 文本块；`before/after character`、作者注释、示例消息、outlet 和 `at_depth` 分桶保留，深度条目按 `system/user/assistant` role 插入实际消息边界。
 - **世界书编辑器与标准导出**：设置页补充正则、大小写、整词、注入位置和深度编辑；标准 SillyTavern World Info 导出使用数字 `position`，同时保留 `positionType`/扩展字段以兼容新版 Tavern。
 - **会话请求构建**：用户输入 placement、角色卡 Regex、preset post-history 和 CharacterBook 深度注入贯通 `PromptAssembler → LlmConversationBuilder → LlmClient`，不改变旧卡/旧会话 JSON 的读取方式。
+- **外部角色主聊天接入插件租约**：插件人格请求会在解析 preset、推进世界书 timed 状态或组装提示词之前，从 `PluginManager` 获取并校验 `PersonaPluginRuntime` generation lease；租约覆盖提示词序列化、流式输出和全部 MCP 多轮，并在成功、错误或取消的统一 `finally` 中释放。`PromptPatch` 与 `GenerationPatch` 成为该请求的实际消费源，现有 preset 模型覆盖与视觉路由先后顺序保持不变。
 - **流式 UI 合帧**：高频 SSE 内容与思考片段按约 16ms 合并一次 UI 状态更新；`ToolCalls` 与 `Done` 强制刷新终态，保持工具分段、思考块、落盘和 TTS 的完整性。
 - **流式回复轻量渲染**：流式阶段使用 Compose `Text` 快速呈现，回复完成后自动恢复原 Markdown 解析与排版，减少 DS 4 Flash 高速输出时的重复解析。
 - **流式滚动策略**：生成期间改为即时追踪最新布局，结束后保留平滑滚动，避免高频片段反复取消滚动动画造成显示滞后。
@@ -39,6 +41,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed (修复)
 - 修复流式生成途中切换角色卡或修改 Tavern 资源时，输出/Reasoning Regex 每个片段重新读取当前卡片而混用两套规则的问题；一条请求现在固定使用启动时的卡片、用户名、Regex、preset 与深度插入快照。
+- 修复插件能力类型不符或回合准备抛错时可能遗留宿主 lease 的风险；插件已停用或人格不可用时，新外部角色请求明确失败，不再有静默切回原生默认人格的接线路径。
+- 修复会话绑定的外部角色卡缺失时 `activeCharacterCard` 静默切成默认 Loyea 并以错误身份继续发送的问题；发送、重新生成、编辑后重生成和生图入口现在明确阻断，内置人格归属与信任也改由精确的原生 ID 目录判定，不再相信可持久化的 `isBuiltIn` 布尔值。
+- 修复插件准备失败产生的错误气泡只留在内存、重启后消失的问题；主流式异常终态现在与普通回复一样异步落盘。
 - 修复 CharacterBook 或世界书 `token_budget/budget_cap=0` 时所有条目被错误裁剪为空；现在按 SillyTavern 语义视为不额外限制，并让 `ignoreBudget` 条目不计入预算。
 - 修复 CharacterBook 高级字段只被保存但未参与运行时的问题：角色描述、性格、场景、creator notes、正则关键词、全局扫描开关和 timed 条目现在可影响匹配结果。
 - 修复标准世界书高级 position 导出为字符串导致旧版 ST 网关可能拒绝整本书的问题。
@@ -55,6 +60,8 @@ All notable changes to this project will be documented in this file.
 - 插件停用采用 generation lease：新请求立即拒绝获取已停用插件，已开始请求继续使用启动时冻结的运行代次，最后一个 lease 释放后旧运行时才关闭；重新启用会创建新代次，不会篡改在途请求。
 - `TavernCardCodec` 不再依赖 Loyea 的 `CharacterCard`；旧卡模型到 Tavern 文档的转换留在 app 侧 `TavernCharacterCardAdapter`，形成“宿主适配器 → 插件文档”的单向依赖。
 - Tavern 回合插入与文本变换的实现已从 app 迁入 `tavern-core`；app 的 `LegacyTavernTurnAdapter` 暂时仅负责把 `CharacterCard` 投影成 `TavernTurnSpec`，为下一步注册插件并在请求全程持有 generation lease 留出单一桥接点。
+- 插件宿主新增 failure-safe 的 `preparePersonaTurn` 组合操作：acquire、能力校验与 prepare 任一步失败都会释放原始 lease；成功则用 `LeasedPersonaTurn` 把冻结回合与运行代次绑定，保证停用只阻断新请求、不会截断在途输出。
+- 宿主同时提供可提前获取的 typed `PersonaRuntimeLease`，让应用在任何插件专属副作用前建立 generation 边界；Tavern 仓库收到 runtime generation 后只允许同会话、同人格、同请求、同代次消费 staged spec，旧代次关闭会清除其残留。
 - 角色卡导入采用“结构化运行时投影 + raw JSON 往返保留”的边界；不认识的第三方 `extensions` 不会被静默重写，解析失败/PNG 损坏/超限输入会安全返回空结果而不触碰既有存储。
 - 绑定能力的关键数据流为：PNG/JSON → `TavernCardCodec` → `CharacterCard`/`CharacterBookDocument` → `TavernCharacterBookAdapter`/Regex/Preset → `WorldInfoMatcher`/`PromptAssembler` → `LlmConversationBuilder` → `LlmClient`；角色卡 scoped Regex 采用小缓存，避免 DS 4 Flash 高速流式刷新时重复解析 JSON。
 - 深度世界书的结构化 role 目前在主聊天请求中生效；后台问候等只使用单 system prompt 的旧入口保持原有安全行为，不会绕过主聊天的工具授权与隐私裁剪。

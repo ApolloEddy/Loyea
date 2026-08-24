@@ -2,6 +2,7 @@ package com.loyea.ui.chat
 
 import com.loyea.plugin.api.GenerationPatch
 import com.loyea.plugin.api.PreparedPersonaTurn
+import com.loyea.plugin.api.PromptPatch
 
 /** Temporary Android bridge while card lookup moves behind [TavernPersonaRepository]. */
 object LegacyTavernTurnAdapter {
@@ -11,14 +12,34 @@ object LegacyTavernTurnAdapter {
         regexScripts: Collection<TavernRegexScript>,
         presetMessages: Collection<TavernPresetPrompt>,
         worldInfoAtDepth: Map<Int, List<WorldInfoMatcher.WorldInfoInjectionBlock>>,
-        generation: GenerationPatch = GenerationPatch()
+        generation: GenerationPatch = GenerationPatch(),
+        prompt: PromptPatch = PromptPatch(stablePersonaText = "")
     ): PreparedPersonaTurn = TavernPreparedTurnFactory.prepare(
-        TavernTurnSpec(
+        spec(
+            card = card,
+            userName = userName,
+            regexScripts = regexScripts,
+            presetMessages = presetMessages,
+            worldInfoAtDepth = worldInfoAtDepth,
+            generation = generation,
+            prompt = prompt
+        )
+    )
+
+    fun spec(
+        card: CharacterCard,
+        userName: String,
+        regexScripts: Collection<TavernRegexScript>,
+        presetMessages: Collection<TavernPresetPrompt>,
+        worldInfoAtDepth: Map<Int, List<WorldInfoMatcher.WorldInfoInjectionBlock>>,
+        generation: GenerationPatch = GenerationPatch(),
+        prompt: PromptPatch = PromptPatch(stablePersonaText = "")
+    ): TavernTurnSpec = TavernTurnSpec(
+            prompt = prompt,
             presetMessages = presetMessages,
             worldInfoAtDepth = worldInfoAtDepth,
             generation = generation,
             regexScripts = regexScripts,
             macroContext = TavernCardRegexAdapter.macroContext(card, userName)
         )
-    )
 }

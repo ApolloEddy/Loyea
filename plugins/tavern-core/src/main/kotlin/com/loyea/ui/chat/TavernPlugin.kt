@@ -59,8 +59,11 @@ interface TavernPersonaRepository {
     suspend fun prepareTurn(
         personaId: String,
         input: PluginTurnInput,
-        restoredSnapshot: String? = null
+        restoredSnapshot: String? = null,
+        generation: PluginRuntimeGeneration
     ): TavernTurnSpec?
+
+    fun discardGeneration(generation: PluginRuntimeGeneration) = Unit
 }
 
 /**
@@ -229,13 +232,15 @@ private class TavernPluginRuntime(
     ): PreparedPersonaTurn {
         checkOpen()
         if (ref.ownerId != providerId) throw TavernPersonaUnavailableException(ref)
-        val spec = repository.prepareTurn(ref.personaId, input, restoredSnapshot)
+        val spec = repository.prepareTurn(ref.personaId, input, restoredSnapshot, generation)
             ?: throw TavernPersonaUnavailableException(ref)
         return TavernPreparedTurnFactory.prepare(spec)
     }
 
     override fun close() {
-        closed.set(true)
+        if (closed.compareAndSet(false, true)) {
+            repository.discardGeneration(generation)
+        }
     }
 
     private fun checkOpen() {

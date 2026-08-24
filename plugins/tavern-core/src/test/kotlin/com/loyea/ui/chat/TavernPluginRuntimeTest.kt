@@ -110,6 +110,7 @@ class TavernPluginRuntimeTest {
         }
 
         runtime.close()
+        assertEquals(listOf(PluginRuntimeGeneration(TavernPluginDefinition.ID, 0)), repository.discarded)
         assertThrows(IllegalStateException::class.java) {
             runSuspend { runtime.resolve(PersonaRef.plugin(TavernPluginDefinition.ID, "card-1")) }
         }
@@ -119,14 +120,21 @@ class TavernPluginRuntimeTest {
         private val persona: TavernPersonaRecord?,
         private val turn: TavernTurnSpec?
     ) : TavernPersonaRepository {
+        val discarded = mutableListOf<PluginRuntimeGeneration>()
+
         override suspend fun resolve(personaId: String): TavernPersonaRecord? =
             persona?.takeIf { it.personaId == personaId }
 
         override suspend fun prepareTurn(
             personaId: String,
             input: PluginTurnInput,
-            restoredSnapshot: String?
+            restoredSnapshot: String?,
+            generation: PluginRuntimeGeneration
         ): TavernTurnSpec? = turn?.takeIf { persona?.personaId == personaId }
+
+        override fun discardGeneration(generation: PluginRuntimeGeneration) {
+            discarded += generation
+        }
     }
 
     private fun <T> runSuspend(block: suspend () -> T): T {
