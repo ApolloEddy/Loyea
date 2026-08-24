@@ -1024,7 +1024,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             personaRef = activePersona.ref,
             requestBinding = binding,
             initialRuntimeLease = runtimeLease,
-            regenerateOf = lastAi
+            regenerateOf = lastAi,
+            generationType = "regenerate"
         )
     }
 
@@ -1306,7 +1307,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         personaRef: PersonaRef,
         requestBinding: PersonaBindingSnapshot,
         initialRuntimeLease: PersonaRuntimeLease?,
-        regenerateOf: Message? = null
+        regenerateOf: Message? = null,
+        generationType: String = "normal"
     ) {
         responseJob = viewModelScope.launch {
             isThinking.value = true
@@ -1507,7 +1509,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             // bottom 世界书固化进回合快照；显式 top 模式保留原有前置语义，因此每次仍需重建。
             val worldInfoPosition = if (worldInfoConfig.value.position == "top") "top" else "bottom"
             val worldInfoRender = if (needsTurnSnapshot || worldInfoPosition == "top") {
-                buildWorldInfoRender(history, characterCard)
+                buildWorldInfoRender(history, characterCard, generationType)
             } else {
                 null
             }
@@ -1544,7 +1546,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 presetMessages = promptParts.presetMessages,
                 worldInfoAtDepth = promptParts.worldInfoAtDepth,
                 generation = presetGeneration ?: GenerationPatch(),
-                prompt = requestedPrompt
+                prompt = requestedPrompt,
+                generationType = generationType
             )
             preparedTurn = if (personaRef.isNative) {
                 TavernPreparedTurnFactory.prepare(tavernTurnSpec)
@@ -1555,7 +1558,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     sessionId = sessionId,
                     requestId = aiMessageId,
                     history = history,
-                    spec = tavernTurnSpec
+                    spec = tavernTurnSpec,
+                    generationType = generationType
                 )
             }
             val pluginPrompt = preparedTurn.plan.prompt
@@ -2130,7 +2134,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         sessionId: String,
         requestId: String,
         history: List<Message>,
-        spec: TavernTurnSpec
+        spec: TavernTurnSpec,
+        generationType: String = "normal"
     ): PreparedPersonaTurn {
         val application = getApplication<LoyeaApplication>()
         return application.prepareTavernPersonaTurn(
@@ -2147,7 +2152,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             role = if (message.sender == Sender.USER) ChatRole.USER else ChatRole.ASSISTANT,
                             content = message.content
                         )
-                    }
+                    },
+                    generationType = generationType
                 ),
             spec = spec
         )
@@ -2805,7 +2811,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun buildWorldInfoRender(
         history: List<Message>,
-        card: CharacterCard
+        card: CharacterCard,
+        generationType: String = "normal"
     ): WorldInfoMatcher.WorldInfoRenderResult? {
         val seedKey = (activeSession.value?.id ?: "") + "|" +
             history.lastOrNull { it.sender == Sender.USER }?.content.orEmpty()
@@ -2835,7 +2842,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             characterTags = card.tags,
             runtimeState = runtimeForBook,
             turnKey = lastUserMessage?.id.orEmpty(),
-            turnIndex = history.count { it.sender == Sender.USER }.toLong()
+            turnIndex = history.count { it.sender == Sender.USER }.toLong(),
+            generationType = generationType
         )
         if (render.runtimeState != worldInfoRuntimeState) {
             worldInfoRuntimeState = render.runtimeState

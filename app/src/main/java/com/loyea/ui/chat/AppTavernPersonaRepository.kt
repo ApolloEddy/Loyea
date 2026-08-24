@@ -115,6 +115,9 @@ class AppTavernPersonaRepository(
         input: PluginTurnInput,
         spec: TavernTurnSpec
     ): PreparedPersonaTurn {
+        require(normalizeGenerationType(spec.generationType) == normalizeGenerationType(input.generationType)) {
+            "Tavern staged turn generation type does not match plugin input"
+        }
         val staged = stage(
             sessionId = input.sessionId,
             personaId = ref.personaId,
@@ -182,6 +185,9 @@ class AppTavernPersonaRepository(
         }
         return total.coerceAtLeast(1L)
     }
+
+    private fun normalizeGenerationType(value: String): String =
+        value.trim().removePrefix(":").lowercase()
 
     private data class PendingTurnKey(
         val sessionId: String,

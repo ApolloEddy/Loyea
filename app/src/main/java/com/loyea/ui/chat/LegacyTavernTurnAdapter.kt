@@ -16,7 +16,8 @@ object LegacyTavernTurnAdapter {
         presetMessages: Collection<TavernPresetPrompt>,
         worldInfoAtDepth: Map<Int, List<WorldInfoMatcher.WorldInfoInjectionBlock>>,
         generation: GenerationPatch = GenerationPatch(),
-        prompt: PromptPatch = PromptPatch(stablePersonaText = "")
+        prompt: PromptPatch = PromptPatch(stablePersonaText = ""),
+        generationType: String = "normal"
     ): PreparedPersonaTurn = TavernPreparedTurnFactory.prepare(
         spec(
             card = card,
@@ -25,7 +26,8 @@ object LegacyTavernTurnAdapter {
             presetMessages = presetMessages,
             worldInfoAtDepth = worldInfoAtDepth,
             generation = generation,
-            prompt = prompt
+            prompt = prompt,
+            generationType = generationType
         )
     )
 
@@ -36,13 +38,15 @@ object LegacyTavernTurnAdapter {
         presetMessages: Collection<TavernPresetPrompt>,
         worldInfoAtDepth: Map<Int, List<WorldInfoMatcher.WorldInfoInjectionBlock>>,
         generation: GenerationPatch = GenerationPatch(),
-        prompt: PromptPatch = PromptPatch(stablePersonaText = "")
+        prompt: PromptPatch = PromptPatch(stablePersonaText = ""),
+        generationType: String = "normal"
     ): TavernTurnSpec = TavernTurnSpec(
             prompt = prompt,
             presetMessages = presetMessages,
             worldInfoAtDepth = worldInfoAtDepth,
             generation = generation,
             regexScripts = regexScripts,
-            macroContext = TavernCardRegexAdapter.macroContext(card, userName)
+            macroContext = TavernCardRegexAdapter.macroContext(card, userName),
+            generationType = generationType
         )
 }

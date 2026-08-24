@@ -189,6 +189,7 @@ class GreetingWorker(
                     regexScripts = emptyList(),
                     presetMessages = emptyList(),
                     worldInfoAtDepth = emptyMap(),
+                    generationType = "quiet",
                     prompt = PromptPatch(
                         stablePersonaText = promptParts.stableSystemPrompt,
                         turnContextText = promptParts.turnContextSnapshot,
@@ -212,7 +213,8 @@ class GreetingWorker(
                                     role = if (message.sender == Sender.USER) ChatRole.USER else ChatRole.ASSISTANT,
                                     content = message.content
                                 )
-                            }
+                            },
+                            generationType = "quiet"
                         ),
                         spec = turnSpec
                     )

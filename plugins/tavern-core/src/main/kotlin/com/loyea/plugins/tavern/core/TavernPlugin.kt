@@ -63,8 +63,13 @@ class TavernTurnSpec(
     val generation: GenerationPatch = GenerationPatch(),
     regexScripts: Collection<TavernRegexScript> = emptyList(),
     val macroContext: TavernMacroContext = TavernMacroContext(),
-    val opaqueSnapshot: String? = null
+    val opaqueSnapshot: String? = null,
+    val generationType: String = "normal"
 ) {
+    init {
+        require(generationType.isNotBlank()) { "Tavern generation type must not be blank" }
+    }
+
     val presetMessages: List<TavernPresetPrompt> = presetMessages.map { it.copy() }
     val worldInfoAtDepth: Map<Int, List<WorldInfoMatcher.WorldInfoInjectionBlock>> =
         worldInfoAtDepth.entries.associate { (depth, blocks) ->
@@ -91,7 +96,8 @@ object TavernPreparedTurnFactory {
             generation = spec.generation,
             regexScripts = spec.regexScripts,
             macroContext = spec.macroContext.copy(),
-            opaqueSnapshot = spec.opaqueSnapshot
+            opaqueSnapshot = spec.opaqueSnapshot,
+            generationType = spec.generationType
         )
         val insertions = buildList {
             frozenSpec.presetMessages.forEachIndexed { index, prompt ->

@@ -36,7 +36,8 @@ class PluginTurnInput(
     val turnId: String,
     val turnIndex: Long,
     val userName: String,
-    history: Collection<ConversationText>
+    history: Collection<ConversationText>,
+    val generationType: String = "normal"
 ) {
     val history: List<ConversationText> = history.toList()
 
@@ -44,6 +45,7 @@ class PluginTurnInput(
         require(sessionId.isNotBlank()) { "Session id must not be blank" }
         require(turnId.isNotBlank()) { "Turn id must not be blank" }
         require(turnIndex >= 0L) { "Turn index must not be negative" }
+        require(generationType.isNotBlank()) { "Generation type must not be blank" }
     }
 }
 

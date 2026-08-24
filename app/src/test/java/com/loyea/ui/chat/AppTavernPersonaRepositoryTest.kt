@@ -257,12 +257,51 @@ class AppTavernPersonaRepositoryTest {
         assertEquals(0, manager.state(TavernPluginDefinition.ID).activeLeases)
     }
 
-    private fun input(turnId: String, sessionId: String = "session") = PluginTurnInput(
+    @Test
+    fun `staged prepare preserves generation type and rejects mismatched requests`() {
+        val repository = AppTavernPersonaRepository(loadCards = { emptyList() })
+        val manager = PluginManager().apply {
+            register(TavernPlugin(repository), enabled = true)
+        }
+        val ref = PersonaRef.plugin(TavernPluginDefinition.ID, "external-card")
+        val lease = requireNotNull(manager.acquirePersonaRuntime(TavernPluginDefinition.ID))
+
+        val prepared = runSuspend {
+            repository.prepareStagedTurn(
+                lease,
+                ref,
+                input("continue-1", generationType = ":CONTINUE"),
+                TavernTurnSpec(generationType = "continue")
+            )
+        }
+        assertEquals("", prepared.plan.prompt.stablePersonaText)
+        assertEquals(0, repository.pendingTurnCountForTest())
+
+        assertThrows(IllegalArgumentException::class.java) {
+            runSuspend {
+                repository.prepareStagedTurn(
+                    lease,
+                    ref,
+                    input("regenerate-1", generationType = "regenerate"),
+                    TavernTurnSpec(generationType = "normal")
+                )
+            }
+        }
+        assertEquals(0, repository.pendingTurnCountForTest())
+        lease.close()
+    }
+
+    private fun input(
+        turnId: String,
+        sessionId: String = "session",
+        generationType: String = "normal"
+    ) = PluginTurnInput(
         sessionId = sessionId,
         turnId = turnId,
         turnIndex = 0,
         userName = "Eddy",
-        history = emptyList()
+        history = emptyList(),
+        generationType = generationType
     )
 
     private fun generation(revision: Long) =
