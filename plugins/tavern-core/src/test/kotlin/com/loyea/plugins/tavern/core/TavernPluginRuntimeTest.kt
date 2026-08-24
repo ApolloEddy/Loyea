@@ -6,6 +6,7 @@ import com.loyea.plugin.api.ChatRole
 import com.loyea.plugin.api.ConversationText
 import com.loyea.plugin.api.GenerationPatch
 import com.loyea.plugin.api.PersonaPluginRuntime
+import com.loyea.plugin.api.PersonaProjection
 import com.loyea.plugin.api.PersonaRef
 import com.loyea.plugin.api.PluginRuntimeGeneration
 import com.loyea.plugin.api.PluginTurnInput
@@ -24,8 +25,8 @@ class TavernPluginRuntimeTest {
     fun resolvesAndPreparesFrozenPersonaTurnThroughPluginContract() {
         val mutablePlacements = mutableListOf(TavernRegexPlacement.AI_OUTPUT)
         val repository = FakeRepository(
-            persona = TavernPersonaRecord(
-                personaId = "card-1",
+            persona = PersonaProjection(
+                ref = PersonaRef.plugin(TavernPluginDefinition.ID, "card-1"),
                 displayName = "Lya",
                 avatarUri = "content://avatar",
                 summary = "A companion",
@@ -94,7 +95,13 @@ class TavernPluginRuntimeTest {
     @Test
     fun rejectsWrongOwnerAndClosedRuntime() {
         val repository = FakeRepository(
-            persona = TavernPersonaRecord("card-1", "Lya", null, "", emptyList()),
+            persona = PersonaProjection(
+                ref = PersonaRef.plugin(TavernPluginDefinition.ID, "card-1"),
+                displayName = "Lya",
+                avatarUri = null,
+                summary = "",
+                greetingTemplates = emptyList()
+            ),
             turn = TavernTurnSpec(macroContext = TavernMacroContext("Lya"))
         )
         val runtime: PersonaPluginRuntime = TavernPlugin(repository)
@@ -119,20 +126,20 @@ class TavernPluginRuntimeTest {
     }
 
     private class FakeRepository(
-        private val persona: TavernPersonaRecord?,
+        private val persona: PersonaProjection?,
         private val turn: TavernTurnSpec?
     ) : TavernPersonaRepository {
         val discarded = mutableListOf<PluginRuntimeGeneration>()
 
-        override suspend fun resolve(personaId: String): TavernPersonaRecord? =
-            persona?.takeIf { it.personaId == personaId }
+        override suspend fun resolve(personaId: String): PersonaProjection? =
+            persona?.takeIf { it.ref.personaId == personaId }
 
         override suspend fun prepareTurn(
             personaId: String,
             input: PluginTurnInput,
             restoredSnapshot: String?,
             generation: PluginRuntimeGeneration
-        ): TavernTurnSpec? = turn?.takeIf { persona?.personaId == personaId }
+        ): TavernTurnSpec? = turn?.takeIf { persona?.ref?.personaId == personaId }
 
         override fun discardGeneration(generation: PluginRuntimeGeneration) {
             discarded += generation

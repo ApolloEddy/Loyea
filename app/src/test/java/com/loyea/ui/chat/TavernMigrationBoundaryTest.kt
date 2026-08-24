@@ -52,8 +52,15 @@ class TavernMigrationBoundaryTest {
 
         val card = TavernCardParser.fromDocument(sourceDocument!!)
         val projectedDocument = TavernCharacterCardAdapter.toDocument(card)
+        val projection = TavernCharacterCardAdapter.toProjection(
+            card,
+            PersonaRef.plugin(TavernPluginDefinition.ID, card.id)
+        )
 
         assertEquals(TavernCardCodec.stableId(sourceDocument), card.id)
+        assertEquals(card.id, projection.ref.personaId)
+        assertEquals(card.name, projection.displayName)
+        assertEquals(card.description, projection.summary)
         assertEquals(card.id, TavernCardCodec.stableId(projectedDocument))
         assertEquals(sourceDocument.rawJson, projectedDocument.rawJson)
         assertEquals("Boundary Card", projectedDocument.data.name)

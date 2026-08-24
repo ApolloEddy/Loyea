@@ -1,9 +1,25 @@
 package com.loyea.ui.chat
 
 import com.loyea.plugins.tavern.core.*
+import com.loyea.plugin.api.PersonaProjection
+import com.loyea.plugin.api.PersonaRef
 
 /** Host-side projection between Loyea's legacy card model and the isolated Tavern document. */
 object TavernCharacterCardAdapter {
+    fun toProjection(card: CharacterCard, ref: PersonaRef): PersonaProjection {
+        require(ref.personaId == card.id) { "Persona projection ref does not match card id" }
+        return PersonaProjection(
+            ref = ref,
+            displayName = card.name,
+            avatarUri = card.avatarUri,
+            summary = card.description.ifBlank { card.shortIntro },
+            greetingTemplates = buildList {
+                card.firstMessage.takeIf(String::isNotBlank)?.let(::add)
+                card.alternateGreetings.filterTo(this) { it.isNotBlank() }
+            }.distinct()
+        )
+    }
+
     fun toDocument(card: CharacterCard): TavernCardDocument {
         val original = card.originalCardJson?.let(TavernCardCodec::parseJson)
         val originalData = original?.data

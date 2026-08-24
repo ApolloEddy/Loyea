@@ -4,6 +4,7 @@ import com.loyea.plugins.tavern.core.*
 
 import android.content.Context
 import com.loyea.plugin.api.PersonaRef
+import com.loyea.plugin.api.PersonaProjection
 import com.loyea.plugin.api.PluginRuntimeGeneration
 import com.loyea.plugin.api.PluginTurnInput
 import com.loyea.plugin.api.PreparedPersonaTurn
@@ -43,11 +44,16 @@ class AppTavernPersonaRepository(
         require(pendingTtlNanos > 0L) { "Tavern pending-turn TTL must be positive" }
     }
 
-    override suspend fun resolve(personaId: String): TavernPersonaRecord? =
+    override suspend fun resolve(personaId: String): PersonaProjection? =
         loadCards().firstOrNull { card ->
             card.id == personaId && CharacterPersonaOwnership.refFor(card).ownerId == TavernPluginDefinition.ID
         }
-            ?.toTavernPersonaRecord()
+            ?.let { card ->
+                TavernCharacterCardAdapter.toProjection(
+                    card,
+                    PersonaRef.plugin(TavernPluginDefinition.ID, card.id)
+                )
+            }
 
     override suspend fun prepareTurn(
         personaId: String,
@@ -188,17 +194,6 @@ class AppTavernPersonaRepository(
         val spec: TavernTurnSpec,
         val byteSize: Long,
         val createdAtNanos: Long
-    )
-
-    private fun CharacterCard.toTavernPersonaRecord(): TavernPersonaRecord = TavernPersonaRecord(
-        personaId = id,
-        displayName = name,
-        avatarUri = avatarUri,
-        summary = description.ifBlank { shortIntro },
-        greetingTemplates = buildList {
-            firstMessage.takeIf(String::isNotBlank)?.let(::add)
-            alternateGreetings.filterTo(this) { it.isNotBlank() }
-        }.distinct()
     )
 
     companion object {

@@ -27,6 +27,7 @@
 ```
 
 - `:plugin-api`：稳定身份、能力、冻结回合、提示词 patch、生成 patch 与输出变换契约。
+- `PersonaProjection`：跨宿主/插件的稳定人格展示投影；Tavern repository 直接返回该契约，不再暴露插件内重复的人格记录类型。
 - `:plugin-host`：插件注册、代次管理、类型化 persona lease、停用排空和失败隔离。
 - `:knowledge-core`：位于 `com.loyea.context.core` 的中立纯 Kotlin 运行时；当前保留 `WorldInfo*` 兼容命名，承载通用条目模型、匹配、预算、递归和深度注入，不依赖 Android 或 Tavern 实现。
 - `:plugins:tavern-core`：位于独立 `com.loyea.plugins.tavern.core` 命名空间，不依赖 Android、Compose、ViewModel 或宿主消息模型；负责 Tavern 文档 codec、CharacterBook/Preset/Regex 和插件回合，并通过 `:knowledge-core` 投影通用知识上下文。
@@ -81,10 +82,12 @@
 
 第二阶段存储边界已建立：旧 `tavern_resources.json` 首次访问时复制到 `files/tavern/registry` 并写入可校验迁移标记，源文件保留；非内置角色卡的规范化原始文档写入 `files/tavern/cards/<sha256>.json`。会话元数据、消息和会话世界书仍由宿主持有。
 
+人格投影边界已收敛：`TavernCharacterCardAdapter` 同时提供 `CharacterCard → PersonaProjection` 与 `CharacterCard → TavernCardDocument` 两条单向路径；请求运行时只消费 `PersonaProjection`，完整 Tavern 字段和未知 JSON 仍留在文档路径。
+
 后续按以下顺序推进，避免把数据迁移、包名重写与 UI 拆分混成一次不可回退的大改动：
 
 1. 完成 `:plugins:tavern-storage` 的资源文件接管，并为旧 registry/raw card 文档补齐恢复与冲突可观测性；会话/消息仍由宿主持有。
-2. 将 `CharacterCard` 拆成原生 `PersonaSummary` 与插件私有 `TavernCardDocument`，通过 adapter 投影，保留一次性旧 JSON 迁移和原始备份。
+2. 将 `CharacterCard` 中尚未迁出的 Tavern 扩展字段拆成原生 `PersonaSummary` 与插件私有 `TavernCardDocument`，通过 adapter 投影，保留一次性旧 JSON 迁移和原始备份。
 3. 把 `TavernScreen` 改为 state + callback 控制面，再迁入 `:plugins:tavern-ui`；SAF、分享和 FileProvider 能力由宿主端口提供。
 4. 清除宿主核心签名中的 Tavern/WorldInfo/Regex/Preset 具体类型，并增加依赖方向架构测试。
 

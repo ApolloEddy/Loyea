@@ -38,25 +38,9 @@ object TavernPluginDefinition {
     )
 }
 
-/** Host-neutral projection of a Tavern card stored by the Android adapter. */
-class TavernPersonaRecord(
-    val personaId: String,
-    val displayName: String,
-    val avatarUri: String?,
-    val summary: String,
-    greetingTemplates: Collection<String>
-) {
-    val greetingTemplates: List<String> = greetingTemplates.toList()
-
-    init {
-        require(personaId.isNotBlank()) { "Tavern persona id must not be blank" }
-        require(displayName.isNotBlank()) { "Tavern persona name must not be blank" }
-    }
-}
-
 /** Android storage and prompt assembly implement this port; the plugin core owns no host state. */
 interface TavernPersonaRepository {
-    suspend fun resolve(personaId: String): TavernPersonaRecord?
+    suspend fun resolve(personaId: String): PersonaProjection?
 
     suspend fun prepareTurn(
         personaId: String,
@@ -217,14 +201,11 @@ private class TavernPluginRuntime(
     override suspend fun resolve(ref: PersonaRef): PersonaProjection? {
         checkOpen()
         if (ref.ownerId != providerId) return null
-        val persona = repository.resolve(ref.personaId) ?: return null
-        return PersonaProjection(
-            ref = PersonaRef.plugin(providerId, persona.personaId),
-            displayName = persona.displayName,
-            avatarUri = persona.avatarUri,
-            summary = persona.summary,
-            greetingTemplates = persona.greetingTemplates
-        )
+        val projection = repository.resolve(ref.personaId) ?: return null
+        if (projection.ref.ownerId != providerId || projection.ref.personaId != ref.personaId) {
+            return null
+        }
+        return projection
     }
 
     override suspend fun prepareTurn(
