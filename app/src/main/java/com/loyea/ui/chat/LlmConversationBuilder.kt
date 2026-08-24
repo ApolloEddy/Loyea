@@ -1,5 +1,10 @@
 package com.loyea.ui.chat
 
+import com.loyea.plugin.api.ChatRole
+import com.loyea.plugin.api.ConversationInsertion
+import com.loyea.plugin.api.InsertionAnchor
+import com.loyea.plugin.api.PreparedPersonaTurn
+import com.loyea.plugin.api.TextStage
 import java.util.TimeZone
 
 /**
@@ -17,11 +22,7 @@ object LlmConversationBuilder {
         includeAudio: Boolean = true,
         compressedSummary: String = "",
         postHistoryInstructions: String = "",
-        card: CharacterCard? = null,
-        regexScripts: List<TavernRegexScript> = emptyList(),
-        userName: String = "User",
-        worldInfoAtDepth: Map<Int, List<WorldInfoMatcher.WorldInfoInjectionBlock>> = emptyMap(),
-        presetMessages: List<TavernPresetPrompt> = emptyList(),
+        preparedTurn: PreparedPersonaTurn? = null,
         maxContextTokens: Int? = null,
         includeMessageTimestamps: Boolean = false,
         allowPhysicalContext: Boolean = true,
@@ -32,19 +33,18 @@ object LlmConversationBuilder {
         if (!systemPrompt.isNullOrBlank()) {
             result.add(LlmChatMessage(role = "system", content = systemPrompt))
         }
-        presetMessages.filter { it.content.isNotBlank() }.forEach { prompt ->
-            val role = when (prompt.role.lowercase()) {
-                "user" -> "user"
-                "assistant" -> "assistant"
-                else -> "system"
-            }
-            result.add(
-                LlmChatMessage(
-                    role = role,
-                    content = "[PRESET SLOT / ${prompt.identifier}]\n${prompt.content.trim()}"
+        val turnInsertions = preparedTurn?.plan?.insertions.orEmpty()
+        turnInsertions
+            .filter { it.anchor == InsertionAnchor.AFTER_SYSTEM_BEFORE_SUMMARY }
+            .sortedBy(ConversationInsertion::order)
+            .forEach { insertion ->
+                result.add(
+                    LlmChatMessage(
+                        role = insertion.role.toProviderRole(),
+                        content = insertion.content
+                    )
                 )
-            )
-        }
+            }
         if (compressedSummary.isNotBlank()) {
             result.add(
                 LlmChatMessage(
@@ -74,14 +74,11 @@ object LlmConversationBuilder {
             }
 
             var textContent = message.content
-            if (message.sender == Sender.USER && regexScripts.isNotEmpty()) {
-                textContent = TavernRegexEngine.apply(
+            if (message.sender == Sender.USER && preparedTurn != null) {
+                textContent = preparedTurn.transform(
+                    stage = TextStage.USER_INPUT,
                     text = textContent,
-                    scripts = regexScripts,
-                    placement = TavernRegexPlacement.USER_INPUT,
-                    card = card,
-                    userName = userName,
-                    isPrompt = true
+                    isMarkdown = false
                 )
             }
             if (effectiveImage == null && !message.imageUrl.isNullOrBlank()) {
@@ -117,34 +114,48 @@ object LlmConversationBuilder {
                 audioUrl = effectiveAudio
             )
         }
+        val atDepthInsertions = turnInsertions.filter {
+            it.anchor == InsertionAnchor.AT_DEPTH_FROM_LATEST
+        }
+        val effectiveMaxContextTokens = maxContextTokens
+            ?: preparedTurn?.plan?.generation?.maxContextTokens
         val boundedHistory = trimHistoryToContextBudget(
             history = historyMessages,
-            maxContextTokens = maxContextTokens,
+            maxContextTokens = effectiveMaxContextTokens,
             fixedMessages = result,
-            worldInfoAtDepth = worldInfoAtDepth,
+            atDepthInsertions = atDepthInsertions,
             postHistoryInstructions = postHistoryInstructions
         )
-        if (worldInfoAtDepth.isEmpty()) {
+        if (atDepthInsertions.isEmpty()) {
             result.addAll(boundedHistory)
         } else {
-            val blocksByBoundary = worldInfoAtDepth.entries
-                .filter { (depth, _) -> depth >= 0 }
-                .groupBy { (depth, _) ->
-                    (boundedHistory.size - depth).coerceIn(0, boundedHistory.size)
+            val blocksByBoundary = atDepthInsertions
+                .groupBy { insertion ->
+                    (boundedHistory.size - insertion.depthFromLatest).coerceIn(0, boundedHistory.size)
                 }
-                .mapValues { (_, entries) -> entries.flatMap { it.value } }
             for (boundary in 0..boundedHistory.size) {
-                blocksByBoundary[boundary].orEmpty().forEach { block ->
+                blocksByBoundary[boundary].orEmpty().sortedBy(ConversationInsertion::order).forEach { insertion ->
                     result.add(
                         LlmChatMessage(
-                            role = normalizeWorldInfoRole(block.role),
-                            content = "[WORLD INFO @ DEPTH / 深度世界书]\n${block.content}"
+                            role = insertion.role.toProviderRole(),
+                            content = insertion.content
                         )
                     )
                 }
                 if (boundary < boundedHistory.size) result.add(boundedHistory[boundary])
             }
         }
+        turnInsertions
+            .filter { it.anchor == InsertionAnchor.AFTER_HISTORY }
+            .sortedBy(ConversationInsertion::order)
+            .forEach { insertion ->
+                result.add(
+                    LlmChatMessage(
+                        role = insertion.role.toProviderRole(),
+                        content = insertion.content
+                    )
+                )
+            }
         if (postHistoryInstructions.isNotBlank()) {
             result.add(
                 LlmChatMessage(
@@ -156,22 +167,23 @@ object LlmConversationBuilder {
         return result
     }
 
-    private fun normalizeWorldInfoRole(role: String?): String = when (role?.lowercase()) {
-        "user" -> "user"
-        "assistant" -> "assistant"
-        else -> "system"
+    private fun ChatRole.toProviderRole(): String = when (this) {
+        ChatRole.USER -> "user"
+        ChatRole.ASSISTANT -> "assistant"
+        ChatRole.TOOL -> "tool"
+        ChatRole.SYSTEM -> "system"
     }
 
     private fun trimHistoryToContextBudget(
         history: List<LlmChatMessage>,
         maxContextTokens: Int?,
         fixedMessages: List<LlmChatMessage>,
-        worldInfoAtDepth: Map<Int, List<WorldInfoMatcher.WorldInfoInjectionBlock>>,
+        atDepthInsertions: List<ConversationInsertion>,
         postHistoryInstructions: String
     ): List<LlmChatMessage> {
         val limit = maxContextTokens?.takeIf { it > 0 } ?: return history
         val fixedCost = fixedMessages.sumOf { estimateTokens(it.content) }
-        val worldInfoCost = worldInfoAtDepth.values.flatten().sumOf { estimateTokens(it.content) }
+        val worldInfoCost = atDepthInsertions.sumOf { estimateTokens(it.content) }
         val postCost = if (postHistoryInstructions.isBlank()) 0 else estimateTokens(postHistoryInstructions)
         val historyBudget = (limit - fixedCost - worldInfoCost - postCost).coerceAtLeast(1)
         val selected = history.toMutableList()

@@ -1,5 +1,7 @@
 package com.loyea.ui.chat
 
+import com.loyea.plugin.api.GenerationPatch
+import com.loyea.plugin.api.TextStage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -171,6 +173,17 @@ class LlmConversationBuilderTest {
 
     @Test
     fun worldInfoAtDepthUsesMessageBoundaryAndRole() {
+        val preparedTurn = LegacyTavernTurnAdapter.prepare(
+            card = CharacterCard("card", "Card", shortIntro = "", systemPrompt = ""),
+            userName = "User",
+            regexScripts = emptyList(),
+            presetMessages = emptyList(),
+            worldInfoAtDepth = mapOf(
+                1 to listOf(WorldInfoMatcher.WorldInfoInjectionBlock("before latest", "assistant")),
+                0 to listOf(WorldInfoMatcher.WorldInfoInjectionBlock("after latest", "user"))
+            ),
+            generation = GenerationPatch()
+        )
         val built = LlmConversationBuilder.build(
             systemPrompt = "stable",
             history = listOf(
@@ -178,10 +191,7 @@ class LlmConversationBuilderTest {
                 Message("a1", "two", Sender.AI),
                 Message("u2", "three", Sender.USER)
             ),
-            worldInfoAtDepth = mapOf(
-                1 to listOf(WorldInfoMatcher.WorldInfoInjectionBlock("before latest", "assistant")),
-                0 to listOf(WorldInfoMatcher.WorldInfoInjectionBlock("after latest", "user"))
-            )
+            preparedTurn = preparedTurn
         )
         assertEquals(
             listOf(
@@ -196,6 +206,55 @@ class LlmConversationBuilderTest {
         )
         assertEquals("assistant", built[3].role)
         assertEquals("user", built[5].role)
+    }
+
+    @Test
+    fun frozenTavernTurnPreservesPresetOrderAndRegexAcrossStages() {
+        val mutableScripts = mutableListOf(
+            TavernRegexScript(
+                id = "replace",
+                scriptName = "replace",
+                findRegex = "/foo/g",
+                replaceString = "bar",
+                placement = listOf(
+                    TavernRegexPlacement.USER_INPUT,
+                    TavernRegexPlacement.AI_OUTPUT,
+                    TavernRegexPlacement.REASONING
+                )
+            )
+        )
+        val preparedTurn = LegacyTavernTurnAdapter.prepare(
+            card = CharacterCard("card", "Card", shortIntro = "", systemPrompt = ""),
+            userName = "User",
+            regexScripts = mutableScripts,
+            presetMessages = listOf(
+                TavernPresetPrompt("Rule", "rule", "preset text", role = "assistant")
+            ),
+            worldInfoAtDepth = emptyMap(),
+            generation = GenerationPatch(maxContextTokens = 4096)
+        )
+        mutableScripts.clear()
+
+        val built = LlmConversationBuilder.build(
+            systemPrompt = "stable",
+            history = listOf(Message("u", "foo", Sender.USER)),
+            compressedSummary = "summary",
+            preparedTurn = preparedTurn
+        )
+
+        assertEquals(
+            listOf(
+                "stable",
+                "[PRESET SLOT / rule]\npreset text",
+                "[EARLY CONVERSATION SUMMARY / 会话早期摘要]\nsummary",
+                "bar"
+            ),
+            built.map { it.content }
+        )
+        assertEquals("assistant", built[1].role)
+        assertEquals("bar", preparedTurn.transform(TextStage.MODEL_OUTPUT, "foo", isMarkdown = true))
+        assertEquals("bar", preparedTurn.transform(TextStage.REASONING, "foo"))
+        assertEquals(4096, preparedTurn.plan.generation.maxContextTokens)
     }
 
     @Test

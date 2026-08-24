@@ -21,6 +21,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed (变更)
 - **生成参数与 Tavern 类型解耦**：`LlmClient` 改为消费插件 API 的通用 `GenerationPatch`，Tavern preset 仅负责投影；严格 Provider 对 `top_k`/`repetition_penalty` 的过滤由宿主 `GenerationRequestMapper` 统一执行并新增 JSON 字段级回归测试。
+- **会话序列化与 Tavern 类型解耦**：`LlmConversationBuilder` 改为只消费冻结的 `PreparedPersonaTurn`，preset slot、深度世界书与用户输入变换均投影为通用 insertion/transform，不再在核心签名中暴露卡片、Regex、Preset 或 WorldInfo 类型。
 - **世界书提示词插入**：世界书不再只拼成一个 legacy system 文本块；`before/after character`、作者注释、示例消息、outlet 和 `at_depth` 分桶保留，深度条目按 `system/user/assistant` role 插入实际消息边界。
 - **世界书编辑器与标准导出**：设置页补充正则、大小写、整词、注入位置和深度编辑；标准 SillyTavern World Info 导出使用数字 `position`，同时保留 `positionType`/扩展字段以兼容新版 Tavern。
 - **会话请求构建**：用户输入 placement、角色卡 Regex、preset post-history 和 CharacterBook 深度注入贯通 `PromptAssembler → LlmConversationBuilder → LlmClient`，不改变旧卡/旧会话 JSON 的读取方式。
@@ -32,6 +33,7 @@ All notable changes to this project will be documented in this file.
 - **备用开场白选择**：新会话选择角色时可直接选用 V2/V3 `alternate_greetings`，不再只能使用第一句。
 
 ### Fixed (修复)
+- 修复流式生成途中切换角色卡或修改 Tavern 资源时，输出/Reasoning Regex 每个片段重新读取当前卡片而混用两套规则的问题；一条请求现在固定使用启动时的卡片、用户名、Regex、preset 与深度插入快照。
 - 修复 CharacterBook 或世界书 `token_budget/budget_cap=0` 时所有条目被错误裁剪为空；现在按 SillyTavern 语义视为不额外限制，并让 `ignoreBudget` 条目不计入预算。
 - 修复 CharacterBook 高级字段只被保存但未参与运行时的问题：角色描述、性格、场景、creator notes、正则关键词、全局扫描开关和 timed 条目现在可影响匹配结果。
 - 修复标准世界书高级 position 导出为字符串导致旧版 ST 网关可能拒绝整本书的问题。

@@ -20,6 +20,9 @@ import com.loyea.health.HealthConnectCoordinator
 import com.loyea.health.HealthPairingStatus
 import com.loyea.perception.HapticManager
 import com.loyea.perception.PhysicalContextManager
+import com.loyea.plugin.api.GenerationPatch
+import com.loyea.plugin.api.PreparedPersonaTurn
+import com.loyea.plugin.api.TextStage
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Dispatchers
@@ -1166,6 +1169,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             var lastStreamUiPublishNanos = 0L
             val boundPreset = resolvePresetForCard(characterCard)
             val presetGeneration = boundPreset?.generationOverrides()
+            lateinit var preparedTurn: PreparedPersonaTurn
 
             fun shouldPublishStreamUi(force: Boolean = false): Boolean {
                 val now = System.nanoTime()
@@ -1189,7 +1193,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 // 防御：完整 [haptic:xxx] 跨提交边界被 removeRange 剥离后，accumulatedContent 会短于 segmentCut，
                 // 越界 substring 会抛异常导致整条回复被外层 catch 打成错误气泡，这里 coerce 到当前长度
                 val start = segmentCut.coerceAtMost(accumulatedContent.length)
-                return cleanSegmentText(truncateIncompleteHaptic(accumulatedContent.substring(start)))
+                return cleanSegmentText(
+                    truncateIncompleteHaptic(accumulatedContent.substring(start)),
+                    preparedTurn
+                )
             }
 
             fun commitCurrentTextSegment() {
@@ -1335,6 +1342,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 trustedCard = characterCard.isBuiltIn,
                 snapshotTimeMillis = snapshotTime
             )
+            preparedTurn = LegacyTavernTurnAdapter.prepare(
+                card = characterCard,
+                userName = userName.value,
+                regexScripts = cardRegexScripts(characterCard),
+                presetMessages = promptParts.presetMessages,
+                worldInfoAtDepth = promptParts.worldInfoAtDepth,
+                generation = presetGeneration ?: GenerationPatch()
+            )
 
             val turnSnapshot = existingTurnSnapshot ?: promptParts.turnContextSnapshot
             var requestHistory = history
@@ -1369,12 +1384,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 includeAudio = includeAudioInput,
                 compressedSummary = activeSession.value?.compressedSummary ?: "",
                 postHistoryInstructions = promptParts.postHistoryInstructions,
-                card = characterCard,
-                regexScripts = cardRegexScripts(characterCard),
-                userName = userName.value,
-                worldInfoAtDepth = promptParts.worldInfoAtDepth,
-                presetMessages = promptParts.presetMessages,
-                maxContextTokens = boundPreset?.maxContext,
+                preparedTurn = preparedTurn,
                 includeMessageTimestamps = sessionUsesSystemTime,
                 allowPhysicalContext = sessionUsesSystemTime,
                 allowGraphContext = enableGraphMemory.value
@@ -1421,7 +1431,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             is StreamEvent.Thoughts -> {
                                 accumulatedThoughts += event.text
                                 if (shouldPublishStreamUi()) {
-                                    val displayThoughts = sanitizeAndApplyCardReasoning(accumulatedThoughts)
+                                    val displayThoughts = sanitizeAndApplyCardReasoning(accumulatedThoughts, preparedTurn)
                                     currentList = messages.value.map { msg ->
                                         if (msg.id == aiMessageId) {
                                             msg.copy(
@@ -1463,9 +1473,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                     currentList = messages.value.map { msg ->
                                         if (msg.id == aiMessageId) {
                                             msg.copy(
-                                                content = cleanFinalContent(displayContent),
+                                                content = cleanFinalContent(displayContent, preparedTurn),
                                                 contentSegments = currentSegments(),
-                                                thoughts = sanitizeAndApplyCardReasoning(accumulatedThoughts)
+                                                thoughts = sanitizeAndApplyCardReasoning(accumulatedThoughts, preparedTurn)
                                                     .takeIf { it.isNotBlank() },
                                                 isStillThinking = false,
                                                 thoughtDurationSeconds = calculatedDuration ?: 0
@@ -1483,9 +1493,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 currentList = messages.value.map { msg ->
                                     if (msg.id == aiMessageId) {
                                         msg.copy(
-                                            content = cleanFinalContent(accumulatedContent),
+                                            content = cleanFinalContent(accumulatedContent, preparedTurn),
                                             contentSegments = segments.toList(),
-                                            thoughts = sanitizeAndApplyCardReasoning(accumulatedThoughts)
+                                            thoughts = sanitizeAndApplyCardReasoning(accumulatedThoughts, preparedTurn)
                                                 .takeIf { it.isNotBlank() }
                                         )
                                     } else {
@@ -1524,7 +1534,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                     segmentCut = 0
                                 } else {
                                     // 流中断/出错时保留已生成的半截内容（附错误提示），不整体覆盖丢失，并落盘保存
-                                    val partialContent = cleanFinalContent(accumulatedContent)
+                                    val partialContent = cleanFinalContent(accumulatedContent, preparedTurn)
                                     val errorDisplay = if (partialContent.isNotEmpty()) {
                                         "$partialContent\n\n⚠️ ${event.message.removePrefix("[错误] ")}"
                                     } else {
@@ -1567,9 +1577,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 currentList = messages.value.map { msg ->
                                     if (msg.id == aiMessageId) {
                                         msg.copy(
-                                            content = cleanFinalContent(accumulatedContent),
+                                            content = cleanFinalContent(accumulatedContent, preparedTurn),
                                             contentSegments = currentSegments(),
-                                            thoughts = sanitizeAndApplyCardReasoning(accumulatedThoughts)
+                                            thoughts = sanitizeAndApplyCardReasoning(accumulatedThoughts, preparedTurn)
                                                 .takeIf { it.isNotBlank() },
                                             isStillThinking = streamToolCalls.isNotEmpty(),
                                             // 多轮 Agent 式：中间轮有工具继续 → 思考块保持展开；最终轮（无工具）→ 自动折叠
@@ -1585,7 +1595,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
                                 // AI 消息生成结束后，若开启了 TTS 且非工具流最终回合，则自动朗读
                                 if (enableTts.value && enableAutoTts.value && streamToolCalls.isEmpty()) {
-                                    playTts(aiMessageId, cleanFinalContent(accumulatedContent))
+                                    playTts(aiMessageId, cleanFinalContent(accumulatedContent, preparedTurn))
                                 }
 
                                 // 首轮 AI 回复完成后，尝试用 LLM 精修会话标题（静默失败、仅一次）
@@ -1611,7 +1621,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         nextConversation.add(
                             LlmChatMessage(
                                 role = "assistant",
-                                content = cleanFinalContent(accumulatedContent).ifBlank { null },
+                                content = cleanFinalContent(accumulatedContent, preparedTurn).ifBlank { null },
                                 toolCalls = streamToolCalls
                             )
                         )
@@ -1801,7 +1811,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         accumulatedThoughts += "\n\n💡 *（已在此处调用接口感知状态：$executedToolsStr）*\n\n"
                         currentList = messages.value.map { msg ->
                             if (msg.id == aiMessageId) {
-                                msg.copy(thoughts = sanitizeAndApplyCardReasoning(accumulatedThoughts))
+                                msg.copy(thoughts = sanitizeAndApplyCardReasoning(accumulatedThoughts, preparedTurn))
                             } else {
                                 msg
                             }
@@ -1846,7 +1856,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     currentList = currentList.map { msg ->
                         if (msg.id == aiMessageId) {
                             msg.copy(
-                                content = cleanFinalContent(finalContent),
+                                content = cleanFinalContent(finalContent, preparedTurn),
                                 contentSegments = segments.toList(),
                                 isStillThinking = false
                             )
@@ -1937,37 +1947,35 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private fun collapseReplyNewlines(s: String): String = s.replace(Regex("\\n{2,}"), "\n\n")
 
     /** 段文本：折叠空行 + 去段首残留空行；保留段尾段落空行，让文本段与工具卡之间留空隙 */
-    private fun cleanSegmentText(s: String): String =
-        collapseReplyNewlines(sanitizeAndApplyCardRegex(s)).trimStart('\n', '\r')
+    private fun cleanSegmentText(s: String, preparedTurn: PreparedPersonaTurn): String =
+        collapseReplyNewlines(sanitizeAndApplyCardRegex(s, preparedTurn)).trimStart('\n', '\r')
 
     /** 最终全文：折叠 + 去首尾（思考块剥离残留 + 结尾空行） */
-    private fun cleanFinalContent(s: String): String =
-        collapseReplyNewlines(sanitizeAndApplyCardRegex(s)).trim('\n', '\r')
+    private fun cleanFinalContent(s: String, preparedTurn: PreparedPersonaTurn): String =
+        collapseReplyNewlines(sanitizeAndApplyCardRegex(s, preparedTurn)).trim('\n', '\r')
 
     /** 角色卡 scoped regex 运行在输出层；核心元数据过滤放在最后，避免泄漏回用户界面。 */
-    private fun sanitizeAndApplyCardRegex(text: String): String {
-        val card = activeCharacterCard.value
-        val transformed = TavernRegexEngine.applyOutput(
+    private fun sanitizeAndApplyCardRegex(
+        text: String,
+        preparedTurn: PreparedPersonaTurn
+    ): String {
+        val transformed = preparedTurn.transform(
+            stage = TextStage.MODEL_OUTPUT,
             text = text,
-            scripts = cardRegexScripts(card),
-            card = card,
-            userName = userName.value,
             isMarkdown = true
         )
         return ReplyOutputSanitizer.sanitize(transformed)
     }
 
     /** reasoning 阶段也遵循卡片/预设 regex 的 placement=6，避免思维区成为旁路泄漏。 */
-    private fun sanitizeAndApplyCardReasoning(text: String): String {
-        val card = activeCharacterCard.value
-        val transformed = TavernRegexEngine.apply(
+    private fun sanitizeAndApplyCardReasoning(
+        text: String,
+        preparedTurn: PreparedPersonaTurn
+    ): String {
+        val transformed = preparedTurn.transform(
+            stage = TextStage.REASONING,
             text = text,
-            scripts = cardRegexScripts(card),
-            placement = TavernRegexPlacement.REASONING,
-            card = card,
-            userName = userName.value,
-            isMarkdown = false,
-            isPrompt = false
+            isMarkdown = false
         )
         return ReplyOutputSanitizer.sanitize(transformed)
     }
@@ -2059,12 +2067,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         includeAudio: Boolean = true,
         compressedSummary: String = "",
         postHistoryInstructions: String = "",
-        card: CharacterCard? = null,
-        regexScripts: List<TavernRegexScript> = emptyList(),
-        userName: String = "User",
-        worldInfoAtDepth: Map<Int, List<WorldInfoMatcher.WorldInfoInjectionBlock>> = emptyMap(),
-        presetMessages: List<TavernPresetPrompt> = emptyList(),
-        maxContextTokens: Int? = null,
+        preparedTurn: PreparedPersonaTurn? = null,
         includeMessageTimestamps: Boolean = false,
         allowPhysicalContext: Boolean = true,
         allowGraphContext: Boolean = true
@@ -2075,12 +2078,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         includeAudio = includeAudio,
         compressedSummary = compressedSummary,
         postHistoryInstructions = postHistoryInstructions,
-        card = card,
-        regexScripts = regexScripts,
-        userName = userName,
-        worldInfoAtDepth = worldInfoAtDepth,
-        presetMessages = presetMessages,
-        maxContextTokens = maxContextTokens,
+        preparedTurn = preparedTurn,
         includeMessageTimestamps = includeMessageTimestamps,
         allowPhysicalContext = allowPhysicalContext,
         allowGraphContext = allowGraphContext
