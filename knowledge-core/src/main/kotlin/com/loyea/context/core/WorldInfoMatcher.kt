@@ -71,7 +71,8 @@ object WorldInfoMatcher {
         characterTags: List<String> = emptyList(),
         runtimeState: WorldInfoRuntimeState = WorldInfoRuntimeState(),
         turnKey: String = "",
-        turnIndex: Long = historyContents.size.toLong()
+        turnIndex: Long = historyContents.size.toLong(),
+        generationType: String = GENERATION_NORMAL
     ): WorldInfoMatchResult {
         val active = entries.filter { it.enabled && !it.disable }
         if (active.isEmpty()) return WorldInfoMatchResult(emptyList(), runtimeState)
@@ -204,6 +205,7 @@ object WorldInfoMatcher {
         fun tryActivate(entry: WorldInfoEntry, worldContent: String, pass: Int): ActivationCandidate? {
             if (pass > 0 && (entry.excludeRecursion || !entry.allowRecursion)) return null
             if (entry.delayUntilRecursion > pass) return null
+            if (!entry.matchesGenerationType(generationType)) return null
             val timed = timedEntryState(
                 entry = entry,
                 historyContents = historyContents,
@@ -219,7 +221,8 @@ object WorldInfoMatcher {
                 characterName = characterName,
                 characterTags = characterTags,
                 runtimeState = runtimeState,
-                currentTurnIndex = resolvedTurnIndex
+                currentTurnIndex = resolvedTurnIndex,
+                generationType = generationType
             )
             if (timed.delayActive) return null
             if (timed.cooldownActive && !timed.stickyActive) return null
@@ -238,7 +241,8 @@ object WorldInfoMatcher {
                         scenario = scenario,
                         creatorNotes = creatorNotes,
                         characterName = characterName,
-                        characterTags = characterTags
+                        characterTags = characterTags,
+                        generationType = generationType
                     )) {
                 return ActivationCandidate(
                     entry = entry,
@@ -366,7 +370,8 @@ object WorldInfoMatcher {
         characterTags: List<String> = emptyList(),
         runtimeState: WorldInfoRuntimeState = WorldInfoRuntimeState(),
         turnKey: String = "",
-        turnIndex: Long = historyContents.size.toLong()
+        turnIndex: Long = historyContents.size.toLong(),
+        generationType: String = GENERATION_NORMAL
     ): List<WorldInfoEntry> = matchWorldInfoEntriesFor(
         entries = entries,
         historyContents = historyContents,
@@ -384,7 +389,8 @@ object WorldInfoMatcher {
         characterTags = characterTags,
         runtimeState = runtimeState,
         turnKey = turnKey,
-        turnIndex = turnIndex
+        turnIndex = turnIndex,
+        generationType = generationType
     ).entries
 
     private data class TimedEntryState(
@@ -413,7 +419,8 @@ object WorldInfoMatcher {
         characterName: String,
         characterTags: List<String>,
         runtimeState: WorldInfoRuntimeState,
-        currentTurnIndex: Long
+        currentTurnIndex: Long,
+        generationType: String
     ): TimedEntryState {
         val currentSize = historyContents.size
         val delayActive = entry.delay > 0 && currentSize < entry.delay
@@ -452,7 +459,8 @@ object WorldInfoMatcher {
                 scenario = scenario,
                 creatorNotes = creatorNotes,
                 characterName = characterName,
-                characterTags = characterTags
+                characterTags = characterTags,
+                generationType = generationType
             )
         } ?: return TimedEntryState(delayActive = delayActive)
         val turnsSinceActivation = prior.size - lastActivation
@@ -501,7 +509,8 @@ object WorldInfoMatcher {
         characterTags: List<String> = emptyList(),
         runtimeState: WorldInfoRuntimeState = WorldInfoRuntimeState(),
         turnKey: String = "",
-        turnIndex: Long = historyContents.size.toLong()
+        turnIndex: Long = historyContents.size.toLong(),
+        generationType: String = GENERATION_NORMAL
     ): String? = worldInfoRenderFor(
         entries = entries,
         historyContents = historyContents,
@@ -519,7 +528,8 @@ object WorldInfoMatcher {
         characterTags = characterTags,
         runtimeState = runtimeState,
         turnKey = turnKey,
-        turnIndex = turnIndex
+        turnIndex = turnIndex,
+        generationType = generationType
     ).all
 
     /** 按 ST position/role/outlet 分桶；Prompt 层可据此将同一组命中放到正确位置。 */
@@ -540,7 +550,8 @@ object WorldInfoMatcher {
         characterTags: List<String> = emptyList(),
         runtimeState: WorldInfoRuntimeState = WorldInfoRuntimeState(),
         turnKey: String = "",
-        turnIndex: Long = historyContents.size.toLong()
+        turnIndex: Long = historyContents.size.toLong(),
+        generationType: String = GENERATION_NORMAL
     ): WorldInfoRenderResult {
         val matchResult = matchWorldInfoEntriesFor(
             entries = entries,
@@ -559,7 +570,8 @@ object WorldInfoMatcher {
             characterTags = characterTags,
             runtimeState = runtimeState,
             turnKey = turnKey,
-            turnIndex = turnIndex
+            turnIndex = turnIndex,
+            generationType = generationType
         )
         val ordered = matchResult.entries
         if (ordered.isEmpty()) return WorldInfoRenderResult(
@@ -625,6 +637,7 @@ object WorldInfoMatcher {
     private const val POSITION_AT_DEPTH = "at_depth"
     private const val POSITION_OUTLET = "outlet"
     private const val POSITION_LEGACY = "legacy"
+    private const val GENERATION_NORMAL = "normal"
 
     private fun normalizePosition(value: String): String = when (value.lowercase().replace('-', '_')) {
         "before_char", "before_character", "before_character_definitions" -> POSITION_BEFORE_CHAR
@@ -658,8 +671,10 @@ object WorldInfoMatcher {
         scenario: String = "",
         creatorNotes: String = "",
         characterName: String = "",
-        characterTags: List<String> = emptyList()
+        characterTags: List<String> = emptyList(),
+        generationType: String = GENERATION_NORMAL
     ): Boolean {
+        if (!entry.matchesGenerationType(generationType)) return false
         if (!passesCharacterFilter(entry, characterName, characterTags)) return false
         val sources = entry.keysContainedIn
             .split(",")
@@ -689,10 +704,8 @@ object WorldInfoMatcher {
             it.isNotBlank() && matchesKeyword(it, sourceTexts, entry, config)
         }
 
-        // 主关键词 + ST/Tavern 扩展 triggers 命中（constant 直通）。
-        // triggers 不是自动化副作用本身，而是该条目的额外激活条件；真正的 automationId
-        // 事件由上层应用决定，避免在纯匹配函数里偷偷执行外部动作。
-        val primaryMatched = entry.constant || (entry.keywords + entry.triggers).any {
+        // ST 的 triggers 是生成类型过滤，不是额外关键词；空列表表示所有生成类型。
+        val primaryMatched = entry.constant || entry.keywords.any {
             it.isNotBlank() && matchesKeyword(it, sourceTexts, entry, config)
         }
         if (!primaryMatched) return false
@@ -748,7 +761,7 @@ object WorldInfoMatcher {
             if (entry.matchScenario) append("\n").append(scenario)
             if (entry.matchCreatorNotes) append("\n").append(creatorNotes)
         }
-        val primaryScore = (entry.keywords + entry.triggers).count {
+        val primaryScore = entry.keywords.count {
             it.isNotBlank() && matchesKeyword(it, sourceTexts, entry, config)
         }
         if (primaryScore == 0) return 0
@@ -818,6 +831,17 @@ object WorldInfoMatcher {
 
     private fun WorldInfoEntry.matchWholeWordsOr(config: WorldInfoConfig): Boolean =
         matchWholeWords ?: config.matchWholeWords
+
+    private fun WorldInfoEntry.matchesGenerationType(generationType: String): Boolean {
+        if (triggers.isEmpty()) return true
+        val normalizedGenerationType = normalizeGenerationType(generationType)
+        return triggers.any { normalizeGenerationType(it) == normalizedGenerationType }
+    }
+
+    private fun normalizeGenerationType(value: String): String = value
+        .trim()
+        .removePrefix(":")
+        .lowercase()
 
     private fun probabilityRoll(entry: WorldInfoEntry, random: Random): Boolean {
         if (!entry.useProbability) return true

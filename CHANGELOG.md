@@ -29,6 +29,7 @@ All notable changes to this project will be documented in this file.
 - **角色卡高级编辑与导出**：编辑/创建页补齐 description、creator notes、post-history、备用/群聊开场白、标签、来源、昵称、版本、内嵌 CharacterBook 与 extensions JSON；新增 V3 JSON 和 CHARX（含安全资源）导出。
 
 ### Changed (变更)
+- **World Info 生成类型语义修正**：`triggers` 现在按 SillyTavern 的 `normal/continue/impersonate/swipe/regenerate/quiet` 过滤生成请求，不再错误地作为额外关键词参与匹配；空列表继续表示所有生成类型。
 - **Tavern 人格投影契约收敛**：移除 `tavern-core` 内重复的 `TavernPersonaRecord`，`TavernPersonaRepository` 直接返回 `plugin-api PersonaProjection`；app 的 `TavernCharacterCardAdapter` 统一提供稳定人格投影与完整 `TavernCardDocument` 两条单向转换路径。
 - **Tavern 存储边界接入宿主**：旧 `tavern_resources.json` 首次访问时迁移到 `files/tavern/registry` 并保留源文件；非内置角色卡原始文档同步到 `files/tavern/cards/<sha256>.json`，会话元数据、消息和会话世界书路径保持不变。
 - **World Info 依赖方向收紧**：`WorldInfoModels` 与 `WorldInfoMatcher` 从 `:plugins:tavern-core` 移入 `:knowledge-core`；Tavern 通过适配器投影知识上下文，app 不再因 World Info 类型直接依赖 Tavern Core。

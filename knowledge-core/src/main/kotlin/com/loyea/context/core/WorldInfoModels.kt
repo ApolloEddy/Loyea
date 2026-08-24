@@ -75,6 +75,7 @@ data class WorldInfoEntry(
     val sticky: Int = 0,
     val cooldown: Int = 0,
     val delay: Int = 0,
+    /** SillyTavern generation types: normal/continue/impersonate/swipe/regenerate/quiet. */
     val triggers: List<String> = emptyList(),
     val extensionsJson: String = "{}",
     val automationId: String = "",

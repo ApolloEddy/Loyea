@@ -10,6 +10,16 @@
 - 插件启停不删除用户导入的数据。重新启用或重启应用后，持久化的期望状态与 live runtime 状态保持一致。
 - 原生人格和插件人格即使使用相同本地 ID，也不能共享消息副作用、后台任务、主动问候或图记忆。
 
+## 兼容性基线（2026-08-24）
+
+“兼容”按三层验收，不把 JSON 字段能读写等同于运行时等价：
+
+- **格式层**：角色卡 V1/V2/V3、PNG/JSON/CHARX、World Info、Preset、Regex 和聊天文件可安全导入、导出、未知字段往返。
+- **语义层**：关键词/正则、World Info 递归与 timed effects、生成类型触发、Prompt Manager 槽位、宏/变量、Persona、群聊和聊天分支必须在请求链路中产生等价结果。
+- **平台层**：STscript、Quick Replies、第三方扩展、向量 Data Bank 等脚本/宿主能力必须经过显式安全端口；无法在 Android 本地安全复刻的能力不得伪装成已支持。
+
+本阶段以 [SillyTavern World Info](https://docs.sillytavern.app/usage/core-concepts/worldinfo/)、[SillyTavern Macros](https://docs.sillytavern.app/usage/core-concepts/macros/)、[SillyTavern Group Chats](https://docs.sillytavern.app/usage/core-concepts/groupchats/)、[Tavo Chat](https://docs.tavoai.dev/en/guides/chat/) 和 [Tavo Group Chat](https://docs.tavoai.dev/en/guides/chat/group-chat/) 的当前公开语义为对照基线；每个后续兼容任务都必须绑定输入 fixture、请求快照和持久化回读断言。
+
 ## 当前模块与依赖方向
 
 ```text

@@ -43,7 +43,8 @@ class WorldInfoMatcherTest {
         weight: Int = 0,
         sticky: Int = 0,
         cooldown: Int = 0,
-        delay: Int = 0
+        delay: Int = 0,
+        triggers: List<String> = emptyList()
     ) = WorldInfoEntry(
         id = id, keywords = keywords, content = content, enabled = enabled, uid = uid,
         keysecondary = keysecondary, constant = constant, order = order, depth = depth,
@@ -52,7 +53,8 @@ class WorldInfoMatcherTest {
         useProbability = useProbability, delayUntilRecursion = delayUntilRecursion,
         preventRecursion = preventRecursion, allowRecursion = allowRecursion,
         excludeRecursion = excludeRecursion, keysContainedIn = keysContainedIn,
-        position = position, weight = weight, sticky = sticky, cooldown = cooldown, delay = delay
+        position = position, weight = weight, sticky = sticky, cooldown = cooldown, delay = delay,
+        triggers = triggers
     )
 
     // ---------- 基础触发 ----------
@@ -70,6 +72,52 @@ class WorldInfoMatcherTest {
         val e = entry("k1", keywords = listOf("MagicStone"), content = "Stone lore")
         val out = WorldInfoMatcher.worldInfoBlockFor(listOf(e), listOf("the magicstone is here"), "U", "S", cfg, Random(1))
         assertTrue(out!!.contains("Stone lore"))
+    }
+
+    @Test
+    fun generationTypeTriggersFilterActivationAndAreNotKeywords() {
+        val continueOnly = entry(
+            id = "continue-only",
+            keywords = listOf("primary"),
+            triggers = listOf(":CONTINUE"),
+            content = "continue lore"
+        )
+        assertNull(
+            WorldInfoMatcher.worldInfoBlockFor(
+                listOf(continueOnly), listOf("primary"), "U", "S", cfg, Random(1),
+                generationType = "normal"
+            )
+        )
+        assertTrue(
+            WorldInfoMatcher.worldInfoBlockFor(
+                listOf(continueOnly), listOf("primary"), "U", "S", cfg, Random(1),
+                generationType = "continue"
+            )!!.contains("continue lore")
+        )
+        assertNull(
+            WorldInfoMatcher.worldInfoBlockFor(
+                listOf(continueOnly), listOf("continue"), "U", "S", cfg, Random(1),
+                generationType = "continue"
+            )
+        )
+    }
+
+    @Test
+    fun emptyGenerationTypeTriggersMatchEveryGenerationType() {
+        val allGenerations = entry(
+            id = "all-generations",
+            keywords = listOf("primary"),
+            content = "all lore"
+        )
+        listOf("normal", "continue", "impersonate", "swipe", "regenerate", "quiet").forEach { type ->
+            assertTrue(
+                "expected match for $type",
+                WorldInfoMatcher.worldInfoBlockFor(
+                    listOf(allGenerations), listOf("primary"), "U", "S", cfg, Random(1),
+                    generationType = type
+                )!!.contains("all lore")
+            )
+        }
     }
 
     @Test
