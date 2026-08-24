@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] - 2026-08-24
+## [Unreleased] - 2026-08-25
 
 ### Added (新增)
 - **Tavern 私有存储模块**：新增纯 Kotlin/JVM `:plugins:tavern-storage`，提供受根目录约束的 registry/cards/assets 布局、SHA-256 文件指纹、原子复制、冲突保留和可重入迁移标记；不承载会话或消息。
@@ -33,9 +33,10 @@ All notable changes to this project will be documented in this file.
 - **请求级宏与 Prompt Manager 运行语义**：系统提示、preset slot、World Info Regex 和输出 Regex 现在共享同一份冻结 `TavernMacroContext`；补齐角色/历史尾部/生成类型/时间/legacy 标记/条件块/只读变量宏，未知或写入类脚本保持安全边界。Preset slot 按 `normal/continue/impersonate/swipe/regenerate/quiet` trigger 过滤，支持 relative 与 in-chat/depth；Continue Nudge、Continue Prefill 和 Continue Postfix 进入真实 provider 消息序列。
 - **当前 SillyTavern 只读宏补齐**：冻结请求上下文新增 `allChatRange`、最近用户消息时间、swipe 索引、扩展名和移动端状态；宏引擎补齐 `idleDuration`、`timeDiff`、UTC 偏移、`random/pick/roll`、`trim`、`hasExtension` 等安全子集。随机与掷骰使用请求级种子，保证一次请求内 Prompt/Regex 重算不会漂移；`setvar/addvar/inc/dec` 等写入宏仍保持字面量，不执行宿主副作用。
 - **群聊成员与回复策略核心**：新增纯 JVM 的群聊 roster/静音/启用状态、自然聊天、全员回复、指定发言者和上下文选角规划器；`{{group}}`/`{{groupNotMuted}}` 与输出 Regex 共用冻结成员快照，Tavo 群聊 JSON 可读写并拒绝未知/静音成员成为发言者。
-- **群聊会话快照、成员面板与顺序生成**：会话元数据现在持久化 Tavo/SillyTavern roster；聊天页可编辑群名、启用/静音成员、自然/全员/指定/上下文选角模式、指定发言者、最大回复数和选角提示词，并支持停用群聊。请求启动时一次解析并冻结成员、`{{group}}`/`{{groupNotMuted}}`/`{{notChar}}` 与群聊系统块；自然/全员/指定模式会按计划逐成员生成，上下文模式会先调用短选角请求，再按同一队列生成；停止、切会话或人格绑定变化会取消后续队列。未安装角色卡会显示警告并跳过；群聊头像/成员专属 UI、Branch/Checkpoint 文件操作和更完整的 Tavo 自动模式仍未伪装成已完成。
+- **群聊会话快照、成员面板与顺序生成**：会话元数据现在持久化 Tavo/SillyTavern roster；聊天页可编辑群名、启用/静音成员、自然/全员/指定/上下文选角模式、指定发言者、最大回复数和选角提示词，并支持停用群聊。请求启动时一次解析并冻结成员、`{{group}}`/`{{groupNotMuted}}`/`{{notChar}}` 与群聊系统块；自然/全员/指定模式会按计划逐成员生成，上下文模式会先调用短选角请求，再按同一队列生成；停止、切会话或人格绑定变化会取消后续队列。未安装角色卡会显示警告并跳过；群聊头像/成员专属 UI 和更完整的 Tavo 自动模式仍未伪装成已完成。
 - **聊天 JSONL Android 桥接**：新增会话级导入/导出入口和 SAF 文件选择器；ST/Tavo header、角色名匹配、system 消息、swipes、`extra`、未知字段与时间戳进入本地会话，损坏行会阻止部分导入而不静默丢数据。未匹配角色会回退当前卡片并给出可见警告。
 - **SillyTavern/Tavo 聊天 JSONL 与分支核心**：新增当前 `ChatHeader`/`ChatMessage` JSONL 的容错解析与标准导出，保留 swipes、`extra`、时间字段和未识别直字段；损坏行返回带行号诊断。新增 Branch/Checkpoint 纯核心规划器，按消息截断复制并写入 `main_chat`，同时维护 `extra.branches`/`extra.bookmark_link`，支持选择指定 swipe。
+- **Android Branch/Checkpoint 会话操作**：聊天消息更多菜单现在可创建带名称的 Branch 或 Checkpoint；宿主调用纯核心规划器后，将 `main_chat`、`extra.branches`/`extra.bookmark_link` 和选定 swipe 投影回本地消息，同时保留图片、思考、MCP 和其他 Loyea 字段。Branch 会原子写入父会话更新与子会话并切换到子会话，Checkpoint 写入子会话但留在父会话；失败会恢复父消息并清理未登记子文件，标题输入限制为安全的 1–80 字符。
 - **Continue/Swipe 生成入口**：新增最后一条 AI 回复的 Continue 与 Swipe 操作。Continue 保留原 AI 消息 ID、把原文放回 provider 上下文并将新流式文本追加到同一气泡；Swipe 使用独立的 `swipe` 生成类型并复用版本归并，继续让 World Info 的生成类型过滤看到真实请求。插件暂不把 impersonate 伪装成普通回复。
 - **Impersonate 代发草稿**：新增最后一条 AI 回复的代发入口，使用 `impersonate` 生成类型和一次性提示约束，让模型按用户身份生成文本并回填输入框；结果只有用户点击发送后才写入聊天，代发期间不执行 MCP 工具、自动 TTS 或标题副作用，失败不会留下伪造用户消息。
 - **World Info 生成类型贯通请求链**：`normal`、`regenerate`、`continue`、`swipe`、`impersonate` 与后台 `quiet` 请求现在把生成类型从宿主入口冻结到 Tavern 插件输入/回合暂存，并在准备阶段校验 spec/input 一致；支持大小写与前导冒号的规范化，避免 World Info/Prompt Manager 触发过滤与实际请求类型漂移。

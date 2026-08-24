@@ -1,12 +1,84 @@
 package com.loyea.ui.chat
 
 import com.google.gson.JsonParser
+import com.loyea.plugins.tavern.core.TavernChatForkMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TavernChatSessionCodecTest {
+    @Test
+    fun `native fork keeps branch metadata and non-tavern message fields`() {
+        val messages = listOf(
+            Message(
+                id = "user",
+                content = "hello",
+                sender = Sender.USER,
+                tavernName = "Eddy",
+                imageUrl = "/private/image.jpg"
+            ),
+            Message(
+                id = "assistant",
+                content = "first",
+                sender = Sender.AI,
+                tavernName = "Alice",
+                versions = listOf(MessageVersion("first"), MessageVersion("alternate")),
+                activeVersionIndex = 1,
+                thoughts = "private reasoning"
+            )
+        )
+        val fork = TavernChatSessionCodec.createFork(
+            messages = messages,
+            messageId = "assistant",
+            mode = TavernChatForkMode.BRANCH,
+            childChatName = "Inn branch",
+            parentChatName = "Inn",
+            userName = "Eddy",
+            characterName = "Alice",
+            headerRawJson = "{\"user_name\":\"Eddy\",\"character_name\":\"Alice\",\"chat_metadata\":{}}"
+        )
+
+        assertTrue(fork.switchedToChild)
+        assertEquals(2, fork.childMessages.size)
+        assertEquals("alternate", fork.childMessages.last().content)
+        assertEquals("/private/image.jpg", fork.childMessages.first().imageUrl)
+        assertEquals("private reasoning", fork.childMessages.last().thoughts)
+        assertEquals(
+            "Inn branch",
+            fork.parentMessages.last().tavernExtraJson
+                ?.let { JsonParser.parseString(it).asJsonObject["branches"].asJsonArray[0].asString }
+        )
+        assertEquals(
+            "Inn",
+            fork.childHeaderJson
+                ?.let { JsonParser.parseString(it).asJsonObject["chat_metadata"].asJsonObject["main_chat"].asString }
+        )
+    }
+
+    @Test
+    fun `checkpoint projects only the prefix and does not switch`() {
+        val messages = listOf(
+            Message("one", "one", Sender.USER),
+            Message("two", "two", Sender.AI),
+            Message("three", "three", Sender.USER)
+        )
+        val fork = TavernChatSessionCodec.createFork(
+            messages = messages,
+            messageId = "two",
+            mode = TavernChatForkMode.CHECKPOINT,
+            childChatName = "Checkpoint",
+            parentChatName = "Main",
+            userName = "Eddy",
+            characterName = "Alice"
+        )
+
+        assertFalse(fork.switchedToChild)
+        assertEquals(2, fork.childMessages.size)
+        assertEquals("Checkpoint", fork.parentMessages[1].tavernExtraJson
+            ?.let { JsonParser.parseString(it).asJsonObject["bookmark_link"].asString })
+    }
+
     @Test
     fun `imports ST metadata swipes system role and unknown fields`() {
         val imported = TavernChatSessionCodec.importJsonl(

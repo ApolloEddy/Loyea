@@ -122,6 +122,37 @@ class ChatStorageManagerTest {
     }
 
     @Test
+    fun `Tavern fork commit persists parent update and child metadata together`() = runBlocking {
+        val parent = ChatSession("parent", "Main", 1000L)
+        val parentMessages = listOf(Message("m1", "hello", Sender.USER))
+        val updatedParentMessages = parentMessages.map {
+            it.copy(tavernExtraJson = "{\"branches\":[\"Child\"]}")
+        }
+        val child = parent.copy(
+            id = "child",
+            title = "Child",
+            tavernMainChat = "Main",
+            tavernForkMode = "BRANCH"
+        )
+        storageManager.saveSessionList(listOf(parent))
+        storageManager.saveSessionMessages(parent.id, parentMessages)
+
+        val updated = storageManager.saveTavernSessionFork(
+            parentSessionId = parent.id,
+            parentMessages = updatedParentMessages,
+            childSession = child,
+            childMessages = parentMessages
+        )
+
+        assertEquals(listOf("parent", "child"), updated.map(ChatSession::id))
+        assertEquals(updatedParentMessages, storageManager.loadSessionMessages("parent"))
+        assertEquals(parentMessages, storageManager.loadSessionMessages("child"))
+        val persistedChild = storageManager.loadSessionList().single { it.id == "child" }
+        assertEquals("Main", persistedChild.tavernMainChat)
+        assertEquals("BRANCH", persistedChild.tavernForkMode)
+    }
+
+    @Test
     fun `Tavern chat header metadata survives session normalization`() = runBlocking {
         val header = "{\"user_name\":\"Eddy\",\"character_name\":\"Alice\",\"chat_metadata\":{\"main_chat\":\"root\"}}"
         storageManager.saveSessionList(

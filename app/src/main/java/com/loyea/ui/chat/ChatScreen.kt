@@ -64,6 +64,7 @@ import androidx.compose.ui.layout.ContentScale
 import com.loyea.ui.chat.PromptAssembler
 import com.loyea.ui.chat.WorldInfoScope
 import com.loyea.plugins.tavern.core.TavernAuthorNote
+import com.loyea.plugins.tavern.core.TavernChatForkMode
 import com.loyea.plugins.tavern.core.TavernGroupChat
 import com.loyea.plugins.tavern.core.TavernGroupMember
 import com.loyea.plugins.tavern.core.TavernGroupReplyMode
@@ -81,6 +82,11 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.foundation.combinedClickable
 
+private data class PendingTavernFork(
+    val messageId: String,
+    val mode: TavernChatForkMode,
+    val defaultName: String
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -131,6 +137,7 @@ fun ChatScreen(
     var showAuthorNoteEditor by remember { mutableStateOf(false) }
     var showGroupEditor by remember { mutableStateOf(false) }
     var pendingTavernExport by remember { mutableStateOf<String?>(null) }
+    var pendingTavernFork by remember { mutableStateOf<PendingTavernFork?>(null) }
     // 世界书编辑器覆盖层打开时，系统返回键关闭编辑器（顶栏返回箭头在 WorldInfoSettingsLayout 内）
     BackHandler(enabled = showWorldInfoEditor) { showWorldInfoEditor = false }
     var lastSessionId by remember { mutableStateOf(currentSessionId) }
@@ -502,7 +509,29 @@ fun ChatScreen(
                         onContinue = { viewModel?.continueLastReply() },
                         onImpersonate = { viewModel?.impersonateLastReply(inputText.text) },
                         canContinue = message.id == messages.lastOrNull()?.id && message.sender == Sender.AI,
-                        onSwitchVersion = { delta -> viewModel?.switchMessageVersion(message.id, delta) }
+                        onSwitchVersion = { delta -> viewModel?.switchMessageVersion(message.id, delta) },
+                        onCreateBranch = {
+                            pendingTavernFork = PendingTavernFork(
+                                messageId = message.id,
+                                mode = TavernChatForkMode.BRANCH,
+                                defaultName = defaultTavernForkName(
+                                    activeSessionTitle = viewModel?.activeSession?.value?.title,
+                                    mode = TavernChatForkMode.BRANCH,
+                                    messageIndex = index + 1
+                                )
+                            )
+                        },
+                        onCreateCheckpoint = {
+                            pendingTavernFork = PendingTavernFork(
+                                messageId = message.id,
+                                mode = TavernChatForkMode.CHECKPOINT,
+                                defaultName = defaultTavernForkName(
+                                    activeSessionTitle = viewModel?.activeSession?.value?.title,
+                                    mode = TavernChatForkMode.CHECKPOINT,
+                                    messageIndex = index + 1
+                                )
+                            )
+                        }
                     )
                 }
 
@@ -911,6 +940,19 @@ fun ChatScreen(
                 }
             )
         }
+
+        pendingTavernFork?.let { pending ->
+            TavernForkNameDialog(
+                mode = pending.mode,
+                initialName = pending.defaultName,
+                appLanguage = appLanguage,
+                onDismiss = { pendingTavernFork = null },
+                onConfirm = { name ->
+                    viewModel?.createTavernFork(pending.messageId, pending.mode, name)
+                    pendingTavernFork = null
+                }
+            )
+        }
     } // 闭合 Scaffold
     
     if (viewModel?.isRecording?.value == true) {
@@ -921,6 +963,95 @@ fun ChatScreen(
     }
 } // 闭合 Box
 } // 闭合 ChatScreen
+
+private fun defaultTavernForkName(
+    activeSessionTitle: String?,
+    mode: TavernChatForkMode,
+    messageIndex: Int
+): String {
+    val base = activeSessionTitle?.trim().orEmpty().ifBlank { "Chat" }
+    val suffix = when (mode) {
+        TavernChatForkMode.BRANCH -> "Branch"
+        TavernChatForkMode.CHECKPOINT -> "Checkpoint"
+    }
+    return "$base · $suffix $messageIndex".take(TavernForkTitlePolicy.MAX_LENGTH)
+}
+
+@Composable
+private fun TavernForkNameDialog(
+    mode: TavernChatForkMode,
+    initialName: String,
+    appLanguage: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var name by remember(initialName) { mutableStateOf(initialName) }
+    var attemptedSubmit by remember { mutableStateOf(false) }
+    val normalized = TavernForkTitlePolicy.normalize(name)
+    val isEn = appLanguage == "en"
+    val title = when (mode) {
+        TavernChatForkMode.BRANCH -> if (isEn) "Create branch" else "创建分支"
+        TavernChatForkMode.CHECKPOINT -> if (isEn) "Create checkpoint" else "创建检查点"
+    }
+    val errorText = if (attemptedSubmit && normalized == null) {
+        if (name.trim().isBlank()) {
+            if (isEn) "Name cannot be empty" else "名称不能为空"
+        } else if (name.trim().length > TavernForkTitlePolicy.MAX_LENGTH) {
+            if (isEn) {
+                "Name must be at most ${TavernForkTitlePolicy.MAX_LENGTH} characters"
+            } else {
+                "名称不能超过 ${TavernForkTitlePolicy.MAX_LENGTH} 个字符"
+            }
+        } else {
+            if (isEn) "Name contains unsupported control characters" else "名称包含不支持的控制字符"
+        }
+    } else {
+        null
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                singleLine = true,
+                label = { Text(if (isEn) "Chat name" else "聊天名称") },
+                supportingText = {
+                    Text(
+                        text = "${name.length}/${TavernForkTitlePolicy.MAX_LENGTH}",
+                        color = if (errorText != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                isError = errorText != null,
+                modifier = Modifier.fillMaxWidth()
+            )
+            if (errorText != null) {
+                Text(
+                    text = errorText,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    attemptedSubmit = true
+                    normalized?.let(onConfirm)
+                }
+            ) {
+                Text(if (isEn) "Create" else "创建")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(if (isEn) "Cancel" else "取消")
+            }
+        }
+    )
+}
 
 @Composable
 private fun AuthorNoteEditorDialog(
@@ -1677,7 +1808,9 @@ fun MessageItem(
     onContinue: () -> Unit = {},
     onImpersonate: () -> Unit = {},
     canContinue: Boolean = false,
-    onSwitchVersion: (Int) -> Unit = {}
+    onSwitchVersion: (Int) -> Unit = {},
+    onCreateBranch: () -> Unit = {},
+    onCreateCheckpoint: () -> Unit = {}
 ) {
     val isUser = message.sender == Sender.USER
 
@@ -2431,6 +2564,39 @@ fun MessageItem(
                                     contentDescription = if (appLanguage == "en") "Impersonate" else "代发草稿",
                                     tint = iconColor,
                                     modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                        var tavernForkMenuExpanded by remember { mutableStateOf(false) }
+                        Box {
+                            IconButton(
+                                onClick = { tavernForkMenuExpanded = true },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.MoreVert,
+                                    contentDescription = if (appLanguage == "en") "Branch or checkpoint" else "创建分支或检查点",
+                                    tint = iconColor,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = tavernForkMenuExpanded,
+                                onDismissRequest = { tavernForkMenuExpanded = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text(if (appLanguage == "en") "Create branch" else "创建分支") },
+                                    onClick = {
+                                        tavernForkMenuExpanded = false
+                                        onCreateBranch()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (appLanguage == "en") "Create checkpoint" else "创建检查点") },
+                                    onClick = {
+                                        tavernForkMenuExpanded = false
+                                        onCreateCheckpoint()
+                                    }
                                 )
                             }
                         }

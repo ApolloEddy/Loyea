@@ -10,7 +10,7 @@
 - 插件启停不删除用户导入的数据。重新启用或重启应用后，持久化的期望状态与 live runtime 状态保持一致。
 - 原生人格和插件人格即使使用相同本地 ID，也不能共享消息副作用、后台任务、主动问候或图记忆。
 
-## 兼容性基线（2026-08-24）
+## 兼容性基线（2026-08-25）
 
 “兼容”按三层验收，不把 JSON 字段能读写等同于运行时等价：
 
@@ -28,7 +28,7 @@ Prompt Manager 与宏运行时现在共享请求启动时冻结的 `TavernMacroC
 
 群聊核心已按 Tavo 当前公开语义提供 roster 与回合规划：自然聊天按 `@name` 优先、无提及时对未静音成员做稳定选择；全员回复返回全部未静音成员；指定发言者按显式角色、配置的 designated speaker 或提及角色解析；上下文选角返回带 `{{group}}` 的冻结选择提示，并只接受模型返回的已知成员。成员 JSON 支持启用/静音、权重、指定发言者和策略别名。当前 Android 宿主已将 roster 写入会话元数据，并在每次请求启动时解析一次，统一供 `{{group}}`（包含静音成员）、`{{groupNotMuted}}`、`{{notChar}}`、群聊系统块和插件回合工厂消费；同一请求内后续编辑不会改变快照。聊天页已提供会话级成员面板，可编辑群名、成员启用/静音状态、四种回复模式、指定发言者、最大回复数和上下文选角提示词，并可停用群聊；自然/全员/指定模式现在按冻结计划逐成员顺序生成，上下文模式先调用短选角请求后进入同一队列，停止、切会话或人格绑定变化会阻止后续成员继续生成。未安装角色卡会显示警告并跳过。群聊头像/成员专属 UI、Branch/Checkpoint 文件操作和更完整的 Tavo 自动模式仍是后续门禁，当前不宣称完整 UI parity。
 
-聊天文件核心现在按 SillyTavern 当前 `ChatHeader`/`ChatMessage` JSONL 形状读写：首行 `chat_metadata`、消息 `mes/is_user/is_system/send_date/swipes/swipe_id/extra` 和未知字段均可往返，Tavo/旧客户端常见别名也会归一化；坏行不会静默丢失，而是通过行号诊断返回。Branch 会复制到目标消息并切换到新文件，Checkpoint 会复制但留在当前文件，父文件分别回写 `extra.branches` 或 `extra.bookmark_link`，并通过 `main_chat` 建立返回父聊天的链接。Android 宿主现已提供 SAF 导入/导出：system 角色以透明 provenance 字段保留并在 provider 序列化时使用 `system` role，swipes 映射为本地回复版本，原始 ChatHeader 写回会话元数据；导入会按 header 角色名精确匹配本地卡片，找不到时回退当前卡片并显示警告。Branch/Checkpoint 文件级操作、群聊历史 UI 和导入后的跨设备资源重绑定仍是后续门禁。
+聊天文件核心现在按 SillyTavern 当前 `ChatHeader`/`ChatMessage` JSONL 形状读写：首行 `chat_metadata`、消息 `mes/is_user/is_system/send_date/swipes/swipe_id/extra` 和未知字段均可往返，Tavo/旧客户端常见别名也会归一化；坏行不会静默丢失，而是通过行号诊断返回。Branch 会复制到目标消息并切换到新文件，Checkpoint 会复制但留在当前文件，父文件分别回写 `extra.branches` 或 `extra.bookmark_link`，并通过 `main_chat` 建立返回父聊天的链接。Android 宿主现已提供 SAF 导入/导出和消息级 Branch/Checkpoint 操作：system 角色以透明 provenance 字段保留并在 provider 序列化时使用 `system` role，swipes 映射为本地回复版本，原始 ChatHeader 写回会话元数据；分支/检查点创建会保留原生图片、思考、MCP 等字段，父消息与子会话在同一存储锁范围内提交，失败会回滚父消息并清理未登记子文件。导入会按 header 角色名精确匹配本地卡片，找不到时回退当前卡片并显示警告。群聊历史 UI 和导入后的跨设备资源重绑定仍是后续门禁。
 
 ## 当前模块与依赖方向
 
@@ -94,7 +94,7 @@ Prompt Manager 与宏运行时现在共享请求启动时冻结的 `TavernMacroC
 - Prompt Manager generation trigger、in-chat/depth slot、Continue Nudge/Prefill/Postfix，以及请求级宏和只读变量读取。
 - 群聊 roster、成员静音、四种回复模式、上下文选角提示与安全的 speaker 结果解析。
 - 聊天 JSONL 首行元数据、消息/swipes/extra/未知字段往返，以及 Branch/Checkpoint 截断、父链和书签链接核心模型。
-- Android 宿主提供会话级群聊成员面板与 roster 持久化；多角色生成队列仍由宿主请求协调器单独负责。
+- Android 宿主提供会话级群聊成员面板与 roster 持久化、多角色顺序生成队列，以及消息级 Branch/Checkpoint 操作；群聊 avatar/member 专属 UI 与 Tavo 自动模式仍由后续请求协调器门禁覆盖。
 - 流式回复、MCP 多轮、后台主动问候、长会话压缩、生图和记忆整理的插件租约接入。
 
 ## 尚未完成的物理拆分

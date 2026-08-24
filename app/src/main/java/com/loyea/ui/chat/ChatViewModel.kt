@@ -43,6 +43,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.withLock
 import java.io.File
+import java.util.UUID
 import android.media.MediaRecorder
 import android.media.MediaPlayer
 import android.media.AudioAttributes
@@ -1021,6 +1022,97 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             characterName = persona.card.name,
             headerRawJson = activeSession.value?.tavernChatHeaderJson
         )
+    }
+
+    /** Creates a SillyTavern-compatible branch or checkpoint from a persisted message. */
+    fun createTavernFork(
+        messageId: String,
+        mode: TavernChatForkMode,
+        requestedChildName: String
+    ): kotlinx.coroutines.Job {
+        val sessionId = currentSessionId.value
+        val sessionSnapshot = activeSession.value ?: return viewModelScope.launch { }
+        val childName = TavernForkTitlePolicy.normalize(requestedChildName)
+        if (childName == null) {
+            showGroupReplyNotice(
+                if (appLanguage.value == "en") {
+                    "Fork name must be 1–${TavernForkTitlePolicy.MAX_LENGTH} characters without control characters."
+                } else {
+                    "分支名称需为 1–${TavernForkTitlePolicy.MAX_LENGTH} 个字符，且不能包含控制字符。"
+                }
+            )
+            return viewModelScope.launch { }
+        }
+        stopResponse()
+        return viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val sourceMessages = storageManager.loadSessionMessages(sessionId)
+                val parentName = sessionSnapshot.title.trim().ifBlank { "Chat" }
+                val persona = CharacterPersonaOwnership.resolveBoundPersona(
+                    sessionSnapshot,
+                    characterCardList.value
+                ) ?: CharacterPersonaOwnership.defaultNativeCard().let {
+                    BoundCharacterPersona(PersonaRef.native(it.id), it)
+                }
+                val fork = TavernChatSessionCodec.createFork(
+                    messages = sourceMessages,
+                    messageId = messageId,
+                    mode = mode,
+                    childChatName = childName,
+                    parentChatName = parentName,
+                    userName = userName.value,
+                    characterName = persona.card.name,
+                    headerRawJson = sessionSnapshot.tavernChatHeaderJson
+                )
+                val childId = "tavern-fork-${UUID.randomUUID()}"
+                val childSession = sessionSnapshot.copy(
+                    id = childId,
+                    title = childName,
+                    lastActiveTime = System.currentTimeMillis(),
+                    sessionIncarnationId = UUID.randomUUID().toString(),
+                    personaBindingRevision = 1L,
+                    appliedBackgroundOperations = emptyList(),
+                    compressedSummary = "",
+                    compressedAtCount = 0,
+                    promptTokens = 0,
+                    completionTokens = 0,
+                    lastContextTokens = 0,
+                    promptCacheHitTokens = 0,
+                    promptCacheMissTokens = 0,
+                    tavernChatHeaderJson = fork.childHeaderJson,
+                    tavernMainChat = parentName,
+                    tavernForkMode = mode.name
+                )
+                val updatedSessions = storageManager.saveTavernSessionFork(
+                    parentSessionId = sessionId,
+                    parentMessages = fork.parentMessages,
+                    childSession = childSession,
+                    childMessages = fork.childMessages
+                ).sortedByDescending { it.lastActiveTime }
+                withContext(Dispatchers.Main) {
+                    sessions.value = updatedSessions
+                    if (currentSessionId.value == sessionId) {
+                        if (fork.switchedToChild) {
+                            selectSession(childId)
+                        } else {
+                            messages.value = fork.parentMessages
+                            android.widget.Toast.makeText(
+                                context,
+                                if (appLanguage.value == "en") "Checkpoint created" else "检查点已创建",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                }
+            } catch (failure: Exception) {
+                withContext(Dispatchers.Main) {
+                    showGroupReplyNotice(
+                        (if (appLanguage.value == "en") "Fork failed: " else "创建分支失败：") +
+                            (failure.localizedMessage ?: failure.javaClass.simpleName)
+                    )
+                }
+            }
+        }
     }
 
     /**

@@ -3,6 +3,8 @@ package com.loyea.ui.chat
 import com.google.gson.JsonParser
 import com.loyea.plugins.tavern.core.TavernChatFile
 import com.loyea.plugins.tavern.core.TavernChatFileCodec
+import com.loyea.plugins.tavern.core.TavernChatForkMode
+import com.loyea.plugins.tavern.core.TavernChatForkPlanner
 import com.loyea.plugins.tavern.core.TavernChatHeader
 import com.loyea.plugins.tavern.core.TavernChatMessageRecord
 import com.loyea.plugins.tavern.core.TavernChatParseIssue
@@ -27,6 +29,20 @@ data class TavernChatSessionImport(
 ) {
     val isClean: Boolean
         get() = issues.none { it.fatal }
+}
+
+/** Native-session projection of SillyTavern's branch/checkpoint operation. */
+data class TavernChatSessionFork(
+    val mode: TavernChatForkMode,
+    val messageIndex: Int,
+    val childChatName: String,
+    val parentMessages: List<Message>,
+    val childMessages: List<Message>,
+    val parentHeaderJson: String?,
+    val childHeaderJson: String?
+) {
+    val switchedToChild: Boolean
+        get() = mode == TavernChatForkMode.BRANCH
 }
 
 /**
@@ -92,12 +108,125 @@ object TavernChatSessionCodec {
         )
     }
 
+    /**
+     * Applies the pure core fork planner to native messages while retaining Loyea-only fields.
+     * The core planner owns ST metadata (`main_chat`, `branches`, `bookmark_link`); this adapter
+     * only projects those changed records back onto the original messages.
+     */
+    fun createFork(
+        messages: List<Message>,
+        messageId: String,
+        mode: TavernChatForkMode,
+        childChatName: String,
+        parentChatName: String,
+        userName: String,
+        characterName: String,
+        headerRawJson: String? = null
+    ): TavernChatSessionFork {
+        require(parentChatName.isNotBlank()) { "Parent chat name must not be blank" }
+        require(childChatName.isNotBlank()) { "Child chat name must not be blank" }
+        val messageIndex = messages.indexOfFirst { it.id == messageId }
+        require(messageIndex >= 0) { "Message '$messageId' was not found" }
+        val sourceHeader = headerFrom(
+            headerRawJson = headerRawJson,
+            userName = userName,
+            characterName = characterName,
+            createDate = messages.firstOrNull()?.timestamp?.let(::formatTimestamp)
+        )
+        val source = TavernChatFile(
+            header = sourceHeader,
+            messages = messages.map { it.toTavernRecord(userName, characterName) },
+            chatName = parentChatName
+        )
+        val selectedSwipeId = messages[messageIndex]
+            .takeIf { it.versions.isNotEmpty() }
+            ?.activeVersionIndex
+            ?.coerceIn(0, messages[messageIndex].versions.lastIndex)
+        val planned = when (mode) {
+            TavernChatForkMode.BRANCH -> TavernChatForkPlanner.createBranch(
+                source = source,
+                childChatName = childChatName,
+                messageIndex = messageIndex,
+                parentChatName = parentChatName,
+                selectedSwipeId = selectedSwipeId
+            )
+            TavernChatForkMode.CHECKPOINT -> TavernChatForkPlanner.createCheckpoint(
+                source = source,
+                childChatName = childChatName,
+                messageIndex = messageIndex,
+                parentChatName = parentChatName,
+                selectedSwipeId = selectedSwipeId
+            )
+        }
+        return TavernChatSessionFork(
+            mode = mode,
+            messageIndex = messageIndex,
+            childChatName = childChatName,
+            parentMessages = projectForkRecords(messages, planned.parent.messages),
+            childMessages = projectForkRecords(messages, planned.child.messages),
+            parentHeaderJson = headerJson(planned.parent.header),
+            childHeaderJson = headerJson(planned.child.header)
+        )
+    }
+
     private fun toIssue(issue: TavernChatParseIssue): TavernChatSessionIssue =
         TavernChatSessionIssue(
             reason = issue.reason,
             lineNumber = issue.lineNumber,
             fatal = true
         )
+
+    private fun projectForkRecords(
+        source: List<Message>,
+        records: List<TavernChatMessageRecord>
+    ): List<Message> = records.mapIndexed { index, record ->
+        val original = source[index]
+        val selectedIndex = if (record.swipes.isEmpty()) {
+            original.activeVersionIndex
+        } else {
+            record.swipeId.coerceIn(0, record.swipes.lastIndex)
+        }
+        val versions = if (record.swipes.isEmpty()) {
+            original.versions
+        } else if (original.versions.size == record.swipes.size) {
+            original.versions.mapIndexed { versionIndex, version ->
+                version.copy(content = record.swipes[versionIndex])
+            }
+        } else {
+            record.swipes.map { swipe -> MessageVersion(content = swipe) }
+        }
+        original.copy(
+            content = record.message,
+            tavernExtraJson = record.extraJson,
+            tavernSwipeInfoJson = record.swipeInfoJson,
+            tavernRawJson = record.rawJson,
+            versions = versions,
+            activeVersionIndex = selectedIndex
+        )
+    }
+
+    private fun headerFrom(
+        headerRawJson: String?,
+        userName: String,
+        characterName: String,
+        createDate: String?
+    ): TavernChatHeader {
+        val parsed = headerRawJson?.let { raw ->
+            runCatching { TavernChatFileCodec.parse(raw).chat.header }.getOrNull()
+        }
+        return parsed ?: TavernChatHeader(
+            userName = userName.takeIf(String::isNotBlank),
+            characterName = characterName.takeIf(String::isNotBlank),
+            createDate = createDate,
+            rawJson = headerRawJson
+        )
+    }
+
+    private fun headerJson(header: TavernChatHeader): String =
+        TavernChatFileCodec.toJsonl(TavernChatFile(header = header))
+            .lineSequence()
+            .firstOrNull()
+            ?: "{}"
 
     private fun TavernChatMessageRecord.toMessage(
         index: Int,

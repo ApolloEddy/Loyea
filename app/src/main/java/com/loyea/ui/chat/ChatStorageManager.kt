@@ -67,7 +67,11 @@ data class ChatSession(
     /** Optional serialized Tavo/SillyTavern group roster for this chat session. */
     val groupChatJson: String? = null,
     /** Original one-line ST ChatHeader, retained so a JSONL re-export keeps chat metadata. */
-    val tavernChatHeaderJson: String? = null
+    val tavernChatHeaderJson: String? = null,
+    /** Parent chat name from ST chat_metadata.main_chat, when this session is a fork. */
+    val tavernMainChat: String? = null,
+    /** BRANCH or CHECKPOINT for a locally-created Tavern fork. */
+    val tavernForkMode: String? = null
 )
 
 fun ChatSession.tavernGroupChat(): TavernGroupChat? = groupChatJson
@@ -199,7 +203,9 @@ class ChatStorageManager internal constructor(
                     authorNoteDepth = raw.authorNoteDepth ?: 4,
                     authorNoteFrequency = raw.authorNoteFrequency ?: 1,
                     groupChatJson = raw.groupChatJson?.takeIf(String::isNotBlank),
-                    tavernChatHeaderJson = raw.tavernChatHeaderJson?.takeIf(String::isNotBlank)
+                    tavernChatHeaderJson = raw.tavernChatHeaderJson?.takeIf(String::isNotBlank),
+                    tavernMainChat = raw.tavernMainChat?.takeIf(String::isNotBlank),
+                    tavernForkMode = raw.tavernForkMode?.takeIf(String::isNotBlank)
                 )
             }
             if (personaMigrationNeeded) {
@@ -389,6 +395,41 @@ class ChatStorageManager internal constructor(
     suspend fun saveSessionMessages(sessionId: String, messages: List<Message>) {
         messagesMutex.withLock {
             saveSessionMessagesInternal(sessionId, messages)
+        }
+    }
+
+    /**
+     * Commits the parent-message update and a new Tavern branch/checkpoint under one lock scope.
+     * Message files are written before the metadata list; a failed write restores the original
+     * parent file and removes the not-yet-visible child file.
+     */
+    suspend fun saveTavernSessionFork(
+        parentSessionId: String,
+        parentMessages: List<Message>,
+        childSession: ChatSession,
+        childMessages: List<Message>
+    ): List<ChatSession> = sessionsMutex.withLock sessionLock@{
+        messagesMutex.withLock messageLock@{
+            val current = loadSessionListInternal()
+            check(current.any { it.id == parentSessionId }) {
+                "Parent session '$parentSessionId' no longer exists"
+            }
+            require(current.none { it.id == childSession.id }) {
+                "Child session '${childSession.id}' already exists"
+            }
+            val originalParentMessages = loadSessionMessagesInternal(parentSessionId)
+            val proposedSessions = current + childSession
+            try {
+                saveSessionMessagesInternal(parentSessionId, parentMessages)
+                saveSessionMessagesInternal(childSession.id, childMessages)
+                val reconciled = reconcilePersonaBindingRevisions(current, proposedSessions)
+                saveSessionListInternal(reconciled)
+                reconciled
+            } catch (failure: Throwable) {
+                runCatching { saveSessionMessagesInternal(parentSessionId, originalParentMessages) }
+                runCatching { File(sessionsDir, "session_${childSession.id}.json").delete() }
+                throw failure
+            }
         }
     }
 
