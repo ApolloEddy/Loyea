@@ -1,4 +1,4 @@
-package com.loyea.ui.chat
+package com.loyea.plugins.tavern.core
 
 /**
  * 将角色卡内嵌 CharacterBook 映射为 Loyea 的运行时世界书。

@@ -1,5 +1,7 @@
 package com.loyea.ui.chat
 
+import com.loyea.plugins.tavern.core.*
+
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets

@@ -1,5 +1,7 @@
 package com.loyea.ui.chat
 
+import com.loyea.plugins.tavern.core.*
+
 import android.content.SharedPreferences
 import com.google.gson.Gson
 import com.google.gson.JsonObject

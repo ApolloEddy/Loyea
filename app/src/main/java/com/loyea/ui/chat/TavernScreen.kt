@@ -1,5 +1,7 @@
 package com.loyea.ui.chat
 
+import com.loyea.plugins.tavern.core.*
+
 import android.content.Context
 import android.net.Uri
 import android.widget.Toast

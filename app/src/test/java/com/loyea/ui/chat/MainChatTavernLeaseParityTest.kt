@@ -1,5 +1,7 @@
 package com.loyea.ui.chat
 
+import com.loyea.plugins.tavern.core.*
+
 import com.google.gson.JsonObject
 import com.loyea.plugin.api.ChatRole
 import com.loyea.plugin.api.ConversationText

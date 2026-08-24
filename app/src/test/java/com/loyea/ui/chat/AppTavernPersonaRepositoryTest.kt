@@ -1,5 +1,7 @@
 package com.loyea.ui.chat
 
+import com.loyea.plugins.tavern.core.*
+
 import com.loyea.plugin.api.PluginTurnInput
 import com.loyea.plugin.api.PluginRuntimeGeneration
 import com.loyea.plugin.api.PluginIds

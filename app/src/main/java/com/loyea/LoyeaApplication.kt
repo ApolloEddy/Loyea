@@ -8,9 +8,9 @@ import com.loyea.plugin.api.PreparedPersonaTurn
 import com.loyea.plugin.host.PersonaRuntimeLease
 import com.loyea.plugin.host.PluginManager
 import com.loyea.ui.chat.AppTavernPersonaRepository
-import com.loyea.ui.chat.TavernPlugin
-import com.loyea.ui.chat.TavernPluginDefinition
-import com.loyea.ui.chat.TavernTurnSpec
+import com.loyea.plugins.tavern.core.TavernPlugin
+import com.loyea.plugins.tavern.core.TavernPluginDefinition
+import com.loyea.plugins.tavern.core.TavernTurnSpec
 
 /** Application-wide plugin composition root shared by UI and background workers. */
 class LoyeaApplication : Application() {

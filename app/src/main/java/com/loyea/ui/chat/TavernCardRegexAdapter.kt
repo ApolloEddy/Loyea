@@ -1,5 +1,7 @@
 package com.loyea.ui.chat
 
+import com.loyea.plugins.tavern.core.*
+
 import com.google.gson.JsonElement
 import com.google.gson.JsonParser
 

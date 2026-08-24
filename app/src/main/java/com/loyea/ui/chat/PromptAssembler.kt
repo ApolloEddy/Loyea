@@ -1,5 +1,7 @@
 package com.loyea.ui.chat
 
+import com.loyea.plugins.tavern.core.*
+
 /**
  * 酒馆角色卡占位符 (Macros) 解析与 System Prompt 结构化拼接引擎
  */

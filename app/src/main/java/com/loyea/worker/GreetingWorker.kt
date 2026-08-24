@@ -32,7 +32,7 @@ import com.loyea.ui.chat.Message
 import com.loyea.ui.chat.PersonaBindingSnapshot
 import com.loyea.ui.chat.Sender
 import com.loyea.ui.chat.StreamEvent
-import com.loyea.ui.chat.TavernPreparedTurnFactory
+import com.loyea.plugins.tavern.core.TavernPreparedTurnFactory
 import com.loyea.ui.chat.estimateTokens
 import com.loyea.ui.settings.ApiConfig
 import kotlinx.coroutines.CancellationException

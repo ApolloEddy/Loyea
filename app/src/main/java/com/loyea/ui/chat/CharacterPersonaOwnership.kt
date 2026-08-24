@@ -1,5 +1,7 @@
 package com.loyea.ui.chat
 
+import com.loyea.plugins.tavern.core.*
+
 import com.loyea.plugin.api.PersonaRef
 import com.loyea.plugin.api.PluginId
 import com.loyea.plugin.api.PluginIds

@@ -1,5 +1,7 @@
 package com.loyea.ui.chat
 
+import com.loyea.plugins.tavern.core.*
+
 /** Host-side projection between Loyea's legacy card model and the isolated Tavern document. */
 object TavernCharacterCardAdapter {
     fun toDocument(card: CharacterCard): TavernCardDocument {

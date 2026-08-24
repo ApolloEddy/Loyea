@@ -4,7 +4,7 @@ import android.content.Context
 import com.loyea.plugin.api.PersonaRef
 import com.loyea.plugin.api.PluginIds
 import com.loyea.ui.chat.PersonaBindingSnapshot
-import com.loyea.ui.chat.TavernPluginDefinition
+import com.loyea.plugins.tavern.core.TavernPluginDefinition
 import java.io.File
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals

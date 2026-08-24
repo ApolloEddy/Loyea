@@ -1,4 +1,4 @@
-package com.loyea.ui.chat
+package com.loyea.plugins.tavern.core
 
 enum class WorldInfoInsertionOrder {
     ORDER,

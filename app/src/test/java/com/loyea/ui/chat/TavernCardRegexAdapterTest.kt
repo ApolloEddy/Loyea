@@ -1,5 +1,7 @@
 package com.loyea.ui.chat
 
+import com.loyea.plugins.tavern.core.*
+
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
