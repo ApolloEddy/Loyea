@@ -206,7 +206,7 @@ class TavernCardCodecTest {
         )
         val card = TavernCardParser.parseJsonCard(json)
         assertNotNull(card)
-        val exported = TavernCardCodec.toJson(TavernCardCodec.fromCharacterCard(card!!), "chara_card_v2")
+        val exported = TavernCardCodec.toJson(TavernCharacterCardAdapter.toDocument(card!!), "chara_card_v2")
         assertTrue(exported.contains("vendor_field"))
         assertTrue(exported.contains("round-trip"))
     }

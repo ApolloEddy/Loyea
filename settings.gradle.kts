@@ -17,3 +17,4 @@ rootProject.name = "Loyea"
 include(":app")
 include(":plugin-api")
 include(":plugin-host")
+include(":plugins:tavern-core")

@@ -1884,14 +1884,14 @@ fun EditPersonaDialog(
  */
 fun buildTavernValueV2Json(card: CharacterCard): String {
     val gson = GsonBuilder().setPrettyPrinting().create()
-    val document = TavernCardCodec.fromCharacterCard(card)
+    val document = TavernCharacterCardAdapter.toDocument(card)
     return gson.toJson(JsonParser.parseString(TavernCardCodec.toJson(document, "chara_card_v2")))
 }
 
 /** V3 JSON 导出：保留 nickname、群聊开场白、source、assets 等 V3 字段。 */
 fun buildTavernValueV3Json(card: CharacterCard): String {
     val gson = GsonBuilder().setPrettyPrinting().create()
-    val document = TavernCardCodec.fromCharacterCard(card)
+    val document = TavernCharacterCardAdapter.toDocument(card)
     return gson.toJson(JsonParser.parseString(TavernCardCodec.toJson(document, "chara_card_v3")))
 }
 
@@ -2168,7 +2168,7 @@ fun shareCharacterCardJsonV3(context: Context, card: CharacterCard) {
 
 /** 构造 V3 CHARX：card.json 使用 embeded URI，资源只打包应用私有目录中明确存在的文件。 */
 private fun buildTavernCharxBytes(card: CharacterCard): ByteArray {
-    val document = TavernCardCodec.fromCharacterCard(card)
+    val document = TavernCharacterCardAdapter.toDocument(card)
     val assets = runCatching {
         JsonParser.parseString(card.assetsJson).takeIf { it.isJsonArray }?.asJsonArray
     }.getOrNull() ?: JsonArray()
