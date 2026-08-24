@@ -180,6 +180,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     var isMcpRunning = mutableStateOf(false)
         private set
 
+    /** Result of an impersonation generation; the chat screen consumes it into the composer. */
+    var impersonatedDraft = mutableStateOf<String?>(null)
+        private set
+
+    fun clearImpersonatedDraft() {
+        impersonatedDraft.value = null
+    }
+
     private var responseJob: kotlinx.coroutines.Job? = null
     private var regexCacheCardId: String? = null
     private var regexCacheExtensionsJson: String? = null
@@ -1086,6 +1094,55 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * SillyTavern impersonation: generate text in the user's voice and return it as a draft.
+     * The generated text is not committed as a chat message until the user presses Send.
+     */
+    fun impersonateLastReply(prompt: String = "") {
+        if (responseJob?.isActive == true) {
+            android.widget.Toast.makeText(context, "AI 正在回复中，请稍候或点击停止", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        val current = messages.value
+        val lastAi = current.lastOrNull()
+        if (lastAi == null || lastAi.sender != Sender.AI) return
+        if (lastAi.isStillThinking || (lastAi.content.isBlank() && lastAi.contentSegments.isEmpty())) return
+
+        val sessionId = currentSessionId.value
+        val activePersona = boundPersona.value ?: run {
+            showPersonaUnavailableMessage()
+            return
+        }
+        val binding = activeSession.value?.let(PersonaBindingSnapshot::capture)
+            ?.takeIf { it.sessionId == sessionId && it.ref == activePersona.ref }
+            ?: run {
+                showPersonaUnavailableMessage()
+                return
+            }
+        val runtimeLease = if (activePersona.ref.isNative) {
+            null
+        } else {
+            getApplication<LoyeaApplication>().acquirePersonaRuntime(activePersona.ref.ownerId)
+        }
+        if (!activePersona.ref.isNative && runtimeLease == null) {
+            showPersonaUnavailableMessage()
+            return
+        }
+        impersonatedDraft.value = null
+        isThinking.value = true
+        startAiResponseStream(
+            sessionId = sessionId,
+            history = current,
+            characterCard = activePersona.card,
+            personaRef = activePersona.ref,
+            requestBinding = binding,
+            initialRuntimeLease = runtimeLease,
+            impersonationPrompt = prompt.trim().take(4_000),
+            impersonate = true,
+            generationType = "impersonate"
+        )
+    }
+
+    /**
      * 翻页切换 AI 回复版本（versions 列表 + activeVersionIndex）。
      * 切到目标版本后把该版本内容镜像回顶层字段，由旧渲染路径展示。
      */
@@ -1365,6 +1422,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         initialRuntimeLease: PersonaRuntimeLease?,
         regenerateOf: Message? = null,
         continuationOf: Message? = null,
+        impersonationPrompt: String = "",
+        impersonate: Boolean = false,
         generationType: String = "normal"
     ) {
         responseJob = viewModelScope.launch {
@@ -1627,10 +1686,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 trustedCard = personaRef.isNative,
                 snapshotTimeMillis = snapshotTime
             )
+            val impersonationInstruction = if (impersonate) {
+                buildString {
+                    append("[IMPERSONATE / 代发]\nWrite the next message as the user ")
+                    append(userName.value.ifBlank { "User" })
+                    append(" rather than as the character. Keep it ready to send as the user's reply.")
+                    if (impersonationPrompt.isNotBlank()) {
+                        append("\nUser guidance: ")
+                        append(impersonationPrompt)
+                    }
+                }
+            } else {
+                ""
+            }
             val requestedPrompt = PromptPatch(
                 stablePersonaText = promptParts.stableSystemPrompt,
                 turnContextText = existingTurnSnapshot ?: promptParts.turnContextSnapshot,
-                postHistoryText = promptParts.postHistoryInstructions
+                postHistoryText = listOf(promptParts.postHistoryInstructions, impersonationInstruction)
+                    .filter(String::isNotBlank)
+                    .joinToString("\n\n")
             )
             val userTurnIndex = history.count { it.sender == Sender.USER }.toLong()
             val tavernTurnSpec = LegacyTavernTurnAdapter.spec(
@@ -1712,7 +1786,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     round++
                     var streamToolCalls = emptyList<LlmToolCall>()
                     var hasError = false
-                    val availableMcpTools = mcpManager.getAggregateTools().filter { tool ->
+                    val availableMcpTools = if (impersonate) {
+                        emptyList()
+                    } else mcpManager.getAggregateTools().filter { tool ->
                         val lowName = tool.name.lowercase()
                         when {
                             lowName.contains("web_search") || lowName.contains("read_url") -> apiConfig.enableSearch
@@ -1862,7 +1938,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                         } else msg
                                     }
                                     messages.value = currentList
-                                    saveMessagesAsync(sessionId, currentList, requestBinding)
+                                    if (!impersonate) saveMessagesAsync(sessionId, currentList, requestBinding)
                                     hasError = true
                                 }
                             }
@@ -1899,15 +1975,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                     }
                                 }
                                  messages.value = currentList
-                                saveMessagesAsync(sessionId, currentList, requestBinding)
+                                if (!impersonate) saveMessagesAsync(sessionId, currentList, requestBinding)
 
                                 // AI 消息生成结束后，若开启了 TTS 且非工具流最终回合，则自动朗读
-                                if (enableTts.value && enableAutoTts.value && streamToolCalls.isEmpty()) {
+                                if (!impersonate && enableTts.value && enableAutoTts.value && streamToolCalls.isEmpty()) {
                                     playTts(aiMessageId, cleanFinalContent(accumulatedContent, preparedTurn))
                                 }
 
                                 // 首轮 AI 回复完成后，尝试用 LLM 精修会话标题（静默失败、仅一次）
-                                if (streamToolCalls.isEmpty() && accumulatedContent.isNotBlank()) {
+                                if (!impersonate && streamToolCalls.isEmpty() && accumulatedContent.isNotBlank()) {
                                     maybeGenerateSmartTitle(sessionId, history)
                                 }
                             }
@@ -2084,7 +2160,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                                 if (currentSessionId.value == sessionId) {
                                                     messages.value = currentList
                                                 }
-                                                saveMessagesAsync(sessionId, currentList, requestBinding)
+                                                if (!impersonate) saveMessagesAsync(sessionId, currentList, requestBinding)
                                             }
                                         }
                                     }
@@ -2127,7 +2203,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         messages.value = currentList
 
                         // 保存当前更新了 McpCalls 的消息到文件
-                        saveMessagesAsync(sessionId, currentList, requestBinding)
+                        if (!impersonate) saveMessagesAsync(sessionId, currentList, requestBinding)
 
                         // 更新 conversation 变量以进入下一次 while 循环
                         conversation = nextConversation
@@ -2143,7 +2219,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             } else msg
                         }
                         messages.value = currentList
-                        saveMessagesAsync(sessionId, currentList, requestBinding)
+                        if (!impersonate) saveMessagesAsync(sessionId, currentList, requestBinding)
                         checkAndTriggerMemorySummaryAsync(sessionId)
                         break
                     }
@@ -2171,7 +2247,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         } else msg
                     }
                     messages.value = currentList
-                    saveMessagesAsync(sessionId, currentList, requestBinding)
+                    if (!impersonate) saveMessagesAsync(sessionId, currentList, requestBinding)
                 }
             } catch (t: Throwable) {
                 if (t is kotlinx.coroutines.CancellationException) throw t
@@ -2191,12 +2267,32 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     } else msg
                 }
                 messages.value = currentList
-                saveMessagesAsync(sessionId, currentList, requestBinding)
+                if (!impersonate) saveMessagesAsync(sessionId, currentList, requestBinding)
             } finally {
                 tavernRuntimeLease?.close()
                 // 重新生成路径：流结束后统一归并版本（成功合并进 versions / 失败恢复旧回复，避免丢失答案）
                 if (regenerateOf != null) {
                     applyRegenerateVersions(regenerateOf, aiMessageId, requestBinding)
+                }
+                if (impersonate) {
+                    val generated = messages.value.firstOrNull { it.id == aiMessageId }
+                    if (generated != null && !generated.isError) {
+                        val draft = generated.content.ifBlank {
+                            generated.contentSegments
+                                .filter { it.type == "text" }
+                                .joinToString("") { it.text }
+                        }.trim()
+                        if (draft.isNotBlank()) impersonatedDraft.value = draft
+                        val withoutDraftPlaceholder = messages.value.filterNot { it.id == aiMessageId }
+                        val persistedWithoutPlaceholder = withContext(Dispatchers.IO) {
+                            storageManager.updateSessionMessagesIfPersonaBinding(requestBinding) { diskMessages ->
+                                diskMessages.filterNot { it.id == aiMessageId }
+                            }
+                        }
+                        if (currentSessionId.value == sessionId) {
+                            messages.value = persistedWithoutPlaceholder ?: withoutDraftPlaceholder
+                        }
+                    }
                 }
                 isThinking.value = false
                 isMcpRunning.value = false

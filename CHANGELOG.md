@@ -31,6 +31,7 @@ All notable changes to this project will be documented in this file.
 ### Changed (变更)
 - **Include Names、outlet 与 Author’s Note 运行语义**：World Info 默认按 SillyTavern 规则把用户/角色名称加入扫描缓冲；聊天上下文可按 preset 或世界书配置写入名称前缀。`{{outlet::Name}}` 现在只展开被提示词引用的命名 outlet，不再把全部 outlet 作为隐藏上下文追加。会话级 Author’s Note 支持 `After Scenario`/`In-chat`、深度和按用户回合计数的频率（`0` 禁用、`1` 每回合）；请求启动时冻结文本与注入参数，编辑面板限制文本/数值输入并防止重复保存。
 - **Continue/Swipe 生成入口**：新增最后一条 AI 回复的 Continue 与 Swipe 操作。Continue 保留原 AI 消息 ID、把原文放回 provider 上下文并将新流式文本追加到同一气泡；Swipe 使用独立的 `swipe` 生成类型并复用版本归并，继续让 World Info 的生成类型过滤看到真实请求。插件暂不把 impersonate 伪装成普通回复。
+- **Impersonate 代发草稿**：新增最后一条 AI 回复的代发入口，使用 `impersonate` 生成类型和一次性提示约束，让模型按用户身份生成文本并回填输入框；结果只有用户点击发送后才写入聊天，代发期间不执行 MCP 工具、自动 TTS 或标题副作用，失败不会留下伪造用户消息。
 - **World Info 生成类型贯通请求链**：`normal`、`regenerate`、`continue`、`swipe` 与后台 `quiet` 请求现在把生成类型从宿主入口冻结到 Tavern 插件输入/回合暂存，并在准备阶段校验 spec/input 一致；支持大小写与前导冒号的规范化，避免 World Info 触发过滤与实际请求类型漂移。`impersonate` 入口仍列入后续兼容任务，当前不会伪装成已接入。
 - **World Info 生成类型语义修正**：`triggers` 现在按 SillyTavern 的 `normal/continue/impersonate/swipe/regenerate/quiet` 过滤生成请求，不再错误地作为额外关键词参与匹配；空列表继续表示所有生成类型。
 - **Tavern 人格投影契约收敛**：移除 `tavern-core` 内重复的 `TavernPersonaRecord`，`TavernPersonaRepository` 直接返回 `plugin-api PersonaProjection`；app 的 `TavernCharacterCardAdapter` 统一提供稳定人格投影与完整 `TavernCardDocument` 两条单向转换路径。

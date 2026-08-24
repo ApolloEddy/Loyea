@@ -160,6 +160,16 @@ fun ChatScreen(
         selectedImagePath.value = null // 切换会话时清空图片预览
     }
 
+    // Impersonate 生成结果只回填编辑器，不自动发送；消费一次后清除 ViewModel 中的暂存值。
+    LaunchedEffect(viewModel?.impersonatedDraft?.value) {
+        val generatedDraft = viewModel?.impersonatedDraft?.value
+        if (!generatedDraft.isNullOrBlank()) {
+            inputText = TextFieldValue(generatedDraft)
+            if (currentSessionId.isNotEmpty()) saveDraft(currentSessionId, generatedDraft)
+            viewModel?.clearImpersonatedDraft()
+        }
+    }
+
     // 自动滚动：思考中默认展开并滚动到「Thinking 标题顶到屏幕顶端即停」；用户触摸后完全交还控制权
     var autoPinActive by remember { mutableStateOf(true) }
 
@@ -380,6 +390,7 @@ fun ChatScreen(
                         onRegenerate = { viewModel?.regenerateLastReply() },
                         onSwipe = { viewModel?.swipeLastReply() },
                         onContinue = { viewModel?.continueLastReply() },
+                        onImpersonate = { viewModel?.impersonateLastReply(inputText.text) },
                         canContinue = message.id == messages.lastOrNull()?.id && message.sender == Sender.AI,
                         onSwitchVersion = { delta -> viewModel?.switchMessageVersion(message.id, delta) }
                     )
@@ -1270,6 +1281,7 @@ fun MessageItem(
     onRegenerate: () -> Unit = {},
     onSwipe: () -> Unit = {},
     onContinue: () -> Unit = {},
+    onImpersonate: () -> Unit = {},
     canContinue: Boolean = false,
     onSwitchVersion: (Int) -> Unit = {}
 ) {
@@ -2015,6 +2027,14 @@ fun MessageItem(
                                 Icon(
                                     imageVector = Icons.Default.SwapHoriz,
                                     contentDescription = if (appLanguage == "en") "Swipe" else "切换回复",
+                                    tint = iconColor,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            IconButton(onClick = onImpersonate, modifier = Modifier.size(28.dp)) {
+                                Icon(
+                                    imageVector = Icons.Default.Person,
+                                    contentDescription = if (appLanguage == "en") "Impersonate" else "代发草稿",
                                     tint = iconColor,
                                     modifier = Modifier.size(16.dp)
                                 )
