@@ -1,269 +1,113 @@
 package com.loyea.ui.chat
 
-import java.io.ByteArrayOutputStream
 import java.io.InputStream
-import java.nio.charset.StandardCharsets
-import java.util.Base64
-import java.util.zip.Inflater
-import com.google.gson.Gson
-import com.google.gson.JsonObject
 
 /**
- * 角色人格卡片实体
+ * 角色人格卡片实体。
+ *
+ * 前面的字段保持 Loyea 旧 UI/API 兼容；末尾字段承载 SillyTavern/Tavern
+ * 的完整角色卡信息。Gson 读取旧版本文件时会得到默认值，再由存储层归一化。
  */
 data class CharacterCard(
-    val id: String,                  // 唯一标识 (UUID 或时间戳)
-    val name: String,                // 角色名字
-    val avatarUri: String? = null,   // 头像本地图片绝对路径
-    val avatarColor: String = "#E5D3B3", // 头像微光渐变背景色
-    val shortIntro: String,          // 一句话简介
-    val systemPrompt: String,        // 核心设定提示词
-    val personality: String = "",    // 性格词汇
-    val scenario: String = "",       // 对话场景背景
-    val firstMessage: String = "",   // 首条欢迎问候语
-    val chatExamples: String = "",   // 对话示例
-    val isBuiltIn: Boolean = false,  // 是否为系统内置
-    val creatorName: String? = null, // 创作者
-    val backgroundUri: String? = null // 新增聊天背景图片路径
+    val id: String,
+    val name: String,
+    val avatarUri: String? = null,
+    val avatarColor: String = "#E5D3B3",
+    val shortIntro: String,
+    val systemPrompt: String,
+    val personality: String = "",
+    val scenario: String = "",
+    val firstMessage: String = "",
+    val chatExamples: String = "",
+    val isBuiltIn: Boolean = false,
+    val creatorName: String? = null,
+    val backgroundUri: String? = null,
+    // ---- SillyTavern/Tavern 兼容字段 ----
+    val description: String = "",
+    val creatorNotes: String = "",
+    val postHistoryInstructions: String = "",
+    val alternateGreetings: List<String> = emptyList(),
+    val groupOnlyGreetings: List<String> = emptyList(),
+    val tags: List<String> = emptyList(),
+    val characterVersion: String = "",
+    val nickname: String? = null,
+    val source: List<String> = emptyList(),
+    val creationDate: Long? = null,
+    val modificationDate: Long? = null,
+    val creatorNotesMultilingualJson: String = "{}",
+    val assetsJson: String = "[]",
+    val extensionsJson: String = "{}",
+    val characterBookJson: String? = null,
+    val spec: String = "chara_card_v2",
+    val specVersion: String = "2.0",
+    val originalCardJson: String? = null
 )
 
 /**
- * 兼容 SillyTavern 角色卡的解析器
+ * SillyTavern/Tavern 角色卡导入门面。
+ * 具体 V1/V2/V3、PNG chunk 和 Character Book 逻辑位于 TavernCardCodec，
+ * 这样旧调用方无需立即改写，后续运行时可以直接消费结构化文档。
  */
 object TavernCardParser {
-    private val gson = Gson()
+    fun parsePngCard(inputStream: InputStream): CharacterCard? =
+        TavernCardCodec.parsePng(inputStream)?.let(::toCharacterCard)
 
-    /**
-     * 从 PNG 文件的 tEXt/zTXt/iTXt chunk 中提取并解析角色卡元数据
-     */
-    fun parsePngCard(inputStream: InputStream): CharacterCard? {
-        try {
-            // PNG 头部 8 字节验证
-            val signature = ByteArray(8)
-            if (inputStream.read(signature) != 8) return null
-            if (signature[0] != 0x89.toByte() || signature[1] != 0x50.toByte() ||
-                signature[2] != 0x4E.toByte() || signature[3] != 0x47.toByte() ||
-                signature[4] != 0x0D.toByte() || signature[5] != 0x0A.toByte() ||
-                signature[6] != 0x1A.toByte() || signature[7] != 0x0A.toByte()
-            ) {
-                return null // 不是合法的 PNG 图片
-            }
+    fun parseCharxCard(inputStream: InputStream): CharacterCard? =
+        TavernCardCodec.parseCharx(inputStream)?.let(::toCharacterCard)
 
-            val buffer = ByteArray(4)
-            while (true) {
-                // 1. 读取 Chunk 长度 (4 字节)
-                if (inputStream.read(buffer) != 4) break
-                val length = ((buffer[0].toInt() and 0xFF) shl 24) or
-                             ((buffer[1].toInt() and 0xFF) shl 16) or
-                             ((buffer[2].toInt() and 0xFF) shl 8) or
-                             (buffer[3].toInt() and 0xFF)
+    fun parseJsonCard(jsonStr: String): CharacterCard? =
+        TavernCardCodec.parseJson(jsonStr)?.let(::toCharacterCard)
 
-                // 2. 读取 Chunk 类型 (4 字节)
-                val typeBytes = ByteArray(4)
-                if (inputStream.read(typeBytes) != 4) break
-                val type = String(typeBytes, StandardCharsets.US_ASCII)
+    fun fromDocument(document: TavernCardDocument): CharacterCard = toCharacterCard(document)
 
-                if (type == "IEND") break // PNG 结束块
+    private fun toCharacterCard(document: TavernCardDocument): CharacterCard {
+        val data = document.data
+        val name = data.name.ifBlank { "未命名角色" }
+        val description = data.description
+        val shortIntro = data.shortDescription
+            ?.takeIf { it.isNotBlank() }
+            ?: description.takeIf { it.isNotBlank() }?.let { if (it.length > 20) it.take(20) + "..." else it }
+            ?: "这个角色非常神秘，没有任何介绍。"
+        val colors = listOf("#E5D3B3", "#D3E2CD", "#CBE3F5", "#E2D3F5", "#F2D4D7")
+        val selectedColor = colors[Math.floorMod(name.hashCode(), colors.size)]
 
-                if (type == "tEXt" || type == "zTXt" || type == "iTXt") {
-                    // 读取 Chunk 数据区
-                    val chunkData = ByteArray(length)
-                    var bytesRead = 0
-                    while (bytesRead < length) {
-                        val read = inputStream.read(chunkData, bytesRead, length - bytesRead)
-                        if (read == -1) break
-                        bytesRead += read
-                    }
-                    if (bytesRead != length) break
-
-                    // 文本块的结构通常以 Keyword (0 字节结尾) 开始
-                    var nullIndex = -1
-                    for (i in 0 until length) {
-                        if (chunkData[i] == 0.toByte()) {
-                            nullIndex = i
-                            break
-                        }
-                    }
-
-                    if (nullIndex != -1) {
-                        val keyword = String(chunkData, 0, nullIndex, StandardCharsets.US_ASCII)
-                        if (keyword == "chara") {
-                            var textBytes: ByteArray? = null
-                            when (type) {
-                                "tEXt" -> {
-                                    val textStart = nullIndex + 1
-                                    val textLength = length - textStart
-                                    if (textLength > 0) {
-                                        textBytes = ByteArray(textLength)
-                                        System.arraycopy(chunkData, textStart, textBytes, 0, textLength)
-                                    }
-                                }
-                                "zTXt" -> {
-                                    // zTXt: Keyword (0-terminated) + Compression method (1 byte) + Compressed text
-                                    val compMethodIndex = nullIndex + 1
-                                    if (compMethodIndex < length) {
-                                        val compMethod = chunkData[compMethodIndex].toInt()
-                                        if (compMethod == 0) { // 0 = deflate
-                                            val textStart = compMethodIndex + 1
-                                            val textLength = length - textStart
-                                            if (textLength > 0) {
-                                                textBytes = decompressDeflate(chunkData, textStart, textLength)
-                                            }
-                                        }
-                                    }
-                                }
-                                "iTXt" -> {
-                                    // iTXt: Keyword (0-terminated) + Compression flag (1 byte) + Compression method (1 byte)
-                                    // + Language tag (0-terminated) + Translated keyword (0-terminated) + Text
-                                    var p = nullIndex + 1
-                                    if (p + 1 < length) {
-                                        val compFlag = chunkData[p].toInt()
-                                        val compMethod = chunkData[p + 1].toInt()
-                                        p += 2
-
-                                        // 跳过 Language tag
-                                        while (p < length && chunkData[p] != 0.toByte()) { p++ }
-                                        p++ // 跳过 null 字节
-
-                                        // 跳过 Translated keyword
-                                        while (p < length && chunkData[p] != 0.toByte()) { p++ }
-                                        p++ // 跳过 null 字节
-
-                                        if (p < length) {
-                                            val textLength = length - p
-                                            if (textLength > 0) {
-                                                if (compFlag == 1 && compMethod == 0) {
-                                                    textBytes = decompressDeflate(chunkData, p, textLength)
-                                                } else {
-                                                    textBytes = ByteArray(textLength)
-                                                    System.arraycopy(chunkData, p, textBytes, 0, textLength)
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (textBytes != null) {
-                                val rawText = String(textBytes, StandardCharsets.UTF_8).trim()
-                                // 1. 尝试直接作为明文 JSON 解析
-                                if (rawText.startsWith("{")) {
-                                    val card = parseJsonCard(rawText)
-                                    if (card != null) return card
-                                }
-                                // 2. 尝试作为 Base64 解码后解析
-                                try {
-                                    // 使用 MIME 解码器更宽容地对待换行符
-                                    val decodedBytes = Base64.getMimeDecoder().decode(rawText)
-                                    val jsonStr = String(decodedBytes, StandardCharsets.UTF_8)
-                                    val card = parseJsonCard(jsonStr)
-                                    if (card != null) return card
-                                } catch (e: Exception) {
-                                    // 忽略 Base64 解码失败，继续尝试其他 Chunk
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    // 跳过该 chunk 的数据
-                    inputStream.skip(length.toLong())
-                }
-
-                // 跳过 4 字节的 CRC 校验码
-                inputStream.skip(4)
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        } finally {
-            try {
-                inputStream.close()
-            } catch (ignored: Exception) {}
-        }
-        return null
+        return CharacterCard(
+            id = TavernCardCodec.stableId(document),
+            name = name,
+            avatarUri = null,
+            avatarColor = selectedColor,
+            shortIntro = shortIntro,
+            systemPrompt = data.systemPrompt.ifBlank { "You are a friendly companion." },
+            personality = data.personality,
+            scenario = data.scenario,
+            firstMessage = data.firstMessage.ifBlank {
+                data.alternateGreetings.firstOrNull().orEmpty().ifBlank { "你好！很高兴见到你。" }
+            },
+            chatExamples = data.mesExample,
+            isBuiltIn = false,
+            creatorName = data.creator.ifBlank { "网络导入" },
+            description = description,
+            creatorNotes = data.creatorNotes,
+            postHistoryInstructions = data.postHistoryInstructions,
+            alternateGreetings = data.alternateGreetings,
+            groupOnlyGreetings = data.groupOnlyGreetings,
+            tags = data.tags,
+            characterVersion = data.characterVersion,
+            nickname = data.nickname,
+            source = data.source,
+            creationDate = data.creationDate,
+            modificationDate = data.modificationDate,
+            creatorNotesMultilingualJson = data.creatorNotesMultilingualJson,
+            assetsJson = data.assetsJson,
+            extensionsJson = data.extensionsJson,
+            characterBookJson = data.characterBook?.rawJson,
+            spec = document.spec,
+            specVersion = document.specVersion,
+            originalCardJson = document.rawJson
+        )
     }
 
-    /**
-     * 解压 Deflate 压缩的数据
-     */
-    private fun decompressDeflate(data: ByteArray, offset: Int, length: Int): ByteArray {
-        val inflater = Inflater()
-        inflater.setInput(data, offset, length)
-        val outputStream = ByteArrayOutputStream(length)
-        val buffer = ByteArray(1024)
-        try {
-            while (!inflater.finished()) {
-                val count = inflater.inflate(buffer)
-                if (count == 0) {
-                    // 如果 inflater 还没 finish 但是返回 0，可能是数据不完整或已读完
-                    break
-                }
-                outputStream.write(buffer, 0, count)
-            }
-        } finally {
-            inflater.end()
-        }
-        return outputStream.toByteArray()
-    }
-
-    /**
-     * 解析 JSON 格式的角色卡数据 (自动兼容 Tavern V1/V2/V3 等各种包含嵌套 data 对象或扁平的格式规范)
-     */
-    fun parseJsonCard(jsonStr: String): CharacterCard? {
-        return try {
-            val root = gson.fromJson(jsonStr, JsonObject::class.java) ?: return null
-            
-            // 只要 root 中含有 data 属性且 data 是一个 JSON 对象，就视作包裹（Nested）格式进行解包
-            // 这能够自适应兼容 spec = chara_card_v2、chara_card_v3 以及后续包含 data 的版本
-            val dataObj = if (root.has("data") && root.get("data").isJsonObject) {
-                root.getAsJsonObject("data")
-            } else {
-                root
-            }
-
-            val name = dataObj.get("name")?.asString ?: "未命名角色"
-            val shortIntro = dataObj.get("short_description")?.asString 
-                ?: dataObj.get("description")?.asString?.take(20)?.plus("...") 
-                ?: "这个角色非常神秘，没有任何介绍。"
-            
-            val systemPrompt = dataObj.get("system_prompt")?.asString 
-                ?: "You are a friendly companion."
-            
-            val personality = dataObj.get("personality")?.asString ?: ""
-            val scenario = dataObj.get("scenario")?.asString ?: ""
-            
-            // 读取欢迎问候语
-            val firstMessage = dataObj.get("first_mes")?.asString ?: "你好！很高兴见到你。"
-            val chatExamples = dataObj.get("mes_example")?.asString ?: ""
-            
-            val creator = dataObj.get("creator")?.asString ?: "网络导入"
-
-            // 产生一个基于名称哈希的柔和头像背景色，确保头像色彩丰富
-            val colors = listOf("#E5D3B3", "#D3E2CD", "#CBE3F5", "#E2D3F5", "#F2D4D7")
-            val selectedColor = colors[Math.abs(name.hashCode()) % colors.size]
-
-            CharacterCard(
-                id = "char_" + System.currentTimeMillis() + "_" + Math.abs(name.hashCode() % 1000),
-                name = name,
-                avatarUri = null, // 头像将在拷贝文件后由外部填充
-                avatarColor = selectedColor,
-                shortIntro = shortIntro,
-                systemPrompt = systemPrompt,
-                personality = personality,
-                scenario = scenario,
-                firstMessage = firstMessage,
-                chatExamples = chatExamples,
-                isBuiltIn = false,
-                creatorName = creator
-            )
-        } catch (e: Exception) {
-            e.printStackTrace()
-            null
-        }
-    }
-
-    /**
-     * 获取内置预设人格列表
-     */
+    /** 获取内置预设人格列表。 */
     fun getBuiltInCards(): List<CharacterCard> {
         return listOf(
             CharacterCard(

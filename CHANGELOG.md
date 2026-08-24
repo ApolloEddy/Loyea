@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] - 2026-08-23
+
+### Added (新增)
+- **SillyTavern/Tavern 角色卡兼容层**：新增 V1/V2/V3 JSON、PNG `chara`/`ccv3` 与 V3 CHARX（受限读取根目录 `card.json`）解析、CRC/大小边界校验、原始未知字段保留、CharacterBook 全字段投影与稳定角色 ID；导出改为基于标准 codec，绑定世界书、扩展字段和第三方字段不会因 Loyea UI 未展示而丢失。
+- **角色卡绑定功能运行时**：内嵌 CharacterBook 会与当前会话/全局世界书合并，支持 `selective`、`constant`、`useRegex`、`position`、`insertion_order`、递归、分组、`groupOverride`/关键词评分/`groupWeight`、概率、sticky/cooldown/delay、全局扫描字段和深度 role 注入；CharacterBook 的 ST `extensions` 字段也会被读取并镜像导出。
+- **角色卡 scoped Regex**：新增 SillyTavern Regex 脚本解析与受控执行，支持 AI 输出/展示/用户输入/世界书 placement、宏替换、正则 flags、捕获组、trim、深度范围及无效模式隔离；输出层继续优先过滤 `[MESSAGE TIME: ...]` 元数据。
+- **角色卡绑定 preset**：新增常见 OpenAI/Chat Completion preset 的 prompt slot、`prompt_order`、`wi_format`、场景/性格格式、post-history instructions 与采样参数解析；内嵌 preset 会进入稳定提示词栈，并把通用采样覆盖传入流式请求。
+- **AI 回复输出过滤器**：新增 `ReplyOutputSanitizer`，识别并移除只用于 provider 上下文的 `[MESSAGE TIME: ...]` 元数据；流式标签尚未闭合时先隐藏尾部，避免半截元数据闪现。
+- **回复过滤边界测试**：覆盖完整/未闭合时间元数据、历史消息的 `unavailable` 形式、相似但不应误删的 `MESSAGE TIMESTAMP`/`MESSAGE TIMEOUT` 文本，以及增量解析器出口。
+- **外部 Tavern 资源注册表**：支持导入、持久化和管理外部世界书、preset、Regex collection；角色卡常见 `extensions.world`、嵌套绑定及 preset/Regex 引用会在运行时解析。
+- **内嵌资源与角色过滤**：卡片 extensions/vendor 中直接嵌入的世界书、嵌套 preset/Regex 会直接生效；世界书补齐 `characterFilter`、数字 role、`addMemo`、`displayIndex` 和未知直字段保留。
+- **角色卡高级编辑与导出**：编辑/创建页补齐 description、creator notes、post-history、备用/群聊开场白、标签、来源、昵称、版本、内嵌 CharacterBook 与 extensions JSON；新增 V3 JSON 和 CHARX（含安全资源）导出。
+
+### Changed (变更)
+- **世界书提示词插入**：世界书不再只拼成一个 legacy system 文本块；`before/after character`、作者注释、示例消息、outlet 和 `at_depth` 分桶保留，深度条目按 `system/user/assistant` role 插入实际消息边界。
+- **世界书编辑器与标准导出**：设置页补充正则、大小写、整词、注入位置和深度编辑；标准 SillyTavern World Info 导出使用数字 `position`，同时保留 `positionType`/扩展字段以兼容新版 Tavern。
+- **会话请求构建**：用户输入 placement、角色卡 Regex、preset post-history 和 CharacterBook 深度注入贯通 `PromptAssembler → LlmConversationBuilder → LlmClient`，不改变旧卡/旧会话 JSON 的读取方式。
+- **流式 UI 合帧**：高频 SSE 内容与思考片段按约 16ms 合并一次 UI 状态更新；`ToolCalls` 与 `Done` 强制刷新终态，保持工具分段、思考块、落盘和 TTS 的完整性。
+- **流式回复轻量渲染**：流式阶段使用 Compose `Text` 快速呈现，回复完成后自动恢复原 Markdown 解析与排版，减少 DS 4 Flash 高速输出时的重复解析。
+- **流式滚动策略**：生成期间改为即时追踪最新布局，结束后保留平滑滚动，避免高频片段反复取消滚动动画造成显示滞后。
+- **世界书完整 Book 往返**：导入/导出同时携带扫描深度、token 预算、递归、大小写、整词、分组评分、Loyea 排序配置；会话世界书与全局世界书均按完整 Book 保存。
+- **世界书非破坏性往返**：保留世界书名称、描述、根 extensions、entry 原始直字段和编辑器元数据；编辑单条目时不再因 UI 未展示字段而丢失整本书的其他内容。
+- **备用开场白选择**：新会话选择角色时可直接选用 V2/V3 `alternate_greetings`，不再只能使用第一句。
+
+### Fixed (修复)
+- 修复 CharacterBook 或世界书 `token_budget/budget_cap=0` 时所有条目被错误裁剪为空；现在按 SillyTavern 语义视为不额外限制，并让 `ignoreBudget` 条目不计入预算。
+- 修复 CharacterBook 高级字段只被保存但未参与运行时的问题：角色描述、性格、场景、creator notes、正则关键词、全局扫描开关和 timed 条目现在可影响匹配结果。
+- 修复标准世界书高级 position 导出为字符串导致旧版 ST 网关可能拒绝整本书的问题。
+- 修复 AI 回答偶发直接显示 `[MESSAGE TIME: ...]` provider 元数据的问题；同步防止该元数据进入错误半截回复、下一轮工具上下文和 TTS 文本。
+- 修复世界书对象格式忽略 entry key、`enabled=true + disable=true` 仍被激活，以及原生概率默认值在外部资源导入路径不一致的问题。
+- 修复未标记 `markdownOnly/promptOnly` 的 Regex 在 World Info/prompt 阶段被错误跳过；修复切换会话期间旧异步加载结果覆盖当前世界书运行时状态。
+
+### Architecture (架构影响)
+- 角色卡导入采用“结构化运行时投影 + raw JSON 往返保留”的边界；不认识的第三方 `extensions` 不会被静默重写，解析失败/PNG 损坏/超限输入会安全返回空结果而不触碰既有存储。
+- 绑定能力的关键数据流为：PNG/JSON → `TavernCardCodec` → `CharacterCard`/`CharacterBookDocument` → `TavernCharacterBookAdapter`/Regex/Preset → `WorldInfoMatcher`/`PromptAssembler` → `LlmConversationBuilder` → `LlmClient`；角色卡 scoped Regex 采用小缓存，避免 DS 4 Flash 高速流式刷新时重复解析 JSON。
+- 深度世界书的结构化 role 目前在主聊天请求中生效；后台问候等只使用单 system prompt 的旧入口保持原有安全行为，不会绕过主聊天的工具授权与隐私裁剪。
+- 过滤链路覆盖 LLM 流式/非流式解析、ViewModel 最终清洗、消息分段与 TTS；不改变消息 JSON 字段、世界书数据结构或既有 Markdown 完成态渲染。
+- 流式 UI 只降低高频状态发布与进行中的排版成本，不改变模型请求、SSE 顺序、工具调用协议或用户手动滚动接管规则。
+- 世界书 timed 状态额外保存当前 Book 签名；更换角色卡绑定/外部世界书时清理旧书的 sticky/cooldown，旧会话无该字段时仍向后兼容。
+
 ## [0.5.5] - 2026-08-21
 
 ### Added (新增)

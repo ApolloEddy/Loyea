@@ -24,6 +24,27 @@ enum class WorldInfoInsertionOrder {
 enum class WorldInfoScope { GLOBAL, SESSION }
 
 /**
+ * 世界书条目的持久化定时状态。
+ *
+ * SillyTavern 将 sticky/cooldown 状态放在聊天元数据中，而不是重新从文本猜测。
+ * Loyea 用当前回合 key + 单调回合序号保存等价状态，旧会话没有该字段时仍由匹配器
+ * 使用兼容回退逻辑。
+ */
+data class WorldInfoEntryRuntimeState(
+    val lastActivatedTurn: Long = -1L,
+    val stickyUntilTurn: Long = -1L,
+    val cooldownUntilTurn: Long = -1L
+)
+
+data class WorldInfoRuntimeState(
+    val turnKey: String = "",
+    val turnIndex: Long = 0L,
+    val entries: Map<String, WorldInfoEntryRuntimeState> = emptyMap(),
+    /** 当前生效书的轻量签名；换书/换绑定后不复用旧书的 sticky/cooldown。 */
+    val bookSignature: String = ""
+)
+
+/**
  * 世界书全局配置（与条目文件分开存储，存 SharedPreferences）。
  * 纯 Kotlin 数据类（storage 才有 Android 依赖），便于单测。
  */
@@ -34,7 +55,11 @@ data class WorldInfoConfig(
     val tokenBudget: Long = 2048,                     // 世界书注入 token 预算（estimateTokens 估算后裁剪）
     val recursionDepthCap: Int = 3,                   // 递归轮次上限
     val allowRecursion: Boolean = true,               // 全局递归总开关
-    val emitGroupHeaders: Boolean = false             // 分组前输出 "# <group>" 注释行
+    val emitGroupHeaders: Boolean = false,            // 分组前输出 "# <group>" 注释行
+    val caseSensitive: Boolean = false,               // ST 全局关键词大小写设置
+    val matchWholeWords: Boolean = false,             // ST 全局整词匹配设置
+    val useGroupScoring: Boolean = false,              // 是否以 groupWeight 做加权选择
+    val budgetCap: Long = 0                           // 0=不额外限制；保留 ST budget_cap
 )
 
 /**
@@ -48,6 +73,10 @@ object WorldInfoConfigStorage {
     private const val K_REC_DEPTH = "world_info_recursion_depth_cap"
     private const val K_REC_ALLOW = "world_info_allow_recursion"
     private const val K_GROUP_HEADERS = "world_info_emit_group_headers"
+    private const val K_CASE = "world_info_case_sensitive"
+    private const val K_WHOLE = "world_info_match_whole_words"
+    private const val K_GROUP_SCORING = "world_info_group_scoring"
+    private const val K_BUDGET_CAP = "world_info_budget_cap"
 
     fun load(prefs: SharedPreferences): WorldInfoConfig = WorldInfoConfig(
         scanDepth = prefs.getInt(K_SCAN, 10),
@@ -61,7 +90,11 @@ object WorldInfoConfigStorage {
         tokenBudget = prefs.getLong(K_BUDGET, 2048),
         recursionDepthCap = prefs.getInt(K_REC_DEPTH, 3),
         allowRecursion = prefs.getBoolean(K_REC_ALLOW, true),
-        emitGroupHeaders = prefs.getBoolean(K_GROUP_HEADERS, false)
+        emitGroupHeaders = prefs.getBoolean(K_GROUP_HEADERS, false),
+        caseSensitive = prefs.getBoolean(K_CASE, false),
+        matchWholeWords = prefs.getBoolean(K_WHOLE, false),
+        useGroupScoring = prefs.getBoolean(K_GROUP_SCORING, false),
+        budgetCap = prefs.getLong(K_BUDGET_CAP, 0)
     )
 
     fun save(prefs: SharedPreferences, config: WorldInfoConfig) {
@@ -73,6 +106,10 @@ object WorldInfoConfigStorage {
             .putInt(K_REC_DEPTH, config.recursionDepthCap)
             .putBoolean(K_REC_ALLOW, config.allowRecursion)
             .putBoolean(K_GROUP_HEADERS, config.emitGroupHeaders)
+            .putBoolean(K_CASE, config.caseSensitive)
+            .putBoolean(K_WHOLE, config.matchWholeWords)
+            .putBoolean(K_GROUP_SCORING, config.useGroupScoring)
+            .putLong(K_BUDGET_CAP, config.budgetCap)
             .apply()
     }
 
@@ -90,6 +127,10 @@ object WorldInfoConfigStorage {
         obj.addProperty("recursionDepthCap", config.recursionDepthCap)
         obj.addProperty("allowRecursion", config.allowRecursion)
         obj.addProperty("emitGroupHeaders", config.emitGroupHeaders)
+        obj.addProperty("caseSensitive", config.caseSensitive)
+        obj.addProperty("matchWholeWords", config.matchWholeWords)
+        obj.addProperty("useGroupScoring", config.useGroupScoring)
+        obj.addProperty("budgetCap", config.budgetCap)
         return obj.toString()
     }
 
@@ -110,7 +151,11 @@ object WorldInfoConfigStorage {
                 tokenBudget = if (obj.has("tokenBudget")) obj.get("tokenBudget").asLong else 2048,
                 recursionDepthCap = if (obj.has("recursionDepthCap")) obj.get("recursionDepthCap").asInt else 3,
                 allowRecursion = if (obj.has("allowRecursion")) obj.get("allowRecursion").asBoolean else true,
-                emitGroupHeaders = if (obj.has("emitGroupHeaders")) obj.get("emitGroupHeaders").asBoolean else false
+                emitGroupHeaders = if (obj.has("emitGroupHeaders")) obj.get("emitGroupHeaders").asBoolean else false,
+                caseSensitive = if (obj.has("caseSensitive")) obj.get("caseSensitive").asBoolean else false,
+                matchWholeWords = if (obj.has("matchWholeWords")) obj.get("matchWholeWords").asBoolean else false,
+                useGroupScoring = if (obj.has("useGroupScoring")) obj.get("useGroupScoring").asBoolean else false,
+                budgetCap = if (obj.has("budgetCap")) obj.get("budgetCap").asLong else 0
             )
         } catch (e: Exception) {
             WorldInfoConfig()

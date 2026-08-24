@@ -40,7 +40,10 @@ class WorldInfoMatcherTest {
         excludeRecursion: Boolean = false,
         keysContainedIn: String = "chat",
         position: Int = 0,
-        weight: Int = 0
+        weight: Int = 0,
+        sticky: Int = 0,
+        cooldown: Int = 0,
+        delay: Int = 0
     ) = WorldInfoEntry(
         id = id, keywords = keywords, content = content, enabled = enabled, uid = uid,
         keysecondary = keysecondary, constant = constant, order = order, depth = depth,
@@ -49,7 +52,7 @@ class WorldInfoMatcherTest {
         useProbability = useProbability, delayUntilRecursion = delayUntilRecursion,
         preventRecursion = preventRecursion, allowRecursion = allowRecursion,
         excludeRecursion = excludeRecursion, keysContainedIn = keysContainedIn,
-        position = position, weight = weight
+        position = position, weight = weight, sticky = sticky, cooldown = cooldown, delay = delay
     )
 
     // ---------- 基础触发 ----------
@@ -67,6 +70,31 @@ class WorldInfoMatcherTest {
         val e = entry("k1", keywords = listOf("MagicStone"), content = "Stone lore")
         val out = WorldInfoMatcher.worldInfoBlockFor(listOf(e), listOf("the magicstone is here"), "U", "S", cfg, Random(1))
         assertTrue(out!!.contains("Stone lore"))
+    }
+
+    @Test
+    fun regexAndWholeWordMatchingFollowEntryAndGlobalSettings() {
+        val regexEntry = entry("rx", keywords = listOf("/magic\\d+/i"), content = "Regex lore")
+            .copy(useRegex = true)
+        assertTrue(
+            WorldInfoMatcher.worldInfoBlockFor(
+                listOf(regexEntry), listOf("MAGIC42"), "U", "S", cfg, Random(1)
+            )!!.contains("Regex lore")
+        )
+
+        val wholeWordEntry = entry("word", keywords = listOf("cat"), content = "Whole-word lore")
+        assertNull(
+            WorldInfoMatcher.worldInfoBlockFor(
+                listOf(wholeWordEntry), listOf("concatenate"), "U", "S",
+                cfg.copy(matchWholeWords = true), Random(1)
+            )
+        )
+        assertTrue(
+            WorldInfoMatcher.worldInfoBlockFor(
+                listOf(wholeWordEntry), listOf("a cat sleeps"), "U", "S",
+                cfg.copy(matchWholeWords = true), Random(1)
+            )!!.contains("Whole-word lore")
+        )
     }
 
     @Test
@@ -113,6 +141,23 @@ class WorldInfoMatcherTest {
     }
 
     @Test
+    fun characterGlobalScanFlagsMatchCardFields() {
+        val e = entry("character", keywords = listOf("archivist"), content = "character lore")
+            .copy(matchCharacterDescription = true)
+        assertTrue(
+            WorldInfoMatcher.worldInfoBlockFor(
+                entries = listOf(e),
+                historyContents = listOf("unrelated"),
+                userName = "U",
+                systemPrompt = "S",
+                config = cfg,
+                random = Random(1),
+                characterDescription = "An archivist who guards a library"
+            )!!.contains("character lore")
+        )
+    }
+
+    @Test
     fun keysContainedInWorldSourceRecursion() {
         // A 在聊天命中；B 的关键词在 A 的 content 中，且 B 只扫 world 源
         val a = entry("A", keywords = listOf("surface"), content = "the deep key is nested", order = 1)
@@ -124,10 +169,12 @@ class WorldInfoMatcherTest {
     // ---------- selective 四种逻辑 ----------
 
     @Test
-    fun selectiveAndAnyAllowsSecondaryOnly() {
+    fun selectiveAndAnyRequiresPrimaryAndSecondary() {
         val e = entry("sa", keywords = listOf("PRIMARY"), keysecondary = listOf("secword"), content = "X",
             selective = true, selectiveLogic = WorldInfoMatcher.AND_ANY)
-        assertTrue(WorldInfoMatcher.worldInfoBlockFor(listOf(e), listOf("secword appears"), "U", "S", cfg, Random(1))!!.contains("X"))
+        assertNull(WorldInfoMatcher.worldInfoBlockFor(listOf(e), listOf("secword appears"), "U", "S", cfg, Random(1)))
+        assertNull(WorldInfoMatcher.worldInfoBlockFor(listOf(e), listOf("PRIMARY appears"), "U", "S", cfg, Random(1)))
+        assertTrue(WorldInfoMatcher.worldInfoBlockFor(listOf(e), listOf("PRIMARY and secword"), "U", "S", cfg, Random(1))!!.contains("X"))
     }
 
     @Test
@@ -177,19 +224,151 @@ class WorldInfoMatcherTest {
         assertTrue(WorldInfoMatcher.worldInfoBlockFor(listOf(eOff), listOf("kw here"), "U", "S", cfg, Random(42))!!.contains("POFF"))
     }
 
+    @Test
+    fun timedStickyCooldownAndDelayAreReconstructedFromHistory() {
+        val sticky = entry(
+            "sticky", keywords = listOf("trigger"), content = "sticky lore", depth = 1, sticky = 1
+        )
+        assertTrue(
+            WorldInfoMatcher.worldInfoBlockFor(listOf(sticky), listOf("trigger", "quiet"), "U", "S", cfg, Random(1))!!
+                .contains("sticky lore")
+        )
+        assertNull(
+            WorldInfoMatcher.worldInfoBlockFor(listOf(sticky), listOf("trigger", "quiet", "quiet"), "U", "S", cfg, Random(1))
+        )
+
+        val cooldown = entry(
+            "cooldown", keywords = listOf("trigger"), content = "cooldown lore", depth = 1, cooldown = 1
+        )
+        assertNull(
+            WorldInfoMatcher.worldInfoBlockFor(listOf(cooldown), listOf("trigger", "quiet"), "U", "S", cfg, Random(1))
+        )
+
+        val delayed = entry(
+            "delay", keywords = listOf("never"), content = "delayed lore", constant = true, delay = 2
+        )
+        assertNull(WorldInfoMatcher.worldInfoBlockFor(listOf(delayed), listOf("first"), "U", "S", cfg, Random(1)))
+        assertTrue(
+            WorldInfoMatcher.worldInfoBlockFor(listOf(delayed), listOf("first", "second"), "U", "S", cfg, Random(1))!!
+                .contains("delayed lore")
+        )
+    }
+
+    @Test
+    fun timedStateIsReturnedAndCanBeReusedAcrossTurns() {
+        val sticky = entry(
+            "persisted-sticky", keywords = listOf("trigger"), content = "persisted lore",
+            depth = 1, sticky = 1
+        )
+        val first = WorldInfoMatcher.worldInfoRenderFor(
+            entries = listOf(sticky),
+            historyContents = listOf("trigger"),
+            userName = "U",
+            systemPrompt = "S",
+            config = cfg,
+            random = Random(1),
+            turnKey = "user-1",
+            turnIndex = 1
+        )
+        assertTrue(first.all!!.contains("persisted lore"))
+        assertEquals("user-1", first.runtimeState.turnKey)
+
+        val second = WorldInfoMatcher.worldInfoRenderFor(
+            entries = listOf(sticky),
+            historyContents = listOf("quiet"),
+            userName = "U",
+            systemPrompt = "S",
+            config = cfg,
+            random = Random(1),
+            runtimeState = first.runtimeState,
+            turnKey = "user-2",
+            turnIndex = 2
+        )
+        assertTrue(second.all!!.contains("persisted lore"))
+
+        val third = WorldInfoMatcher.worldInfoRenderFor(
+            entries = listOf(sticky),
+            historyContents = listOf("quiet"),
+            userName = "U",
+            systemPrompt = "S",
+            config = cfg,
+            random = Random(1),
+            runtimeState = second.runtimeState,
+            turnKey = "user-3",
+            turnIndex = 3
+        )
+        assertNull(third.all)
+    }
+
+    @Test
+    fun characterFilterRestrictsWorldInfoToMatchingCard() {
+        val entry = WorldInfoEntry(
+            id = "filtered",
+            keywords = listOf("signal"),
+            content = "filtered lore",
+            characterFilterNames = listOf("Allowed")
+        )
+        val config = WorldInfoConfig(tokenBudget = 100)
+        assertNull(
+            WorldInfoMatcher.worldInfoBlockFor(
+                entries = listOf(entry),
+                historyContents = listOf("signal"),
+                userName = "User",
+                systemPrompt = "System",
+                config = config,
+                characterName = "Other"
+            )
+        )
+        assertTrue(
+            WorldInfoMatcher.worldInfoBlockFor(
+                entries = listOf(entry),
+                historyContents = listOf("signal"),
+                userName = "User",
+                systemPrompt = "System",
+                config = config,
+                characterName = "Allowed"
+            )!!.contains("filtered lore")
+        )
+    }
+
     // ---------- 分组邻接 ----------
 
     @Test
-    fun groupAdjacencyKeepsGroupContiguous() {
+    fun groupEntriesAreMutuallyExclusiveAndOverrideWins() {
         val a1 = entry("a1", keywords = listOf("k"), content = "A1", order = 200, group = "G")
         val a2 = entry("a2", keywords = listOf("k"), content = "A2", order = 201, group = "G")
+            .copy(groupOverride = true)
         val ng = entry("ng", keywords = listOf("k"), content = "NG", order = 100)
         val out = WorldInfoMatcher.worldInfoBlockFor(listOf(ng, a1, a2), listOf("k"), "U", "S", cfg, Random(1))!!
-        val iNG = out.indexOf("NG")
-        val iA1 = out.indexOf("A1")
-        val iA2 = out.indexOf("A2")
-        assertTrue(iNG < iA1 && iA1 < iA2)
-        assertFalse(out.substring(iA1, iA2).contains("NG")) // A1 与 A2 之间不被无组条目打断
+        assertTrue(out.contains("NG"))
+        assertFalse(out.contains("A1"))
+        assertTrue(out.contains("A2"))
+    }
+
+    @Test
+    fun groupScoringKeepsHighestActivationScoreBeforeWeightedRandom() {
+        val stronger = entry(
+            "strong",
+            keywords = listOf("k1", "k2"),
+            content = "strong lore",
+            group = "G"
+        )
+        val weaker = entry(
+            "weak",
+            keywords = listOf("k1"),
+            content = "weak lore",
+            group = "G"
+        )
+        val out = WorldInfoMatcher.worldInfoBlockFor(
+            listOf(stronger, weaker),
+            listOf("k1 k2"),
+            "U",
+            "S",
+            cfg.copy(useGroupScoring = true),
+            Random(1)
+        )!!
+        assertTrue(out.contains("strong lore"))
+        assertFalse(out.contains("weak lore"))
     }
 
     @Test
@@ -237,8 +416,9 @@ class WorldInfoMatcherTest {
         val e2 = entry("b2", keywords = listOf("k"), content = "Beta lore two", constant = true, order = 2)
         val cfgSmall = cfg.copy(tokenBudget = estimateTokens("Alpha lore one") + 1)
         val out = WorldInfoMatcher.worldInfoBlockFor(listOf(e1, e2), listOf("k"), "U", "S", cfgSmall, Random(1))!!
-        assertTrue(out.contains("Alpha lore one"))
-        assertFalse(out.contains("Beta lore two"))
+        // ST 的预算优先保留 order 更大的条目，再按输出顺序渲染。
+        assertFalse(out.contains("Alpha lore one"))
+        assertTrue(out.contains("Beta lore two"))
     }
 
     // ---------- 递归链 ----------

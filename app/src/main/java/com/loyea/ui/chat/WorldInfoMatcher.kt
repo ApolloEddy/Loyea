@@ -25,40 +25,233 @@ object WorldInfoMatcher {
     const val NOT_ANY = 2
     const val AND_ALL = 3
 
+    data class WorldInfoMatchResult(
+        val entries: List<WorldInfoEntry>,
+        val runtimeState: WorldInfoRuntimeState
+    )
+
     /**
      * 计算匹配条目，按 config 排序/分组/预算裁剪后渲染注入块；无命中返回 null。
      * @param historyContents 最近消息 content，时间正序（条目 depth 窗口取其尾）
      * @param random 可注入的随机源（生产传会话稳定种子，测试传固定种子）
      */
-    fun worldInfoBlockFor(
+    private fun matchWorldInfoEntriesFor(
         entries: List<WorldInfoEntry>,
         historyContents: List<String>,
         userName: String,
         systemPrompt: String,
         config: WorldInfoConfig,
-        random: Random = Random.Default
-    ): String? {
-        val active = entries.filter { it.enabled }
-        if (active.isEmpty()) return null
+        random: Random = Random.Default,
+        personaDescription: String = "",
+        characterDescription: String = "",
+        characterPersonality: String = "",
+        characterDepthPrompt: String = systemPrompt,
+        scenario: String = "",
+        creatorNotes: String = "",
+        characterName: String = "",
+        characterTags: List<String> = emptyList(),
+        runtimeState: WorldInfoRuntimeState = WorldInfoRuntimeState(),
+        turnKey: String = "",
+        turnIndex: Long = historyContents.size.toLong()
+    ): WorldInfoMatchResult {
+        val active = entries.filter { it.enabled && !it.disable }
+        if (active.isEmpty()) return WorldInfoMatchResult(emptyList(), runtimeState)
+
+        val resolvedTurnKey = turnKey.ifBlank {
+            "${historyContents.size}:${historyContents.lastOrNull()?.hashCode() ?: 0}"
+        }
+        val isNewTurn = runtimeState.turnKey != resolvedTurnKey
+        val resolvedTurnIndex = when {
+            runtimeState.turnKey.isBlank() -> maxOf(runtimeState.turnIndex, turnIndex)
+            isNewTurn -> maxOf(runtimeState.turnIndex + 1L, turnIndex)
+            else -> runtimeState.turnIndex
+        }
+        var nextRuntimeState = runtimeState.copy(
+            turnKey = resolvedTurnKey,
+            turnIndex = resolvedTurnIndex
+        )
+
+        fun recordActivation(entry: WorldInfoEntry) {
+            nextRuntimeState = nextRuntimeState.copy(
+                entries = nextRuntimeState.entries + (entry.id to WorldInfoEntryRuntimeState(
+                    lastActivatedTurn = resolvedTurnIndex,
+                    stickyUntilTurn = if (entry.sticky > 0) resolvedTurnIndex + entry.sticky else -1L,
+                    cooldownUntilTurn = if (entry.cooldown > 0) resolvedTurnIndex + entry.cooldown else -1L
+                ))
+            )
+        }
 
         // —— 匹配（初始轮 + 递归轮），id -> entry，保持命中顺序 ——
         val matched = linkedMapOf<String, WorldInfoEntry>()
 
-        fun tryActivate(entry: WorldInfoEntry, worldContent: String, pass: Int): Boolean {
-            if (pass > 0 && (entry.excludeRecursion || !entry.allowRecursion)) return false
-            if (entry.delayUntilRecursion > pass) return false
-            if (isActivated(entry, historyContents, userName, systemPrompt, worldContent, config, random)) {
-                matched[entry.id] = entry
-                return true
+        data class ActivationCandidate(
+            val entry: WorldInfoEntry,
+            val stickyActive: Boolean,
+            val score: Int
+        )
+
+        fun groupNames(entry: WorldInfoEntry): List<String> = entry.group
+            .split(',')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+
+        fun groupsOverlap(left: WorldInfoEntry, right: WorldInfoEntry): Boolean =
+            groupNames(left).any { it in groupNames(right) }
+
+        /**
+         * 对一个扫描轮次的候选执行 ST 的 inclusion group 顺序：
+         * sticky → groupOverride → group scoring → groupWeight。
+         * 已在前一轮选中的组不会被递归轮次的新候选替换。
+         */
+        fun resolveCandidates(candidates: List<ActivationCandidate>): List<WorldInfoEntry> {
+            if (candidates.isEmpty()) return emptyList()
+            val added = ArrayList<WorldInfoEntry>()
+            val grouped = candidates
+                .filter { groupNames(it.entry).isNotEmpty() }
+                .flatMap { candidate -> groupNames(candidate.entry).map { group -> group to candidate } }
+                .groupBy({ it.first }, { it.second })
+
+            // 无组条目不参与 mutually-exclusive 选择。
+            candidates.filter { groupNames(it.entry).isEmpty() }.forEach { candidate ->
+                if (candidate.entry.id !in matched) {
+                    matched[candidate.entry.id] = candidate.entry
+                    added += candidate.entry
+                    if (!candidate.stickyActive) recordActivation(candidate.entry)
+                }
             }
-            return false
+
+            val selectedIds = linkedSetOf<String>()
+            grouped.values.forEach { groupCandidates ->
+                val available = groupCandidates.filter { candidate ->
+                    candidate.entry.id !in matched &&
+                        matched.values.none { existing -> groupsOverlap(existing, candidate.entry) }
+                }
+                if (available.isEmpty()) return@forEach
+
+                // ST 会保留同组的 sticky 候选，并跳过后续分组评分/随机。
+                val stickyCandidates = available.filter { it.stickyActive }
+                if (stickyCandidates.isNotEmpty()) {
+                    stickyCandidates.forEach { selectedIds += it.entry.id }
+                    return@forEach
+                }
+
+                val overrides = available.filter { it.entry.groupOverride }
+                val overrideWinner = overrides.maxWithOrNull(
+                    compareBy<ActivationCandidate> { it.entry.order }
+                        .thenByDescending { it.entry.uid }
+                        .thenByDescending { it.entry.id }
+                )
+                if (overrideWinner != null) {
+                    selectedIds += overrideWinner.entry.id
+                    return@forEach
+                }
+
+                // useGroupScoring 为 null/缺省时继承全局设置；本地模型用 false
+                // 表示未启用，因此全局 true 时所有候选都参与评分。
+                val scoringEnabled = config.useGroupScoring || available.any { it.entry.useGroupScoring }
+                val scoredCandidates = if (scoringEnabled) {
+                    val maxScore = available
+                        .filter { config.useGroupScoring || it.entry.useGroupScoring }
+                        .maxOfOrNull { it.score }
+                    if (maxScore == null) available else available.filter {
+                        !config.useGroupScoring && !it.entry.useGroupScoring || it.score >= maxScore
+                    }
+                } else {
+                    available
+                }
+
+                // ST 的 groupWeight 是最后一步的加权随机；固定随机源保证会话内可复现。
+                val totalWeight = scoredCandidates.sumOf { it.entry.groupWeight.coerceAtLeast(1).toLong() }
+                    .coerceAtMost(Int.MAX_VALUE.toLong())
+                var roll = if (totalWeight > 0L) random.nextInt(totalWeight.toInt()) else 0
+                val winner = scoredCandidates.firstOrNull { candidate ->
+                    roll -= candidate.entry.groupWeight.coerceAtLeast(1)
+                    roll < 0
+                } ?: scoredCandidates.lastOrNull()
+                winner?.let { selectedIds += it.entry.id }
+            }
+
+            // 以扫描顺序写入 matched，保留非组条目与组胜者的稳定顺序。
+            candidates.forEach { candidate ->
+                if (candidate.entry.id in selectedIds && candidate.entry.id !in matched) {
+                    matched[candidate.entry.id] = candidate.entry
+                    added += candidate.entry
+                    if (!candidate.stickyActive) recordActivation(candidate.entry)
+                }
+            }
+            return added
+        }
+
+        fun tryActivate(entry: WorldInfoEntry, worldContent: String, pass: Int): ActivationCandidate? {
+            if (pass > 0 && (entry.excludeRecursion || !entry.allowRecursion)) return null
+            if (entry.delayUntilRecursion > pass) return null
+            val timed = timedEntryState(
+                entry = entry,
+                historyContents = historyContents,
+                userName = userName,
+                systemPrompt = systemPrompt,
+                config = config,
+                personaDescription = personaDescription,
+                characterDescription = characterDescription,
+                characterPersonality = characterPersonality,
+                characterDepthPrompt = characterDepthPrompt,
+                scenario = scenario,
+                creatorNotes = creatorNotes,
+                characterName = characterName,
+                characterTags = characterTags,
+                runtimeState = runtimeState,
+                currentTurnIndex = resolvedTurnIndex
+            )
+            if (timed.delayActive) return null
+            if (timed.cooldownActive && !timed.stickyActive) return null
+            if (timed.stickyActive || isActivated(
+                    entry = entry,
+                    historyContents = historyContents,
+                    userName = userName,
+                    systemPrompt = systemPrompt,
+                    worldContent = worldContent,
+                    config = config,
+                    random = random,
+                    personaDescription = personaDescription,
+                    characterDescription = characterDescription,
+                    characterPersonality = characterPersonality,
+                        characterDepthPrompt = characterDepthPrompt,
+                        scenario = scenario,
+                        creatorNotes = creatorNotes,
+                        characterName = characterName,
+                        characterTags = characterTags
+                    )) {
+                return ActivationCandidate(
+                    entry = entry,
+                    stickyActive = timed.stickyActive,
+                    score = activationScore(
+                        entry = entry,
+                        historyContents = historyContents,
+                        userName = userName,
+                        systemPrompt = systemPrompt,
+                        worldContent = worldContent,
+                        config = config,
+                        personaDescription = personaDescription,
+                        characterDescription = characterDescription,
+                        characterPersonality = characterPersonality,
+                        characterDepthPrompt = characterDepthPrompt,
+                        scenario = scenario,
+                        creatorNotes = creatorNotes,
+                        characterName = characterName,
+                        characterTags = characterTags
+                    )
+                )
+            }
+            return null
         }
 
         // 初始轮（pass=0）：delayUntilRecursion>0 的条目推迟到递归轮；constant 直通
+        val initialCandidates = ArrayList<ActivationCandidate>()
         for (e in active) {
             if (e.delayUntilRecursion > 0) continue
-            tryActivate(e, "", 0)
+            tryActivate(e, "", 0)?.let { initialCandidates += it }
         }
+        resolveCandidates(initialCandidates)
 
         // 递归轮：对已命中条目 content 扫未命中条目；preventRecursion 命中后断链
         if (config.allowRecursion && config.recursionDepthCap > 0) {
@@ -71,13 +264,13 @@ object WorldInfoMatcher {
                     .filter { it.allowRecursion }
                     .sortedWith(entryComparator(config))
                     .joinToString("\n") { it.content }
+                val candidates = ArrayList<ActivationCandidate>()
                 for (e in active) {
                     if (e.id in matched) continue
-                    if (tryActivate(e, worldContent, pass) && e.preventRecursion) {
-                        prevent = true
-                        break
-                    }
+                    tryActivate(e, worldContent, pass)?.let { candidates += it }
                 }
+                val added = resolveCandidates(candidates)
+                if (added.any { it.preventRecursion }) prevent = true
                 // 仅当本轮无新增「且」无仍在等待延迟激活的候选时才提前终止：
                 // 否则 delayUntilRecursion 条目（其 turn 在后续轮次）会被错误地跳过
                 val pendingDelay = active.any { it.id !in matched && it.delayUntilRecursion > pass }
@@ -86,12 +279,41 @@ object WorldInfoMatcher {
             }
         }
 
-        if (matched.isEmpty()) return null
+        if (matched.isEmpty()) return WorldInfoMatchResult(emptyList(), nextRuntimeState)
 
         // —— 排序 + 分组邻接（同组保持连续，不被他组/无组条目打断）——
-        val sorted = matched.values.sortedWith(entryComparator(config))
-        val ordered = ArrayList<WorldInfoEntry>(sorted.size)
-        val remaining = sorted.toMutableList()
+        // 预算选择按 ST 优先级：constant 优先，其次 order/priority 较大的条目优先；
+        // 选择完成后再按插入顺序渲染，避免低优先级条目占满预算。
+        // ST 的 0 token_budget/budget_cap 表示“不额外限制”，不能把整本书裁成空集。
+        val budgetLimit = when {
+            config.tokenBudget <= 0L && config.budgetCap <= 0L -> Long.MAX_VALUE
+            config.tokenBudget <= 0L -> config.budgetCap
+            config.budgetCap <= 0L -> config.tokenBudget
+            else -> minOf(config.tokenBudget, config.budgetCap)
+        }
+        val budgetCandidates = matched.values.sortedWith(
+            compareByDescending<WorldInfoEntry> { if (it.constant) 1 else 0 }
+                .thenByDescending { it.priority ?: it.order }
+                .thenByDescending { it.weight }
+                .thenBy { it.uid }
+                .thenBy { it.id }
+        )
+        val selected = ArrayList<WorldInfoEntry>(budgetCandidates.size)
+        var selectedCost = 0L
+        for (candidate in budgetCandidates) {
+            if (candidate.ignoreBudget) {
+                selected.add(candidate)
+                continue
+            }
+            val cost = estimateTokens(candidate.content.trim())
+            if (cost <= 0L || selectedCost + cost > budgetLimit) continue
+            selected.add(candidate)
+            selectedCost += cost
+        }
+
+        val selectedSorted = selected.sortedWith(entryComparator(config))
+        val ordered = ArrayList<WorldInfoEntry>(selectedSorted.size)
+        val remaining = selectedSorted.toMutableList()
         while (remaining.isNotEmpty()) {
             val head = remaining.removeAt(0)
             ordered.add(head)
@@ -104,24 +326,298 @@ object WorldInfoMatcher {
             }
         }
 
-        // —— 预算裁剪 + 渲染（字节稳定）——
+        return WorldInfoMatchResult(ordered, nextRuntimeState)
+    }
+
+    /** 兼容旧调用方：只返回命中条目，不暴露持久化运行时状态。 */
+    fun matchedWorldInfoEntriesFor(
+        entries: List<WorldInfoEntry>,
+        historyContents: List<String>,
+        userName: String,
+        systemPrompt: String,
+        config: WorldInfoConfig,
+        random: Random = Random.Default,
+        personaDescription: String = "",
+        characterDescription: String = "",
+        characterPersonality: String = "",
+        characterDepthPrompt: String = systemPrompt,
+        scenario: String = "",
+        creatorNotes: String = "",
+        characterName: String = "",
+        characterTags: List<String> = emptyList(),
+        runtimeState: WorldInfoRuntimeState = WorldInfoRuntimeState(),
+        turnKey: String = "",
+        turnIndex: Long = historyContents.size.toLong()
+    ): List<WorldInfoEntry> = matchWorldInfoEntriesFor(
+        entries = entries,
+        historyContents = historyContents,
+        userName = userName,
+        systemPrompt = systemPrompt,
+        config = config,
+        random = random,
+        personaDescription = personaDescription,
+        characterDescription = characterDescription,
+        characterPersonality = characterPersonality,
+        characterDepthPrompt = characterDepthPrompt,
+        scenario = scenario,
+        creatorNotes = creatorNotes,
+        characterName = characterName,
+        characterTags = characterTags,
+        runtimeState = runtimeState,
+        turnKey = turnKey,
+        turnIndex = turnIndex
+    ).entries
+
+    private data class TimedEntryState(
+        val stickyActive: Boolean = false,
+        val cooldownActive: Boolean = false,
+        val delayActive: Boolean = false
+    )
+
+    /**
+     * ST 的 timed world-info 状态保存在聊天元数据中；Loyea 目前不另建一份易失状态，
+     * 而是从已持久化的消息历史重建等价窗口。这样切换进程/会话后 sticky/cooldown
+     * 仍然自洽，不会因 ViewModel 重建而凭空失效。
+     */
+    private fun timedEntryState(
+        entry: WorldInfoEntry,
+        historyContents: List<String>,
+        userName: String,
+        systemPrompt: String,
+        config: WorldInfoConfig,
+        personaDescription: String,
+        characterDescription: String,
+        characterPersonality: String,
+        characterDepthPrompt: String,
+        scenario: String,
+        creatorNotes: String,
+        characterName: String,
+        characterTags: List<String>,
+        runtimeState: WorldInfoRuntimeState,
+        currentTurnIndex: Long
+    ): TimedEntryState {
+        val currentSize = historyContents.size
+        val delayActive = entry.delay > 0 && currentSize < entry.delay
+
+        // 新格式优先读取聊天元数据中的持久状态；不存在时才使用旧版历史回推。
+        // 这样 sticky/cooldown 在重启、编辑消息或重新生成后不会因为文本形状变化而漂移。
+        if (runtimeState.turnKey.isNotBlank()) {
+            val stored = runtimeState.entries[entry.id]
+            val stickyActive = stored?.stickyUntilTurn?.let { it >= currentTurnIndex } == true
+            val cooldownActive = stored?.cooldownUntilTurn?.let { it >= currentTurnIndex } == true
+            return TimedEntryState(
+                stickyActive = stickyActive,
+                cooldownActive = cooldownActive,
+                delayActive = delayActive
+            )
+        }
+
+        if ((entry.sticky <= 0 && entry.cooldown <= 0) || currentSize <= 1) {
+            return TimedEntryState(delayActive = delayActive)
+        }
+
+        val prior = historyContents.dropLast(1)
+        val lastActivation = prior.indices.reversed().firstOrNull { index ->
+            isActivated(
+                entry = entry,
+                historyContents = prior.take(index + 1),
+                userName = userName,
+                systemPrompt = systemPrompt,
+                worldContent = "",
+                config = config,
+                random = Random(index.toLong() + entry.id.hashCode().toLong()),
+                personaDescription = personaDescription,
+                characterDescription = characterDescription,
+                characterPersonality = characterPersonality,
+                characterDepthPrompt = characterDepthPrompt,
+                scenario = scenario,
+                creatorNotes = creatorNotes,
+                characterName = characterName,
+                characterTags = characterTags
+            )
+        } ?: return TimedEntryState(delayActive = delayActive)
+        val turnsSinceActivation = prior.size - lastActivation
+        return TimedEntryState(
+            stickyActive = entry.sticky > 0 && turnsSinceActivation <= entry.sticky,
+            cooldownActive = entry.cooldown > 0 && turnsSinceActivation <= entry.cooldown,
+            delayActive = delayActive
+        )
+    }
+
+    data class WorldInfoInjectionBlock(
+        val content: String,
+        val role: String? = null
+    )
+
+    data class WorldInfoRenderResult(
+        val all: String?,
+        val legacy: String? = null,
+        val beforeCharacterDefinitions: String? = null,
+        val afterCharacterDefinitions: String? = null,
+        val authorNoteTop: String? = null,
+        val authorNoteBottom: String? = null,
+        val exampleMessagesTop: String? = null,
+        val exampleMessagesBottom: String? = null,
+        val atDepth: Map<Int, String> = emptyMap(),
+        val outlets: Map<String, String> = emptyMap(),
+        val atDepthBlocks: Map<Int, List<WorldInfoInjectionBlock>> = emptyMap(),
+        val runtimeState: WorldInfoRuntimeState = WorldInfoRuntimeState()
+    )
+
+    /** 兼容旧调用方的单块输出。所有位置的条目都保留在 all 中，不会静默丢失。 */
+    fun worldInfoBlockFor(
+        entries: List<WorldInfoEntry>,
+        historyContents: List<String>,
+        userName: String,
+        systemPrompt: String,
+        config: WorldInfoConfig,
+        random: Random = Random.Default,
+        personaDescription: String = "",
+        characterDescription: String = "",
+        characterPersonality: String = "",
+        characterDepthPrompt: String = systemPrompt,
+        scenario: String = "",
+        creatorNotes: String = "",
+        characterName: String = "",
+        characterTags: List<String> = emptyList(),
+        runtimeState: WorldInfoRuntimeState = WorldInfoRuntimeState(),
+        turnKey: String = "",
+        turnIndex: Long = historyContents.size.toLong()
+    ): String? = worldInfoRenderFor(
+        entries = entries,
+        historyContents = historyContents,
+        userName = userName,
+        systemPrompt = systemPrompt,
+        config = config,
+        random = random,
+        personaDescription = personaDescription,
+        characterDescription = characterDescription,
+        characterPersonality = characterPersonality,
+        characterDepthPrompt = characterDepthPrompt,
+        scenario = scenario,
+        creatorNotes = creatorNotes,
+        characterName = characterName,
+        characterTags = characterTags,
+        runtimeState = runtimeState,
+        turnKey = turnKey,
+        turnIndex = turnIndex
+    ).all
+
+    /** 按 ST position/role/outlet 分桶；Prompt 层可据此将同一组命中放到正确位置。 */
+    fun worldInfoRenderFor(
+        entries: List<WorldInfoEntry>,
+        historyContents: List<String>,
+        userName: String,
+        systemPrompt: String,
+        config: WorldInfoConfig,
+        random: Random = Random.Default,
+        personaDescription: String = "",
+        characterDescription: String = "",
+        characterPersonality: String = "",
+        characterDepthPrompt: String = systemPrompt,
+        scenario: String = "",
+        creatorNotes: String = "",
+        characterName: String = "",
+        characterTags: List<String> = emptyList(),
+        runtimeState: WorldInfoRuntimeState = WorldInfoRuntimeState(),
+        turnKey: String = "",
+        turnIndex: Long = historyContents.size.toLong()
+    ): WorldInfoRenderResult {
+        val matchResult = matchWorldInfoEntriesFor(
+            entries = entries,
+            historyContents = historyContents,
+            userName = userName,
+            systemPrompt = systemPrompt,
+            config = config,
+            random = random,
+            personaDescription = personaDescription,
+            characterDescription = characterDescription,
+            characterPersonality = characterPersonality,
+            characterDepthPrompt = characterDepthPrompt,
+            scenario = scenario,
+            creatorNotes = creatorNotes,
+            characterName = characterName,
+            characterTags = characterTags,
+            runtimeState = runtimeState,
+            turnKey = turnKey,
+            turnIndex = turnIndex
+        )
+        val ordered = matchResult.entries
+        if (ordered.isEmpty()) return WorldInfoRenderResult(
+            all = null,
+            runtimeState = matchResult.runtimeState
+        )
+        val all = renderEntries(ordered, config)
+        val buckets = ordered.groupBy { normalizePosition(it.positionType) }
+        fun bucket(name: String): String? = buckets[name]?.let { renderEntries(it, config) }
+        val depthBuckets = buckets[POSITION_AT_DEPTH].orEmpty()
+            .groupBy { it.injectionDepth.coerceAtLeast(0) }
+            .mapNotNull { (depth, value) -> renderEntries(value, config)?.let { depth to it } }
+            .toMap()
+        val depthBlocks = buckets[POSITION_AT_DEPTH].orEmpty()
+            .groupBy { it.injectionDepth.coerceAtLeast(0) }
+            .mapValues { (_, value) ->
+                value.groupBy { it.role?.lowercase()?.takeIf { role -> role in setOf("system", "user", "assistant") } ?: "system" }
+                    .mapNotNull { (role, roleEntries) ->
+                        renderEntries(roleEntries, config)?.let { WorldInfoInjectionBlock(it, role) }
+                    }
+            }
+        val outletBuckets = buckets[POSITION_OUTLET].orEmpty()
+            .groupBy { it.outletName?.ifBlank { "default" } ?: "default" }
+            .mapNotNull { (outlet, value) -> renderEntries(value, config)?.let { outlet to it } }
+            .toMap()
+        return WorldInfoRenderResult(
+            all = all,
+            legacy = bucket(POSITION_LEGACY),
+            beforeCharacterDefinitions = bucket(POSITION_BEFORE_CHAR),
+            afterCharacterDefinitions = bucket(POSITION_AFTER_CHAR),
+            authorNoteTop = bucket(POSITION_AN_TOP),
+            authorNoteBottom = bucket(POSITION_AN_BOTTOM),
+            exampleMessagesTop = bucket(POSITION_EM_TOP),
+            exampleMessagesBottom = bucket(POSITION_EM_BOTTOM),
+            atDepth = depthBuckets,
+            outlets = outletBuckets,
+            atDepthBlocks = depthBlocks,
+            runtimeState = matchResult.runtimeState
+        )
+    }
+
+    private fun renderEntries(entries: List<WorldInfoEntry>, config: WorldInfoConfig): String? {
         val sb = StringBuilder()
-        var budgetUsed = 0L
         var lastGroup: String? = null
-        for (e in ordered) {
-            val content = e.content.trim()
-            if (content.isBlank()) continue
-            val cost = estimateTokens(content)
-            if (budgetUsed + cost > config.tokenBudget) break
-            if (config.emitGroupHeaders && e.group.isNotBlank() && e.group != lastGroup) {
-                sb.append("# ").append(e.group).append("\n")
-                lastGroup = e.group
+        entries.forEach { entry ->
+            val content = entry.content.trim()
+            if (content.isBlank()) return@forEach
+            if (config.emitGroupHeaders && entry.group.isNotBlank() && entry.group != lastGroup) {
+                sb.append("# ").append(entry.group).append("\n")
+                lastGroup = entry.group
             }
             sb.append("- ").append(content).append("\n")
-            budgetUsed += cost
         }
-        val out = sb.toString().trimEnd()
-        return out.ifBlank { null }
+        return sb.toString().trimEnd().ifBlank { null }
+    }
+
+    private const val POSITION_BEFORE_CHAR = "before_char"
+    private const val POSITION_AFTER_CHAR = "after_char"
+    private const val POSITION_AN_TOP = "an_top"
+    private const val POSITION_AN_BOTTOM = "an_bottom"
+    private const val POSITION_EM_TOP = "em_top"
+    private const val POSITION_EM_BOTTOM = "em_bottom"
+    private const val POSITION_AT_DEPTH = "at_depth"
+    private const val POSITION_OUTLET = "outlet"
+    private const val POSITION_LEGACY = "legacy"
+
+    private fun normalizePosition(value: String): String = when (value.lowercase().replace('-', '_')) {
+        "before_char", "before_character", "before_character_definitions" -> POSITION_BEFORE_CHAR
+        "after_char", "after_character", "after_character_definitions" -> POSITION_AFTER_CHAR
+        "antop", "an_top", "author_note_top" -> POSITION_AN_TOP
+        "anbottom", "an_bottom", "author_note_bottom" -> POSITION_AN_BOTTOM
+        "emtop", "em_top", "example_messages_top" -> POSITION_EM_TOP
+        "embottom", "em_bottom", "example_messages_bottom" -> POSITION_EM_BOTTOM
+        "atdepth", "at_depth", "depth" -> POSITION_AT_DEPTH
+        "outlet" -> POSITION_OUTLET
+        "legacy" -> POSITION_LEGACY
+        else -> POSITION_AFTER_CHAR
     }
 
     /**
@@ -135,8 +631,17 @@ object WorldInfoMatcher {
         systemPrompt: String,
         worldContent: String,
         config: WorldInfoConfig,
-        random: Random
+        random: Random,
+        personaDescription: String = "",
+        characterDescription: String = "",
+        characterPersonality: String = "",
+        characterDepthPrompt: String = systemPrompt,
+        scenario: String = "",
+        creatorNotes: String = "",
+        characterName: String = "",
+        characterTags: List<String> = emptyList()
     ): Boolean {
+        if (!passesCharacterFilter(entry, characterName, characterTags)) return false
         val sources = entry.keysContainedIn
             .split(",")
             .map { it.trim().lowercase() }
@@ -149,40 +654,151 @@ object WorldInfoMatcher {
             if (SOURCE_USER in sources) append("\n").append(userName)
             if (SOURCE_SYSTEM in sources) append("\n").append(systemPrompt)
             if (SOURCE_WORLD in sources) append("\n").append(worldContent)
+            if (entry.matchPersonaDescription) append("\n").append(personaDescription)
+            if (entry.matchCharacterDescription) append("\n").append(characterDescription)
+            if (entry.matchCharacterPersonality) append("\n").append(characterPersonality)
+            if (entry.matchCharacterDepthPrompt) append("\n").append(characterDepthPrompt)
+            if (entry.matchScenario) append("\n").append(scenario)
+            if (entry.matchCreatorNotes) append("\n").append(creatorNotes)
         }
 
         fun secondaryAny() = entry.keysecondary.any {
-            it.isNotBlank() && sourceTexts.contains(it, ignoreCase = true)
+            it.isNotBlank() && matchesKeyword(it, sourceTexts, entry, config)
         }
 
         fun secondaryAll() = entry.keysecondary.isNotEmpty() && entry.keysecondary.all {
-            it.isNotBlank() && sourceTexts.contains(it, ignoreCase = true)
+            it.isNotBlank() && matchesKeyword(it, sourceTexts, entry, config)
         }
 
-        // 主关键词命中（constant 直通）
-        val primaryMatched = entry.constant || entry.keywords.any {
-            it.isNotBlank() && sourceTexts.contains(it, ignoreCase = true)
+        // 主关键词 + ST/Tavern 扩展 triggers 命中（constant 直通）。
+        // triggers 不是自动化副作用本身，而是该条目的额外激活条件；真正的 automationId
+        // 事件由上层应用决定，避免在纯匹配函数里偷偷执行外部动作。
+        val primaryMatched = entry.constant || (entry.keywords + entry.triggers).any {
+            it.isNotBlank() && matchesKeyword(it, sourceTexts, entry, config)
         }
-        if (!primaryMatched) {
-            // AND_ANY：次关键词单独命中也可激活（主或次任一命中）
-            if (entry.selective && entry.selectiveLogic == AND_ANY && secondaryAny()) {
-                return probabilityRoll(entry, random)
-            }
-            return false
-        }
-        if (entry.selective) {
+        if (!primaryMatched) return false
+        if (entry.selective && !entry.constant) {
             when (entry.selectiveLogic) {
-                NOT_ALL -> if (secondaryAll()) return false // 主命中且非全部次存在
-                NOT_ANY -> if (secondaryAny()) return false // 主命中且无任一次存在
-                AND_ALL -> if (!secondaryAll()) return false // 主命中且全部次存在
-                // AND_ANY：主已命中即通过
+                AND_ANY -> if (!secondaryAny()) return false // 主词 + 任一次词
+                NOT_ALL -> if (secondaryAll()) return false // 主词 + 非全部次词
+                NOT_ANY -> if (secondaryAny()) return false // 主词 + 无任一次词
+                AND_ALL -> if (!secondaryAll()) return false // 主词 + 全部次词
             }
         }
         return probabilityRoll(entry, random)
     }
 
+    /**
+     * 计算 inclusion group 的关键词命中分数，对齐 ST WorldInfoBuffer.getScore：
+     * 主关键词每命中一个得 1 分；AND_ANY/AND_ALL 在满足正向次词条件时再计次词分。
+     * NOT_ALL/NOT_ANY 只影响是否激活，不参与正向评分。
+     */
+    private fun activationScore(
+        entry: WorldInfoEntry,
+        historyContents: List<String>,
+        userName: String,
+        systemPrompt: String,
+        worldContent: String,
+        config: WorldInfoConfig,
+        personaDescription: String,
+        characterDescription: String,
+        characterPersonality: String,
+        characterDepthPrompt: String,
+        scenario: String,
+        creatorNotes: String,
+        characterName: String,
+        characterTags: List<String>
+    ): Int {
+        if (!passesCharacterFilter(entry, characterName, characterTags)) return 0
+        if (entry.constant || entry.keywords.isEmpty()) return 0
+        val sources = entry.keysContainedIn
+            .split(",")
+            .map { it.trim().lowercase() }
+            .filter { it.isNotEmpty() }
+            .toSet()
+        val chatText = historyContents.takeLast(effectiveDepth(entry, config)).joinToString("\n")
+        val sourceTexts = buildString {
+            if (sources.isEmpty() || SOURCE_CHAT in sources) append(chatText)
+            if (SOURCE_USER in sources) append("\n").append(userName)
+            if (SOURCE_SYSTEM in sources) append("\n").append(systemPrompt)
+            if (SOURCE_WORLD in sources) append("\n").append(worldContent)
+            if (entry.matchPersonaDescription) append("\n").append(personaDescription)
+            if (entry.matchCharacterDescription) append("\n").append(characterDescription)
+            if (entry.matchCharacterPersonality) append("\n").append(characterPersonality)
+            if (entry.matchCharacterDepthPrompt) append("\n").append(characterDepthPrompt)
+            if (entry.matchScenario) append("\n").append(scenario)
+            if (entry.matchCreatorNotes) append("\n").append(creatorNotes)
+        }
+        val primaryScore = (entry.keywords + entry.triggers).count {
+            it.isNotBlank() && matchesKeyword(it, sourceTexts, entry, config)
+        }
+        if (primaryScore == 0) return 0
+        val secondaryScore = entry.keysecondary.count {
+            it.isNotBlank() && matchesKeyword(it, sourceTexts, entry, config)
+        }
+        return when (entry.selectiveLogic) {
+            AND_ANY -> primaryScore + secondaryScore
+            AND_ALL -> if (entry.keysecondary.isNotEmpty() && secondaryScore == entry.keysecondary.count { it.isNotBlank() }) {
+                primaryScore + secondaryScore
+            } else {
+                primaryScore
+            }
+            else -> primaryScore
+        }
+    }
+
+    private fun passesCharacterFilter(
+        entry: WorldInfoEntry,
+        characterName: String,
+        characterTags: List<String>
+    ): Boolean {
+        val names = entry.characterFilterNames.map { it.trim() }.filter { it.isNotBlank() }
+        val tags = entry.characterFilterTags.map { it.trim() }.filter { it.isNotBlank() }
+        if (names.isEmpty() && tags.isEmpty()) return true
+        val nameMatched = names.any { it.equals(characterName.trim(), ignoreCase = true) }
+        val tagSet = characterTags.map { it.trim() }.filter { it.isNotBlank() }
+        val tagMatched = tags.any { wanted -> tagSet.any { it.equals(wanted, ignoreCase = true) } }
+        val matched = nameMatched || tagMatched
+        return if (entry.characterFilterExclude) !matched else matched
+    }
+
     private fun effectiveDepth(entry: WorldInfoEntry, config: WorldInfoConfig): Int =
-        if (entry.depth > 0) entry.depth else config.scanDepth
+        entry.scanDepthOverride?.let { if (it > 0) it else config.scanDepth }
+            ?: if (entry.depth > 0) entry.depth else config.scanDepth
+
+    private fun matchesKeyword(
+        pattern: String,
+        text: String,
+        entry: WorldInfoEntry,
+        config: WorldInfoConfig
+    ): Boolean {
+        val key = pattern.trim()
+        if (key.isEmpty() || text.isEmpty()) return false
+        val slashRegex = key.length >= 2 && key.startsWith('/') && key.lastIndexOf('/') > 0
+        if (entry.useRegex || slashRegex) {
+            val lastSlash = if (slashRegex) key.lastIndexOf('/') else -1
+            val body = if (slashRegex) key.substring(1, lastSlash) else key
+            val flagText = if (slashRegex) key.substring(lastSlash + 1) else ""
+            val options = buildSet {
+                if (!entry.caseSensitiveOr(config) || 'i' in flagText) add(RegexOption.IGNORE_CASE)
+                if ('m' in flagText) add(RegexOption.MULTILINE)
+                if ('s' in flagText) add(RegexOption.DOT_MATCHES_ALL)
+            }
+            return runCatching { Regex(body, options).containsMatchIn(text) }.getOrDefault(false)
+        }
+        if (entry.matchWholeWordsOr(config)) {
+            val boundaryPattern = "(?<![\\p{L}\\p{N}_])${Regex.escape(key)}(?![\\p{L}\\p{N}_])"
+            val options = if (entry.caseSensitiveOr(config)) emptySet() else setOf(RegexOption.IGNORE_CASE)
+            return runCatching { Regex(boundaryPattern, options).containsMatchIn(text) }.getOrDefault(false)
+        }
+        return text.contains(key, ignoreCase = !entry.caseSensitiveOr(config))
+    }
+
+    private fun WorldInfoEntry.caseSensitiveOr(config: WorldInfoConfig): Boolean =
+        caseSensitive ?: config.caseSensitive
+
+    private fun WorldInfoEntry.matchWholeWordsOr(config: WorldInfoConfig): Boolean =
+        matchWholeWords ?: config.matchWholeWords
 
     private fun probabilityRoll(entry: WorldInfoEntry, random: Random): Boolean {
         if (!entry.useProbability) return true

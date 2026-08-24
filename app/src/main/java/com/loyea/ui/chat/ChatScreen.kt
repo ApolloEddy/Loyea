@@ -88,7 +88,7 @@ fun ChatScreen(
     onSendMessage: (String, String?, String?, Int) -> Unit,
     onStopResponse: () -> Unit,
     onToggleThoughts: (String) -> Unit,
-    onNewChatClick: (CharacterCard) -> Unit,
+    onNewChatClick: (CharacterCard, String?) -> Unit,
     onMenuClick: () -> Unit,
     activeCharacterCard: CharacterCard,
     characterCardList: List<CharacterCard>,
@@ -161,6 +161,7 @@ fun ChatScreen(
     // 流式响应中的占位气泡（isThinking 每轮流前置位，工具执行期由 isMcpRunning 补位，覆盖整个多轮响应）
     val activeStreaming = isThinking || isMcpRunning
     val streamingMsg = if (activeStreaming) messages.lastOrNull { it.sender == Sender.AI } else null
+    val streamingMessageId = streamingMsg?.id
 
     // 新一轮 AI 回复开始时复位自动置顶（同响应内 id 稳定不重复触发）
     LaunchedEffect(streamingMsg?.id) {
@@ -177,7 +178,10 @@ fun ChatScreen(
             s != null && s.isThoughtsExpanded && !s.thoughts.isNullOrBlank() ->
                 listState.scrollToItem(messages.size, 0)
             // 流式初期（思考文本未到/已折叠）跟随底部；思考结束回到底部看最终回复
-            else -> listState.animateScrollToItem(messages.size - 1 + if (isThinking) 1 else 0)
+            // 流式期间只追到最新布局，不启动可被高频片段反复取消的滚动动画；
+            // 回复结束后再保留平滑滚动，避免 DS 4 Flash 的片段速度把动画队列拖住。
+            activeStreaming -> listState.scrollToItem(messages.size, 0)
+            else -> listState.animateScrollToItem(messages.size - 1)
         }
     }
 
@@ -304,6 +308,7 @@ fun ChatScreen(
                     }
                     MessageItem(
                         message = message,
+                        isStreaming = message.id == streamingMessageId,
                         userBubbleColor = userBubbleColor,
                         appLanguage = appLanguage,
                         currentlyPlayingAudioId = viewModel?.currentlyPlayingAudioId?.value,
@@ -698,9 +703,9 @@ fun ChatScreen(
                 SelectPersonaContent(
                     characterCardList = characterCardList,
                     appLanguage = appLanguage,
-                    onSelect = { selectedChar ->
+                    onSelect = { selectedChar, greeting ->
                         showPersonaSelector = false
-                        onNewChatClick(selectedChar)
+                        onNewChatClick(selectedChar, greeting)
                     }
                 )
             }
@@ -946,7 +951,7 @@ fun rememberBackgroundPainter(backgroundUri: String?): ImageBitmap? {
 fun SelectPersonaContent(
     characterCardList: List<CharacterCard>,
     appLanguage: String,
-    onSelect: (CharacterCard) -> Unit
+    onSelect: (CharacterCard, String?) -> Unit
 ) {
     val isEn = appLanguage == "en"
     Column(
@@ -969,20 +974,22 @@ fun SelectPersonaContent(
         ) {
             items(characterCardList) { card ->
                 val avatarBitmap = rememberAvatarPainter(card.avatarUri)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .border(
-                            width = 1.dp,
-                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f),
-                            shape = RoundedCornerShape(12.dp)
-                        )
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f))
-                        .clickable { onSelect(card) }
-                        .padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                var greetingMenuExpanded by remember(card.id) { mutableStateOf(false) }
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .border(
+                                width = 1.dp,
+                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f),
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f))
+                            .clickable { onSelect(card, null) }
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                     if (avatarBitmap != null) {
                         androidx.compose.foundation.Image(
                             bitmap = avatarBitmap,
@@ -1036,12 +1043,49 @@ fun SelectPersonaContent(
                         )
                     }
                     
-                    Icon(
-                        imageVector = Icons.Default.ChevronRight,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
-                        modifier = Modifier.size(20.dp)
-                    )
+                        Icon(
+                            imageVector = Icons.Default.ChevronRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        if (card.alternateGreetings.isNotEmpty()) {
+                            IconButton(onClick = { greetingMenuExpanded = true }) {
+                                Icon(
+                                    imageVector = Icons.Default.MoreVert,
+                                    contentDescription = if (isEn) "Choose greeting" else "选择开场白"
+                                )
+                            }
+                        }
+                    }
+                    if (card.alternateGreetings.isNotEmpty()) {
+                        DropdownMenu(
+                            expanded = greetingMenuExpanded,
+                            onDismissRequest = { greetingMenuExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(if (isEn) "Default greeting" else "默认开场白") },
+                                onClick = {
+                                    greetingMenuExpanded = false
+                                    onSelect(card, null)
+                                }
+                            )
+                            card.alternateGreetings.forEachIndexed { index, greeting ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = "${if (isEn) "Greeting" else "开场白"} ${index + 1}: ${greeting.replace("\n", " ").take(36)}",
+                                            maxLines = 1
+                                        )
+                                    },
+                                    onClick = {
+                                        greetingMenuExpanded = false
+                                        onSelect(card, greeting)
+                                    }
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1060,6 +1104,7 @@ private fun isVoiceReplyTool(toolName: String): Boolean =
 @Composable
 fun MessageItem(
     message: Message,
+    isStreaming: Boolean = false,
     userBubbleColor: String,
     appLanguage: String = "zh",
     currentlyPlayingAudioId: String?,
@@ -1633,14 +1678,25 @@ fun MessageItem(
                     message.contentSegments.forEach { segment ->
                         when (segment.type) {
                             "text" -> if (segment.text.isNotBlank()) {
-                                val processedSegText = remember(segment.text) {
-                                    segment.text.replace(Regex("(?<!`)`(?!`)"), "\\\\`")
-                                }
                                 androidx.compose.foundation.text.selection.SelectionContainer {
-                                    MarkdownText(
-                                        text = processedSegText,
-                                        color = MaterialTheme.colorScheme.onBackground
-                                    )
+                                    if (isStreaming) {
+                                        // 流式阶段只做一次 Text 测量，避免每个 SSE 片段都重跑完整 Markdown 解析器；
+                                        // 收到 Done 后自动切回 Markdown，最终排版语义不变。
+                                        Text(
+                                            text = segment.text,
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            color = MaterialTheme.colorScheme.onBackground,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    } else {
+                                        val processedSegText = remember(segment.text) {
+                                            segment.text.replace(Regex("(?<!`)`(?!`)"), "\\\\`")
+                                        }
+                                        MarkdownText(
+                                            text = processedSegText,
+                                            color = MaterialTheme.colorScheme.onBackground
+                                        )
+                                    }
                                 }
                             }
                             "tool" -> {
@@ -1668,10 +1724,19 @@ fun MessageItem(
                             .trim('\n', '\r')
                     }
                     androidx.compose.foundation.text.selection.SelectionContainer {
-                        MarkdownText(
-                            text = processedContent,
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
+                        if (isStreaming) {
+                            Text(
+                                text = message.content,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onBackground,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        } else {
+                            MarkdownText(
+                                text = processedContent,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                        }
                     }
                 }
 
@@ -2157,7 +2222,7 @@ fun ChatScreenPreview() {
             onSendMessage = { _, _, _, _ -> },
             onStopResponse = {},
             onToggleThoughts = {},
-            onNewChatClick = {},
+            onNewChatClick = { _, _ -> },
             onMenuClick = {},
             activeCharacterCard = defaultChar,
             characterCardList = listOf(defaultChar),

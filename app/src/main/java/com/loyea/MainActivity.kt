@@ -185,7 +185,7 @@ class MainActivity : ComponentActivity() {
                                 onToggleThoughts = { chatViewModel.toggleThoughtsExpanded(it) },
                                 onSessionSelect = { chatViewModel.selectSession(it) },
                                 onSessionDelete = { chatViewModel.deleteSession(it) },
-                                onNewChatClick = { chatViewModel.createNewChat(it) },
+                                onNewChatClick = { card, greeting -> chatViewModel.createNewChat(card, greeting) },
                                 activeCharacterCard = activeCharacterCard,
                                 characterCardList = characterCardList,
                                 onTavernClick = {
@@ -306,10 +306,13 @@ class MainActivity : ComponentActivity() {
                         }
                         composable("tavern") {
                             val characterCardList by chatViewModel.characterCardList
+                            val tavernResourceRegistry by chatViewModel.tavernResourceRegistry
                             val appLanguage by chatViewModel.appLanguage
                             TavernScreen(
                                 characterCardList = characterCardList,
                                 onCharacterCardListSave = { chatViewModel.saveCharacterCardList(it) },
+                                tavernResourceRegistry = tavernResourceRegistry,
+                                onTavernResourceRegistrySave = { chatViewModel.saveTavernResourceRegistry(it) },
                                 appLanguage = appLanguage,
                                 onBackClick = { navController.popBackStack() }
                             )

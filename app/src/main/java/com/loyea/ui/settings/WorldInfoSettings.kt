@@ -71,11 +71,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.google.gson.JsonArray
+import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.loyea.ui.chat.ChatViewModel
 import com.loyea.ui.chat.WorldInfoConfig
 import com.loyea.ui.chat.WorldInfoEntry
+import com.loyea.ui.chat.WorldInfoBook
+import com.loyea.ui.chat.TavernWorldBookCodec
 import com.loyea.ui.chat.WorldInfoInsertionOrder
 import com.loyea.ui.chat.WorldInfoScope
 
@@ -109,6 +112,24 @@ fun WorldInfoSettingsLayout(
     var showConfig by remember { mutableStateOf(false) }
     var showRestoreConfirm by remember { mutableStateOf(false) }
 
+    fun saveEntries(updated: List<WorldInfoEntry>) {
+        val existingBook = if (scope == WorldInfoScope.SESSION) {
+            viewModel?.sessionWorldInfo?.value
+        } else {
+            null
+        } ?: WorldInfoBook(
+            entries = entries,
+            config = if (scope == WorldInfoScope.GLOBAL) {
+                viewModel?.worldInfoConfig?.value ?: WorldInfoConfig()
+            } else {
+                viewModel?.sessionWorldInfo?.value?.config
+                    ?: viewModel?.worldInfoConfig?.value
+                    ?: WorldInfoConfig()
+            }
+        )
+        viewModel?.saveWorldInfoBook(existingBook.copy(entries = updated), scope)
+    }
+
     // 导入 SillyTavern World Info JSON（SAF GetContent，application/json）
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -125,8 +146,8 @@ fun WorldInfoSettingsLayout(
                 Toast.makeText(context, if (isEn) "Not a valid SillyTavern World Info file" else "不是有效的 SillyTavern 世界书文件", Toast.LENGTH_SHORT).show()
                 return@rememberLauncherForActivityResult
             }
-            viewModel?.saveWorldInfo(imported, scope)
-            Toast.makeText(context, if (isEn) "Imported ${imported.size} entries" else "已导入 ${imported.size} 条世界观条目", Toast.LENGTH_SHORT).show()
+            viewModel?.saveWorldInfoBook(imported, scope)
+            Toast.makeText(context, if (isEn) "Imported ${imported.entries.size} entries" else "已导入 ${imported.entries.size} 条世界观条目", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             e.printStackTrace()
             Toast.makeText(context, if (isEn) "Import failed" else "导入失败", Toast.LENGTH_SHORT).show()
@@ -139,7 +160,16 @@ fun WorldInfoSettingsLayout(
     ) { uri: Uri? ->
         uri ?: return@rememberLauncherForActivityResult
         try {
-            val json = buildSillyTavernWorldInfo(entries)
+            val currentBook = if (scope == WorldInfoScope.SESSION) {
+                viewModel?.sessionWorldInfo?.value
+                    ?: WorldInfoBook(entries = entries, config = viewModel?.worldInfoConfig?.value ?: WorldInfoConfig())
+            } else {
+                WorldInfoBook(
+                    entries = entries,
+                    config = viewModel?.worldInfoConfig?.value ?: WorldInfoConfig()
+                )
+            }
+            val json = buildSillyTavernWorldInfo(currentBook)
             context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(json) }
             Toast.makeText(context, if (isEn) "Exported ${entries.size} entries" else "已导出 ${entries.size} 条世界观条目", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
@@ -259,11 +289,11 @@ fun WorldInfoSettingsLayout(
                                 },
                                 onToggle = { enabled ->
                                     val updated = entries.map { if (it.id == entry.id) it.copy(enabled = enabled) else it }
-                                    viewModel?.saveWorldInfo(updated, scope)
+                                    saveEntries(updated)
                                 },
                                 onDelete = {
                                     val updated = entries.filter { it.id != entry.id }
-                                    viewModel?.saveWorldInfo(updated, scope)
+                                    saveEntries(updated)
                                 }
                             )
                         }
@@ -284,7 +314,7 @@ fun WorldInfoSettingsLayout(
                 } else {
                     entries.map { if (it.id == newOrUpdated.id) newOrUpdated else it }
                 }
-                viewModel?.saveWorldInfo(updated, scope)
+                saveEntries(updated)
                 showEditor = false
             },
             onDismiss = { showEditor = false }
@@ -537,8 +567,8 @@ private fun WorldInfoEntryCard(
 }
 
 /**
- * 条目编辑对话框：长表单（verticalScroll + 高度上限），覆盖全部 23 个字段。
- * 常用区 + AdvancedSection 折叠高级区。
+ * 条目编辑对话框：长表单（verticalScroll + 高度上限），覆盖匹配、计时、注入位置、
+ * 分组、全局扫描标记和 extensions 等字段。常用区 + AdvancedSection 折叠高级区。
  */
 @Composable
 private fun WorldInfoEditDialog(
@@ -566,6 +596,53 @@ private fun WorldInfoEditDialog(
     var weightInput by remember { mutableStateOf(editingEntry?.weight?.toString() ?: "0") }
     var positionInput by remember { mutableStateOf(editingEntry?.position?.toString() ?: "0") }
     var selectiveLogicInput by remember { mutableStateOf(editingEntry?.selectiveLogic?.toString() ?: "0") }
+    var useRegexInput by remember { mutableStateOf(editingEntry?.useRegex ?: false) }
+    var caseSensitiveInput by remember { mutableStateOf(editingEntry?.caseSensitive ?: false) }
+    var matchWholeWordsInput by remember { mutableStateOf(editingEntry?.matchWholeWords ?: false) }
+    var positionTypeInput by remember { mutableStateOf(editingEntry?.positionType ?: "legacy") }
+    var injectionDepthInput by remember { mutableStateOf(editingEntry?.injectionDepth?.toString() ?: "0") }
+    var roleInput by remember { mutableStateOf(editingEntry?.role.orEmpty()) }
+    var outletNameInput by remember { mutableStateOf(editingEntry?.outletName.orEmpty()) }
+    var groupOverrideInput by remember { mutableStateOf(editingEntry?.groupOverride ?: false) }
+    var groupWeightInput by remember { mutableStateOf(editingEntry?.groupWeight?.toString() ?: "100") }
+    var useGroupScoringInput by remember { mutableStateOf(editingEntry?.useGroupScoring ?: false) }
+    var priorityInput by remember { mutableStateOf(editingEntry?.priority?.toString().orEmpty()) }
+    var scanDepthOverrideInput by remember { mutableStateOf(editingEntry?.scanDepthOverride?.toString().orEmpty()) }
+    var stickyInput by remember { mutableStateOf(editingEntry?.sticky?.toString() ?: "0") }
+    var cooldownInput by remember { mutableStateOf(editingEntry?.cooldown?.toString() ?: "0") }
+    var delayInput by remember { mutableStateOf(editingEntry?.delay?.toString() ?: "0") }
+    var triggersInput by remember { mutableStateOf(editingEntry?.triggers?.joinToString(", ").orEmpty()) }
+    var automationIdInput by remember { mutableStateOf(editingEntry?.automationId.orEmpty()) }
+    var vectorizedInput by remember { mutableStateOf(editingEntry?.vectorized ?: false) }
+    var matchPersonaDescriptionInput by remember { mutableStateOf(editingEntry?.matchPersonaDescription ?: false) }
+    var matchCharacterDescriptionInput by remember { mutableStateOf(editingEntry?.matchCharacterDescription ?: false) }
+    var matchCharacterPersonalityInput by remember { mutableStateOf(editingEntry?.matchCharacterPersonality ?: false) }
+    var matchCharacterDepthPromptInput by remember { mutableStateOf(editingEntry?.matchCharacterDepthPrompt ?: false) }
+    var matchScenarioInput by remember { mutableStateOf(editingEntry?.matchScenario ?: false) }
+    var matchCreatorNotesInput by remember { mutableStateOf(editingEntry?.matchCreatorNotes ?: false) }
+    var ignoreBudgetInput by remember { mutableStateOf(editingEntry?.ignoreBudget ?: false) }
+    var characterFilterNamesInput by remember { mutableStateOf(editingEntry?.characterFilterNames?.joinToString(", ").orEmpty()) }
+    var characterFilterTagsInput by remember { mutableStateOf(editingEntry?.characterFilterTags?.joinToString(", ").orEmpty()) }
+    var characterFilterExcludeInput by remember { mutableStateOf(editingEntry?.characterFilterExclude ?: false) }
+    var addMemoInput by remember { mutableStateOf(editingEntry?.addMemo ?: true) }
+    var displayIndexInput by remember { mutableStateOf(editingEntry?.displayIndex?.toString() ?: "0") }
+    var extensionsJsonInput by remember { mutableStateOf(editingEntry?.extensionsJson.orEmpty()) }
+
+    val extensionsJsonValid = extensionsJsonInput.isBlank() || runCatching {
+        JsonParser.parseString(extensionsJsonInput).isJsonObject
+    }.getOrDefault(false)
+
+    val positionTypeOptions = listOf(
+        "legacy" to (if (isEn) "Legacy / global position" else "兼容旧版 / 全局位置"),
+        "before_char" to (if (isEn) "Before character definitions" else "角色定义之前"),
+        "after_char" to (if (isEn) "After character definitions" else "角色定义之后"),
+        "an_top" to (if (isEn) "Author note top" else "作者注释顶部"),
+        "an_bottom" to (if (isEn) "Author note bottom" else "作者注释底部"),
+        "at_depth" to (if (isEn) "At message depth" else "消息深度注入"),
+        "em_top" to (if (isEn) "Example messages top" else "示例消息顶部"),
+        "em_bottom" to (if (isEn) "Example messages bottom" else "示例消息底部"),
+        "outlet" to (if (isEn) "Named outlet" else "命名出口")
+    )
 
     val selectiveLogicOptions = listOf(
         "0" to (if (isEn) "AND_ANY: key OR secondary matches" else "AND_ANY：主词或次词任一命中"),
@@ -731,6 +808,39 @@ private fun WorldInfoEditDialog(
                         label = if (isEn) "Prevent recursion (break chain)" else "命中后阻断递归链",
                         isEn = isEn
                     )
+                    SwitchRow(
+                        checked = useRegexInput,
+                        onCheckedChange = { useRegexInput = it },
+                        label = if (isEn) "Use regex for keywords" else "关键词使用正则表达式",
+                        isEn = isEn
+                    )
+                    SwitchRow(
+                        checked = caseSensitiveInput,
+                        onCheckedChange = { caseSensitiveInput = it },
+                        label = if (isEn) "Case sensitive" else "区分大小写",
+                        isEn = isEn
+                    )
+                    SwitchRow(
+                        checked = matchWholeWordsInput,
+                        onCheckedChange = { matchWholeWordsInput = it },
+                        label = if (isEn) "Match whole words" else "匹配完整单词",
+                        isEn = isEn
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    DropdownField(
+                        label = if (isEn) "Insertion position" else "注入位置",
+                        options = positionTypeOptions,
+                        current = positionTypeInput,
+                        isEn = isEn,
+                        onValueChange = { positionTypeInput = it }
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    NumberTextField(
+                        value = injectionDepthInput,
+                        onValueChange = { injectionDepthInput = it },
+                        label = if (isEn) "Injection depth" else "注入消息深度",
+                        modifier = Modifier.fillMaxWidth()
+                    )
                     Spacer(modifier = Modifier.height(2.dp))
                     Row(modifier = Modifier.fillMaxWidth()) {
                         NumberTextField(
@@ -747,6 +857,185 @@ private fun WorldInfoEditDialog(
                             modifier = Modifier.weight(1f)
                         )
                     }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = roleInput,
+                            onValueChange = { roleInput = it },
+                            label = { Text(if (isEn) "Role at depth" else "深度注入角色") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        OutlinedTextField(
+                            value = outletNameInput,
+                            onValueChange = { outletNameInput = it },
+                            label = { Text(if (isEn) "Outlet name" else "命名出口") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        NumberTextField(
+                            value = groupWeightInput,
+                            onValueChange = { groupWeightInput = it },
+                            label = if (isEn) "Group weight" else "分组权重",
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        NumberTextField(
+                            value = priorityInput,
+                            onValueChange = { priorityInput = it },
+                            label = if (isEn) "Priority (optional)" else "优先级（可选）",
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        NumberTextField(
+                            value = scanDepthOverrideInput,
+                            onValueChange = { scanDepthOverrideInput = it },
+                            label = if (isEn) "Scan depth override" else "扫描深度覆盖",
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        NumberTextField(
+                            value = stickyInput,
+                            onValueChange = { stickyInput = it },
+                            label = if (isEn) "Sticky turns" else "粘滞回合",
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        NumberTextField(
+                            value = cooldownInput,
+                            onValueChange = { cooldownInput = it },
+                            label = if (isEn) "Cooldown turns" else "冷却回合",
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        NumberTextField(
+                            value = delayInput,
+                            onValueChange = { delayInput = it },
+                            label = if (isEn) "Message delay" else "消息延迟",
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    OutlinedTextField(
+                        value = triggersInput,
+                        onValueChange = { triggersInput = it },
+                        label = { Text(if (isEn) "Triggers (comma separated)" else "触发器 / triggers（逗号分隔）") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = characterFilterNamesInput,
+                        onValueChange = { characterFilterNamesInput = it },
+                        label = { Text(if (isEn) "Character filter names" else "角色过滤名称（逗号分隔）") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = characterFilterTagsInput,
+                        onValueChange = { characterFilterTagsInput = it },
+                        label = { Text(if (isEn) "Character filter tags" else "角色过滤标签（逗号分隔）") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    SwitchRow(
+                        checked = characterFilterExcludeInput,
+                        onCheckedChange = { characterFilterExcludeInput = it },
+                        label = if (isEn) "Exclude matching characters/tags" else "排除匹配的角色/标签",
+                        isEn = isEn
+                    )
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        NumberTextField(
+                            value = displayIndexInput,
+                            onValueChange = { displayIndexInput = it },
+                            label = if (isEn) "Display index" else "显示序号",
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        SwitchRow(
+                            checked = addMemoInput,
+                            onCheckedChange = { addMemoInput = it },
+                            label = if (isEn) "Add memo" else "保留备注标记",
+                            isEn = isEn,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    OutlinedTextField(
+                        value = automationIdInput,
+                        onValueChange = { automationIdInput = it },
+                        label = { Text(if (isEn) "Automation ID (stored only)" else "自动化 ID（仅保存，不自动执行）") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    SwitchRow(
+                        checked = groupOverrideInput,
+                        onCheckedChange = { groupOverrideInput = it },
+                        label = if (isEn) "Group override" else "覆盖同组竞争",
+                        isEn = isEn
+                    )
+                    SwitchRow(
+                        checked = useGroupScoringInput,
+                        onCheckedChange = { useGroupScoringInput = it },
+                        label = if (isEn) "Use group scoring" else "启用分组评分",
+                        isEn = isEn
+                    )
+                    SwitchRow(
+                        checked = vectorizedInput,
+                        onCheckedChange = { vectorizedInput = it },
+                        label = if (isEn) "Vectorized flag (lexical fallback)" else "向量化标记（当前使用词法回退）",
+                        isEn = isEn
+                    )
+                    Text(
+                        text = if (isEn) "Global scan fields" else "全局扫描字段",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
+                    )
+                    SwitchRow(
+                        checked = matchPersonaDescriptionInput,
+                        onCheckedChange = { matchPersonaDescriptionInput = it },
+                        label = if (isEn) "Match persona description" else "扫描用户 Persona 描述",
+                        isEn = isEn
+                    )
+                    SwitchRow(
+                        checked = matchCharacterDescriptionInput,
+                        onCheckedChange = { matchCharacterDescriptionInput = it },
+                        label = if (isEn) "Match character description" else "扫描角色描述",
+                        isEn = isEn
+                    )
+                    SwitchRow(
+                        checked = matchCharacterPersonalityInput,
+                        onCheckedChange = { matchCharacterPersonalityInput = it },
+                        label = if (isEn) "Match character personality" else "扫描角色性格",
+                        isEn = isEn
+                    )
+                    SwitchRow(
+                        checked = matchCharacterDepthPromptInput,
+                        onCheckedChange = { matchCharacterDepthPromptInput = it },
+                        label = if (isEn) "Match character depth prompt" else "扫描角色深度提示词",
+                        isEn = isEn
+                    )
+                    SwitchRow(
+                        checked = matchScenarioInput,
+                        onCheckedChange = { matchScenarioInput = it },
+                        label = if (isEn) "Match scenario" else "扫描场景",
+                        isEn = isEn
+                    )
+                    SwitchRow(
+                        checked = matchCreatorNotesInput,
+                        onCheckedChange = { matchCreatorNotesInput = it },
+                        label = if (isEn) "Match creator notes" else "扫描创作者备注",
+                        isEn = isEn
+                    )
+                    SwitchRow(
+                        checked = ignoreBudgetInput,
+                        onCheckedChange = { ignoreBudgetInput = it },
+                        label = if (isEn) "Ignore token budget" else "忽略 token 预算",
+                        isEn = isEn
+                    )
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
@@ -756,13 +1045,27 @@ private fun WorldInfoEditDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = extensionsJsonInput,
+                    onValueChange = { extensionsJsonInput = it },
+                    label = { Text(if (isEn) "Extensions JSON (optional)" else "扩展字段 JSON（可选）") },
+                    minLines = 3,
+                    isError = !extensionsJsonValid,
+                    supportingText = {
+                        if (!extensionsJsonValid) {
+                            Text(if (isEn) "Must be a valid JSON object" else "必须是有效的 JSON 对象")
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         },
         confirmButton = {
             TextButton(
                 onClick = {
                     val keywords = keywordsInput.split(",").map { it.trim() }.filter { it.isNotBlank() }
-                    if (contentInput.isBlank()) {
+                    if (contentInput.isBlank() || !extensionsJsonValid) {
                         return@TextButton // 内容必填
                     }
                     val base = editingEntry
@@ -790,7 +1093,41 @@ private fun WorldInfoEditDialog(
                             excludeRecursion = excludeRecursionInput,
                             keysContainedIn = keysContainedInInput,
                             position = positionInput.toIntOrNull() ?: base?.position ?: 0,
-                            weight = weightInput.toIntOrNull() ?: base?.weight ?: 0
+                            weight = weightInput.toIntOrNull() ?: base?.weight ?: 0,
+                            useRegex = useRegexInput,
+                            caseSensitive = caseSensitiveInput,
+                            matchWholeWords = matchWholeWordsInput,
+                            positionType = positionTypeInput,
+                            injectionDepth = injectionDepthInput.toIntOrNull() ?: base?.injectionDepth ?: 0,
+                            role = roleInput.trim().ifBlank { null },
+                            outletName = outletNameInput.trim().ifBlank { null },
+                            groupOverride = groupOverrideInput,
+                            groupWeight = groupWeightInput.toIntOrNull() ?: base?.groupWeight ?: 100,
+                            useGroupScoring = useGroupScoringInput,
+                            priority = priorityInput.toIntOrNull(),
+                            scanDepthOverride = scanDepthOverrideInput.toIntOrNull()?.takeIf { it > 0 },
+                            sticky = stickyInput.toIntOrNull() ?: base?.sticky ?: 0,
+                            cooldown = cooldownInput.toIntOrNull() ?: base?.cooldown ?: 0,
+                            delay = delayInput.toIntOrNull() ?: base?.delay ?: 0,
+                            triggers = triggersInput.split(",").map { it.trim() }.filter { it.isNotBlank() }.distinct(),
+                            extensionsJson = extensionsJsonInput.trim().ifBlank { "{}" },
+                            automationId = automationIdInput.trim(),
+                            vectorized = vectorizedInput,
+                            matchPersonaDescription = matchPersonaDescriptionInput,
+                            matchCharacterDescription = matchCharacterDescriptionInput,
+                            matchCharacterPersonality = matchCharacterPersonalityInput,
+                            matchCharacterDepthPrompt = matchCharacterDepthPromptInput,
+                            matchScenario = matchScenarioInput,
+                            matchCreatorNotes = matchCreatorNotesInput,
+                            ignoreBudget = ignoreBudgetInput,
+                            characterFilterNames = characterFilterNamesInput.split(",")
+                                .map { it.trim() }.filter { it.isNotBlank() }.distinct(),
+                            characterFilterTags = characterFilterTagsInput.split(",")
+                                .map { it.trim() }.filter { it.isNotBlank() }.distinct(),
+                            characterFilterExclude = characterFilterExcludeInput,
+                            addMemo = addMemoInput,
+                            displayIndex = displayIndexInput.toIntOrNull() ?: base?.displayIndex ?: 0,
+                            rawJson = base?.rawJson
                         )
                     )
                 }
@@ -820,9 +1157,13 @@ private fun WorldInfoConfigDialog(
     var positionInput by remember { mutableStateOf(config.position) }
     var orderModeInput by remember { mutableStateOf(config.insertionOrderMode.name) }
     var tokenBudgetInput by remember { mutableStateOf(config.tokenBudget.toString()) }
+    var budgetCapInput by remember { mutableStateOf(config.budgetCap.toString()) }
     var recursionDepthInput by remember { mutableStateOf(config.recursionDepthCap.toString()) }
     var allowRecursionInput by remember { mutableStateOf(config.allowRecursion) }
     var emitHeadersInput by remember { mutableStateOf(config.emitGroupHeaders) }
+    var caseSensitiveInput by remember { mutableStateOf(config.caseSensitive) }
+    var matchWholeWordsInput by remember { mutableStateOf(config.matchWholeWords) }
+    var useGroupScoringInput by remember { mutableStateOf(config.useGroupScoring) }
 
     val positionOptions = listOf(
         "bottom" to (if (isEn) "Bottom (end of prompt, keeps prefix cache)" else "底部（Prompt 最尾，保持前缀缓存）"),
@@ -889,6 +1230,13 @@ private fun WorldInfoConfigDialog(
                         modifier = Modifier.weight(1f)
                     )
                 }
+                Spacer(modifier = Modifier.height(10.dp))
+                NumberTextField(
+                    value = budgetCapInput,
+                    onValueChange = { budgetCapInput = it },
+                    label = if (isEn) "Budget cap (0 = no extra cap)" else "预算上限（0 = 不额外限制）",
+                    modifier = Modifier.fillMaxWidth()
+                )
                 SwitchRow(
                     checked = allowRecursionInput,
                     onCheckedChange = { allowRecursionInput = it },
@@ -899,6 +1247,24 @@ private fun WorldInfoConfigDialog(
                     checked = emitHeadersInput,
                     onCheckedChange = { emitHeadersInput = it },
                     label = if (isEn) "Emit group headers (# group)" else "分组前输出 # 注释行",
+                    isEn = isEn
+                )
+                SwitchRow(
+                    checked = caseSensitiveInput,
+                    onCheckedChange = { caseSensitiveInput = it },
+                    label = if (isEn) "Case-sensitive keywords" else "关键词区分大小写",
+                    isEn = isEn
+                )
+                SwitchRow(
+                    checked = matchWholeWordsInput,
+                    onCheckedChange = { matchWholeWordsInput = it },
+                    label = if (isEn) "Match whole words" else "匹配完整单词",
+                    isEn = isEn
+                )
+                SwitchRow(
+                    checked = useGroupScoringInput,
+                    onCheckedChange = { useGroupScoringInput = it },
+                    label = if (isEn) "Use inclusion-group scoring" else "启用分组关键词命中评分",
                     isEn = isEn
                 )
             }
@@ -913,10 +1279,14 @@ private fun WorldInfoConfigDialog(
                             insertionOrderMode = runCatching {
                                 WorldInfoInsertionOrder.valueOf(orderModeInput)
                             }.getOrDefault(config.insertionOrderMode),
-                            tokenBudget = tokenBudgetInput.toLongOrNull()?.coerceAtLeast(1) ?: config.tokenBudget,
+                            tokenBudget = tokenBudgetInput.toLongOrNull()?.coerceAtLeast(0) ?: config.tokenBudget,
                             recursionDepthCap = recursionDepthInput.toIntOrNull()?.coerceAtLeast(0) ?: config.recursionDepthCap,
                             allowRecursion = allowRecursionInput,
-                            emitGroupHeaders = emitHeadersInput
+                            emitGroupHeaders = emitHeadersInput,
+                            caseSensitive = caseSensitiveInput,
+                            matchWholeWords = matchWholeWordsInput,
+                            useGroupScoring = useGroupScoringInput,
+                            budgetCap = budgetCapInput.toLongOrNull()?.coerceAtLeast(0) ?: config.budgetCap
                         )
                     )
                 }
@@ -976,11 +1346,12 @@ private fun SwitchRow(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     label: String,
-    isEn: Boolean
+    isEn: Boolean,
+    modifier: Modifier = Modifier
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth()
+        modifier = modifier.fillMaxWidth()
     ) {
         Text(
             text = label,
@@ -1113,91 +1484,247 @@ private fun SourceToggleChip(
 
 /**
  * 解析 SillyTavern World Info JSON → 内部条目列表。解析失败返回 null。
- * 支持 {"kind":0,"entries":{"<id>":{key,keysecondary,content,constant,disable,order,depth,comment,selective,...}}}
+ * 同时兼容 ST native 的 entries object、部分导出器产生的 entries array，以及
+ * camelCase/snake_case 两套字段名；未知字段不会被误解释，extensions 原样保留。
  */
-private fun parseSillyTavernWorldInfo(json: String): List<WorldInfoEntry>? {
+private fun parseSillyTavernWorldInfo(json: String): WorldInfoBook? = TavernWorldBookCodec.parse(json)
+
+/**
+ * Kept as a compatibility reference for old serialized variants while the
+ * active importer delegates to the single shared TavernWorldBookCodec.
+ */
+@Suppress("UNUSED_PARAMETER")
+private fun parseSillyTavernWorldInfoLegacy(json: String): WorldInfoBook? {
     return try {
         val root = JsonParser.parseString(json)
         if (!root.isJsonObject) return null
         val rootObj = root.asJsonObject
-        val entriesObj = rootObj.getAsJsonObject("entries") ?: return null
+        val entriesElement = rootObj["entries"] ?: return null
+        val items: List<Pair<String, JsonElement>> = when {
+            entriesElement.isJsonObject -> entriesElement.asJsonObject.entrySet().map { it.key to it.value }
+            entriesElement.isJsonArray -> entriesElement.asJsonArray.mapIndexed { index, value -> index.toString() to value }
+            else -> emptyList()
+        }
+        if (items.isEmpty()) return WorldInfoBook(entries = emptyList())
+
+        fun JsonObject.first(vararg names: String): JsonElement? = names.asSequence()
+            .mapNotNull { get(it) }
+            .firstOrNull { !it.isJsonNull }
+
+        fun JsonObject.str(vararg names: String): String =
+            first(*names)?.takeIf { it.isJsonPrimitive }?.asString ?: ""
+
+        fun JsonObject.bool(vararg names: String): Boolean? =
+            first(*names)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean
+
+        fun JsonObject.intOrNull(vararg names: String): Int? =
+            first(*names)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asInt
+
+        fun JsonObject.int(def: Int, vararg names: String): Int = intOrNull(*names) ?: def
+
+        fun JsonObject.strArr(vararg names: String): List<String> {
+            val value = first(*names) ?: return emptyList()
+            if (value.isJsonArray) {
+                return value.asJsonArray.mapNotNull {
+                    it.takeIf { element -> element.isJsonPrimitive && element.asJsonPrimitive.isString }?.asString
+                }
+            }
+            return value.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+                ?.let(::listOf) ?: emptyList()
+        }
+
+        fun positionName(index: Int): String = when (index) {
+            0 -> "before_char"
+            1 -> "after_char"
+            2 -> "an_top"
+            3 -> "an_bottom"
+            4 -> "at_depth"
+            5 -> "em_top"
+            6 -> "em_bottom"
+            7 -> "outlet"
+            else -> "after_char"
+        }
+
         val result = mutableListOf<WorldInfoEntry>()
         var nextUid = 0
-        entriesObj.entrySet().forEach { (idStr, entryEl) ->
+        items.forEach { (idStr, entryEl) ->
             if (!entryEl.isJsonObject) return@forEach
             val obj = entryEl.asJsonObject
-            fun str(name: String): String = obj.get(name)?.takeIf { !it.isJsonNull }?.asString ?: ""
-            fun bool(name: String): Boolean = obj.get(name)?.takeIf { !it.isJsonNull }?.asBoolean ?: false
-            fun int(name: String, def: Int): Int = obj.get(name)?.takeIf { !it.isJsonNull }?.asInt ?: def
-            fun strArr(name: String): List<String> =
-                obj.get(name)?.takeIf { !it.isJsonNull && it.isJsonArray }
-                    ?.asJsonArray?.mapNotNull { if (it.isJsonNull) null else it.asString } ?: emptyList()
-
-            val keywords = strArr("key").filter { it.isNotBlank() }
-            val disable = bool("disable")
-            val uid = int("uid", nextUid)
+            val extensionObj = obj.get("extensions")?.takeIf { it.isJsonObject }?.asJsonObject
+            fun extensionFirst(vararg names: String): JsonElement? = extensionObj?.let { ext ->
+                names.asSequence().mapNotNull { ext[it] }.firstOrNull { !it.isJsonNull }
+            }
+            fun extensionString(vararg names: String): String =
+                extensionFirst(*names)?.takeIf { it.isJsonPrimitive }?.asString ?: ""
+            fun extensionBoolean(vararg names: String): Boolean? =
+                extensionFirst(*names)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean
+            fun extensionInt(vararg names: String): Int? =
+                extensionFirst(*names)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asInt
+            fun extensionStrings(vararg names: String): List<String> =
+                extensionFirst(*names)?.let { value ->
+                    if (value.isJsonArray) {
+                        value.asJsonArray.mapNotNull { item ->
+                            item.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+                        }
+                    } else {
+                        value.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+                            ?.let(::listOf).orEmpty()
+                    }
+                }.orEmpty()
+            val keywords = obj.strArr("key", "keys").filter { it.isNotBlank() }
+            val disable = obj.bool("disable") ?: false
+            val explicitEnabled = obj.bool("enabled")
+            val enabled = (explicitEnabled ?: true) && !disable
+            val uid = obj.int(nextUid, "uid", "id")
             nextUid = maxOf(nextUid, uid + 1)
-            val id = if (idStr.isBlank() || idStr == "0") System.currentTimeMillis().toString() else idStr
+            val stableId = idStr.takeIf { it.isNotBlank() && it != "0" } ?: "uid_$uid"
+            val positionElement = obj.first("position")
+            val positionIndex = positionElement?.takeIf {
+                it.isJsonPrimitive && it.asJsonPrimitive.isNumber
+            }?.asInt ?: extensionInt("position")
+            val explicitPositionType = obj.str("positionType", "position_type").ifBlank { null }
+                ?: extensionString("positionType", "position_type").ifBlank { null }
+            val positionType = explicitPositionType ?: if (positionElement == null && positionIndex == null) {
+                "legacy"
+            } else positionElement?.takeIf {
+                it.isJsonPrimitive && it.asJsonPrimitive.isString
+            }?.asString?.ifBlank { null } ?: positionName(positionIndex ?: 0)
+            val scanDepth = obj.intOrNull("scanDepth", "scan_depth") ?: extensionInt("scanDepth", "scan_depth")
             result.add(
                 WorldInfoEntry(
-                    id = id,
+                    id = stableId,
                     keywords = keywords,
-                    content = str("content"),
-                    enabled = !disable,
+                    content = obj.str("content"),
+                    enabled = enabled,
                     uid = uid,
-                    keysecondary = strArr("keysecondary"),
-                    constant = bool("constant"),
-                    order = int("order", 100),
-                    depth = int("depth", 4),
-                    comment = str("comment"),
-                    selective = bool("selective"),
+                    keysecondary = obj.strArr("keysecondary", "secondary_keys", "secondaryKeys"),
+                    constant = obj.bool("constant") ?: false,
+                    order = obj.int(100, "order", "insertion_order", "insertionOrder"),
+                    depth = obj.intOrNull("depth") ?: extensionInt("depth") ?: 4,
+                    comment = obj.str("comment", "name"),
+                    selective = obj.bool("selective") ?: false,
                     disable = disable,
-                    // ---- ST v2 高级字段（camelCase）----
-                    selectiveLogic = int("selectiveLogic", 0),
-                    group = str("group"),
-                    probability = int("probability", 100),
-                    useProbability = bool("useProbability"),
-                    delayUntilRecursion = int("delayUntilRecursion", 0),
-                    preventRecursion = bool("preventRecursion"),
-                    allowRecursion = if (obj.has("allowRecursion")) bool("allowRecursion") else true,
-                    excludeRecursion = bool("excludeRecursion"),
-                    keysContainedIn = str("keysContainedIn").ifBlank { "chat" },
-                    position = int("position", 0),
-                    weight = int("weight", 0)
+                    selectiveLogic = obj.intOrNull("selectiveLogic", "selective_logic")
+                        ?: extensionInt("selectiveLogic", "selective_logic") ?: 0,
+                    group = obj.str("group").ifBlank { extensionString("group") },
+                    probability = obj.intOrNull("probability") ?: extensionInt("probability") ?: 100,
+                    // ST's native default is enabled probability gating; with probability=100
+                    // this remains byte/behavior compatible for ordinary entries.
+                    useProbability = obj.bool("useProbability", "use_probability")
+                        ?: extensionBoolean("useProbability", "use_probability") ?: true,
+                    delayUntilRecursion = obj.intOrNull("delayUntilRecursion", "delay_until_recursion")
+                        ?: extensionInt("delayUntilRecursion", "delay_until_recursion") ?: 0,
+                    preventRecursion = obj.bool("preventRecursion", "prevent_recursion")
+                        ?: extensionBoolean("preventRecursion", "prevent_recursion") ?: false,
+                    allowRecursion = obj.bool("allowRecursion", "allow_recursion")
+                        ?: extensionBoolean("allowRecursion", "allow_recursion") ?: true,
+                    excludeRecursion = obj.bool("excludeRecursion", "exclude_recursion")
+                        ?: extensionBoolean("excludeRecursion", "exclude_recursion") ?: false,
+                    keysContainedIn = obj.str("keysContainedIn", "keys_contained_in")
+                        .ifBlank { extensionString("keysContainedIn", "keys_contained_in") }
+                        .ifBlank { "chat" },
+                    position = positionIndex ?: 0,
+                    weight = obj.int(0, "weight"),
+                    useRegex = obj.bool("useRegex", "use_regex")
+                        ?: extensionBoolean("useRegex", "use_regex") ?: false,
+                    caseSensitive = obj.bool("caseSensitive", "case_sensitive")
+                        ?: extensionBoolean("caseSensitive", "case_sensitive"),
+                    matchWholeWords = obj.bool("matchWholeWords", "match_whole_words")
+                        ?: extensionBoolean("matchWholeWords", "match_whole_words"),
+                    positionType = positionType,
+                    injectionDepth = obj.intOrNull("injectionDepth", "injection_depth")
+                        ?: extensionInt("injectionDepth", "injection_depth")
+                        ?: obj.intOrNull("depth")
+                        ?: extensionInt("depth") ?: 0,
+                    role = obj.str("role").ifBlank { extensionString("role") }.ifBlank { null },
+                    outletName = obj.str("outletName", "outlet_name")
+                        .ifBlank { extensionString("outletName", "outlet_name") }.ifBlank { null },
+                    groupOverride = obj.bool("groupOverride", "group_override")
+                        ?: extensionBoolean("groupOverride", "group_override") ?: false,
+                    groupWeight = obj.intOrNull("groupWeight", "group_weight")
+                        ?: extensionInt("groupWeight", "group_weight") ?: 100,
+                    useGroupScoring = obj.bool("useGroupScoring", "use_group_scoring")
+                        ?: extensionBoolean("useGroupScoring", "use_group_scoring") ?: false,
+                    priority = obj.intOrNull("priority") ?: extensionInt("priority"),
+                    scanDepthOverride = scanDepth,
+                    sticky = obj.intOrNull("sticky") ?: extensionInt("sticky") ?: 0,
+                    cooldown = obj.intOrNull("cooldown") ?: extensionInt("cooldown") ?: 0,
+                    delay = obj.intOrNull("delay") ?: extensionInt("delay") ?: 0,
+                    triggers = obj.strArr("triggers").ifEmpty { extensionStrings("triggers") },
+                    extensionsJson = extensionObj?.toString() ?: "{}",
+                    automationId = obj.str("automationId", "automation_id")
+                        .ifBlank { extensionObj?.str("automationId", "automation_id").orEmpty() },
+                    vectorized = obj.bool("vectorized")
+                        ?: extensionObj?.bool("vectorized") ?: false,
+                    matchPersonaDescription = obj.bool("matchPersonaDescription", "match_persona_description")
+                        ?: extensionObj?.bool("matchPersonaDescription", "match_persona_description") ?: false,
+                    matchCharacterDescription = obj.bool("matchCharacterDescription", "match_character_description")
+                        ?: extensionObj?.bool("matchCharacterDescription", "match_character_description") ?: false,
+                    matchCharacterPersonality = obj.bool("matchCharacterPersonality", "match_character_personality")
+                        ?: extensionObj?.bool("matchCharacterPersonality", "match_character_personality") ?: false,
+                    matchCharacterDepthPrompt = obj.bool("matchCharacterDepthPrompt", "match_character_depth_prompt")
+                        ?: extensionObj?.bool("matchCharacterDepthPrompt", "match_character_depth_prompt") ?: false,
+                    matchScenario = obj.bool("matchScenario", "match_scenario")
+                        ?: extensionObj?.bool("matchScenario", "match_scenario") ?: false,
+                    matchCreatorNotes = obj.bool("matchCreatorNotes", "match_creator_notes")
+                        ?: extensionObj?.bool("matchCreatorNotes", "match_creator_notes") ?: false,
+                    ignoreBudget = obj.bool("ignoreBudget", "ignore_budget")
+                        ?: extensionObj?.bool("ignoreBudget", "ignore_budget") ?: false
                 )
             )
         }
-        result
-    } catch (e: Exception) {
-        e.printStackTrace()
+        val config = TavernWorldBookCodec.parse(json)?.config ?: WorldInfoConfig()
+        WorldInfoBook(entries = result, config = config)
+    } catch (_: Exception) {
         null
     }
 }
 
-/**
- * 内部条目列表 → SillyTavern World Info JSON（kind:0 标准格式）。
- * disable 由本地 enabled 反推：!enabled → disable=true，保证导出给 SillyTavern 语义一致。
- */
-private fun buildSillyTavernWorldInfo(entries: List<WorldInfoEntry>): String {
-    val root = JsonObject()
+/** 内部条目列表 → SillyTavern World Info JSON（kind:0 标准格式）。 */
+private fun buildSillyTavernWorldInfo(
+    book: WorldInfoBook
+): String {
+    val entries = book.entries
+    val config = book.config
+    val root = runCatching {
+        JsonParser.parseString(book.rawJson.orEmpty()).takeIf { it.isJsonObject }?.asJsonObject
+    }.getOrNull() ?: JsonObject()
     root.addProperty("kind", 0)
+    if (book.name.isNotBlank()) root.addProperty("name", book.name)
+    if (book.description.isNotBlank()) root.addProperty("description", book.description)
+    root.addProperty("scan_depth", config.scanDepth)
+    root.addProperty("token_budget", config.tokenBudget)
+    root.addProperty("recursive_scanning", config.allowRecursion)
+    root.addProperty("position", config.position)
+    root.addProperty("recursion_depth_cap", config.recursionDepthCap)
+    root.addProperty("case_sensitive", config.caseSensitive)
+    root.addProperty("match_whole_words", config.matchWholeWords)
+    root.addProperty("use_group_scoring", config.useGroupScoring)
+    root.addProperty("budget_cap", config.budgetCap)
+    root.addProperty("loyea_insertion_order_mode", config.insertionOrderMode.name)
+    root.addProperty("loyea_emit_group_headers", config.emitGroupHeaders)
+    root.add(
+        "extensions",
+        runCatching {
+            JsonParser.parseString(book.extensionsJson).takeIf { it.isJsonObject }?.asJsonObject
+        }.getOrNull() ?: JsonObject()
+    )
     val entriesObj = JsonObject()
     entries.forEachIndexed { index, e ->
-        val obj = JsonObject()
+        val obj = runCatching {
+            JsonParser.parseString(e.rawJson.orEmpty()).takeIf { it.isJsonObject }?.asJsonObject
+        }.getOrNull() ?: JsonObject()
         obj.addProperty("uid", if (e.uid > 0) e.uid else index + 1)
-        val keyArr = JsonArray().apply { e.keywords.forEach { add(it) } }
-        val keySecArr = JsonArray().apply { e.keysecondary.forEach { add(it) } }
-        obj.add("key", keyArr)
-        obj.add("keysecondary", keySecArr)
+        obj.add("key", JsonArray().apply { e.keywords.forEach(::add) })
+        obj.add("keysecondary", JsonArray().apply { e.keysecondary.forEach(::add) })
         obj.addProperty("comment", e.comment)
         obj.addProperty("content", e.content)
         obj.addProperty("constant", e.constant)
         obj.addProperty("selective", e.selective)
         obj.addProperty("order", e.order)
-        obj.addProperty("disable", !e.enabled)
+        obj.addProperty("disable", !e.enabled || e.disable)
         obj.addProperty("depth", e.depth)
-        obj.addProperty("enabled", e.enabled)
-        // ---- ST v2 高级字段（camelCase）----
+        obj.addProperty("enabled", e.enabled && !e.disable)
         obj.addProperty("selectiveLogic", e.selectiveLogic)
         obj.addProperty("group", e.group)
         obj.addProperty("probability", e.probability)
@@ -1207,10 +1734,80 @@ private fun buildSillyTavernWorldInfo(entries: List<WorldInfoEntry>): String {
         obj.addProperty("allowRecursion", e.allowRecursion)
         obj.addProperty("excludeRecursion", e.excludeRecursion)
         obj.addProperty("keysContainedIn", e.keysContainedIn)
-        obj.addProperty("position", e.position)
+        // ST 原生 World Info 仍以数字 position 为主；positionType 作为无损扩展保留，
+        // 这样 Tavern/新版 ST 能识别高级槽位，旧版 ST 也不会因为字符串 position 拒绝整本书。
+        obj.addProperty("position", worldInfoPositionIndex(e.positionType, e.position))
+        if (e.positionType != "legacy") obj.addProperty("positionType", e.positionType)
         obj.addProperty("weight", e.weight)
+        obj.addProperty("useRegex", e.useRegex)
+        e.caseSensitive?.let { obj.addProperty("caseSensitive", it) }
+        e.matchWholeWords?.let { obj.addProperty("matchWholeWords", it) }
+        obj.addProperty("injectionDepth", e.injectionDepth)
+        e.role?.let { obj.addProperty("role", worldInfoRoleIndex(it)) }
+        e.outletName?.let { obj.addProperty("outletName", it) }
+        obj.addProperty("groupOverride", e.groupOverride)
+        obj.addProperty("groupWeight", e.groupWeight)
+        obj.addProperty("useGroupScoring", e.useGroupScoring)
+        e.priority?.let { obj.addProperty("priority", it) }
+        e.scanDepthOverride?.let { obj.addProperty("scanDepth", it) }
+        obj.addProperty("sticky", e.sticky)
+        obj.addProperty("cooldown", e.cooldown)
+        obj.addProperty("delay", e.delay)
+        obj.add("triggers", JsonArray().apply { e.triggers.forEach(::add) })
+        obj.addProperty("automationId", e.automationId)
+        obj.addProperty("vectorized", e.vectorized)
+        obj.addProperty("matchPersonaDescription", e.matchPersonaDescription)
+        obj.addProperty("matchCharacterDescription", e.matchCharacterDescription)
+        obj.addProperty("matchCharacterPersonality", e.matchCharacterPersonality)
+        obj.addProperty("matchCharacterDepthPrompt", e.matchCharacterDepthPrompt)
+        obj.addProperty("matchScenario", e.matchScenario)
+        obj.addProperty("matchCreatorNotes", e.matchCreatorNotes)
+        obj.addProperty("ignoreBudget", e.ignoreBudget)
+        if (e.characterFilterNames.isNotEmpty() || e.characterFilterTags.isNotEmpty() || e.characterFilterExclude) {
+            obj.add("characterFilter", JsonObject().apply {
+                add("names", JsonArray().also { values -> e.characterFilterNames.forEach(values::add) })
+                add("tags", JsonArray().also { values -> e.characterFilterTags.forEach(values::add) })
+                addProperty("isExclude", e.characterFilterExclude)
+            })
+        }
+        obj.addProperty("addMemo", e.addMemo)
+        obj.addProperty("displayIndex", e.displayIndex)
+        runCatching {
+            val extensionJson = JsonParser.parseString(e.extensionsJson).takeIf { it.isJsonObject }?.asJsonObject
+                ?: JsonObject()
+            extensionJson.addProperty("automation_id", e.automationId)
+            extensionJson.addProperty("vectorized", e.vectorized)
+            extensionJson.addProperty("match_persona_description", e.matchPersonaDescription)
+            extensionJson.addProperty("match_character_description", e.matchCharacterDescription)
+            extensionJson.addProperty("match_character_personality", e.matchCharacterPersonality)
+            extensionJson.addProperty("match_character_depth_prompt", e.matchCharacterDepthPrompt)
+            extensionJson.addProperty("match_scenario", e.matchScenario)
+            extensionJson.addProperty("match_creator_notes", e.matchCreatorNotes)
+            extensionJson.addProperty("ignore_budget", e.ignoreBudget)
+            obj.add("extensions", extensionJson)
+        }
         entriesObj.add(e.id, obj)
     }
     root.add("entries", entriesObj)
     return root.toString()
+}
+
+private fun worldInfoPositionIndex(positionType: String, legacyPosition: Int): Int = when (
+    positionType.lowercase().replace('-', '_')
+) {
+    "before_char", "before_character", "before_character_definitions" -> 0
+    "after_char", "after_character", "after_character_definitions" -> 1
+    "an_top", "antop", "author_note_top" -> 2
+    "an_bottom", "anbottom", "author_note_bottom" -> 3
+    "at_depth", "atdepth", "depth" -> 4
+    "em_top", "emtop", "example_messages_top" -> 5
+    "em_bottom", "embottom", "example_messages_bottom" -> 6
+    "outlet" -> 7
+    else -> legacyPosition
+}
+
+private fun worldInfoRoleIndex(role: String): Int = when (role.lowercase()) {
+    "user", "1" -> 1
+    "assistant", "2" -> 2
+    else -> 0
 }

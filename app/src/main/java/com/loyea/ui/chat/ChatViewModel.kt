@@ -45,6 +45,7 @@ import androidx.work.OutOfQuotaPolicy
 import androidx.work.workDataOf
 import androidx.work.WorkInfo
 
+private const val STREAM_UI_MIN_INTERVAL_NANOS = 16_000_000L
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val context = application.applicationContext
@@ -125,6 +126,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     var characterCardList = mutableStateOf<List<CharacterCard>>(emptyList())
         private set
 
+    // 8.0 外部酒馆资源注册表（世界书 / preset / regex collection）
+    var tavernResourceRegistry = mutableStateOf(TavernResourceRegistry())
+        private set
+
     // 8.1 全局世界观（World Info）条目列表（跨会话）
     var worldInfoEntries = mutableStateOf<List<WorldInfoEntry>>(emptyList())
         private set
@@ -136,6 +141,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     // 8.3 当前会话专属世界书（null = 未配置，回退到全局书）
     var sessionWorldInfo = mutableStateOf<WorldInfoBook?>(null)
         private set
+    // 8.4 当前会话世界书的 timed runtime state（sticky/cooldown），与书内容分离持久化
+    private var worldInfoRuntimeState = WorldInfoRuntimeState()
 
     val activeCharacterCard = derivedStateOf {
         val currentSession = sessions.value.find { it.id == currentSessionId.value }
@@ -152,6 +159,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         private set
 
     private var responseJob: kotlinx.coroutines.Job? = null
+    private var regexCacheCardId: String? = null
+    private var regexCacheExtensionsJson: String? = null
+    private var regexCacheRegistryRevision: Long = Long.MIN_VALUE
+    private var regexCacheScripts: List<TavernRegexScript> = emptyList()
 
     fun stopResponse() {
         responseJob?.cancel()
@@ -433,8 +444,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // 移入协程加载挂起 API
         viewModelScope.launch(Dispatchers.IO) {
             val cards = storageManager.loadCharacterCards()
+            val tavernResources = storageManager.loadTavernResourceRegistry()
             withContext(Dispatchers.Main) {
                 characterCardList.value = cards
+                tavernResourceRegistry.value = tavernResources
             }
             val worldInfo = storageManager.loadWorldInfo()
             withContext(Dispatchers.Main) {
@@ -560,14 +573,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         stopAudio() // 切换会话时停止跨会话残留的音频播放
         currentSessionId.value = sessionId
         currentVoiceEmotion.value = null // 清空临时情感缓存，防止信息混用污染
+        worldInfoRuntimeState = WorldInfoRuntimeState()
         prefs.edit().putString("current_session_id", sessionId).apply()
         viewModelScope.launch(Dispatchers.IO) {
             val msgs = storageManager.loadSessionMessages(sessionId)
             // 会话专属世界书随会话切换重载（null = 未配置，回退全局书）
             val sessionBook = storageManager.loadSessionWorldInfo(sessionId)
+            val sessionWorldInfoState = storageManager.loadSessionWorldInfoRuntimeState(sessionId)
             withContext(Dispatchers.Main) {
-                messages.value = msgs
-                sessionWorldInfo.value = sessionBook
+                // 用户可能在 IO 读取期间快速切换会话；旧会话的异步结果不得覆盖当前状态。
+                if (currentSessionId.value == sessionId) {
+                    messages.value = msgs
+                    sessionWorldInfo.value = sessionBook
+                    worldInfoRuntimeState = sessionWorldInfoState
+                }
             }
         }
     }
@@ -622,6 +641,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         characterCardList.value = newList
         viewModelScope.launch(Dispatchers.IO) {
             storageManager.saveCharacterCards(newList)
+        }
+    }
+
+    /** 保存外部酒馆资源并立即使运行时缓存失效。 */
+    fun saveTavernResourceRegistry(newRegistry: TavernResourceRegistry) {
+        val next = newRegistry.copy(revision = maxOf(newRegistry.revision + 1L, System.currentTimeMillis()))
+        tavernResourceRegistry.value = next
+        regexCacheRegistryRevision = Long.MIN_VALUE
+        viewModelScope.launch(Dispatchers.IO) {
+            storageManager.saveTavernResourceRegistry(next)
         }
     }
 
@@ -695,7 +724,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun createNewChat(selectedChar: CharacterCard) {
+    fun createNewChat(selectedChar: CharacterCard, selectedGreeting: String? = null) {
         val newSessionId = System.currentTimeMillis().toString()
         val newSession = ChatSession(
             id = newSessionId,
@@ -706,9 +735,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val updatedSessions = (listOf(newSession) + sessions.value).sortedByDescending { it.lastActiveTime }
         sessions.value = updatedSessions
 
-        val welcomeText = selectedChar.firstMessage.ifBlank {
-            if (appLanguage.value == "en") "Hello! I'm {{char}}. How can I help you today?" else "你好！我是 {{char}}。今天我能帮您做点什么？"
-        }
+        val welcomeText = selectedGreeting?.takeIf { it.isNotBlank() }
+            ?: selectedChar.firstMessage.ifBlank {
+                selectedChar.alternateGreetings.firstOrNull().orEmpty().ifBlank {
+                    if (appLanguage.value == "en") "Hello! I'm {{char}}. How can I help you today?" else "你好！我是 {{char}}。今天我能帮您做点什么？"
+                }
+            }
         val formattedWelcome = PromptAssembler.formatMessageContent(welcomeText, selectedChar, userName.value)
 
         val initialMsgs = listOf(
@@ -1131,6 +1163,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             var accumulatedCacheHitTokens = 0L
             var accumulatedCacheMissTokens = 0L
             var hasRealUsage = false
+            var lastStreamUiPublishNanos = 0L
+            val boundPreset = resolvePresetForCard(characterCard)
+            val presetGeneration = boundPreset?.generationOverrides()
+
+            fun shouldPublishStreamUi(force: Boolean = false): Boolean {
+                val now = System.nanoTime()
+                if (!force && lastStreamUiPublishNanos != 0L &&
+                    now - lastStreamUiPublishNanos < STREAM_UI_MIN_INTERVAL_NANOS
+                ) {
+                    return false
+                }
+                lastStreamUiPublishNanos = now
+                return true
+            }
 
             // —— Agent 式多轮分段构建（仅新消息）——
             // segments：已提交的文本段 + 工具段；segmentCut：accumulatedContent 中当前文本段的起点。
@@ -1165,7 +1211,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             // 获取 API 配置和 MCP 工具列表
-            var apiConfig = activeApiConfig.value
+            var apiConfig = activeApiConfig.value.let { config ->
+                boundPreset?.model?.takeIf { it.isNotBlank() }?.let { model ->
+                    config.copy(modelName = model)
+                } ?: config
+            }
             
             // ===== 多模态智能路由与降级 =====
             // 仅当「当前正在发送的这条消息」携带图片时才考虑视觉路由。
@@ -1259,11 +1309,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             // bottom 世界书固化进回合快照；显式 top 模式保留原有前置语义，因此每次仍需重建。
             val worldInfoPosition = if (worldInfoConfig.value.position == "top") "top" else "bottom"
-            val worldInfo = if (needsTurnSnapshot || worldInfoPosition == "top") {
-                buildWorldInfoBlock(history)
+            val worldInfoRender = if (needsTurnSnapshot || worldInfoPosition == "top") {
+                buildWorldInfoRender(history)
             } else {
                 null
             }
+            val worldInfo = worldInfoRender?.all
 
             val promptParts = PromptAssembler.assemblePromptParts(
                 card = characterCard,
@@ -1276,6 +1327,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 graphMemory = graphMemory,
                 worldInfo = worldInfo,
                 worldInfoPosition = worldInfoPosition,
+                worldInfoRender = worldInfoRender,
+                preset = boundPreset,
                 enableHaptic = toolAuthHaptic.value,
                 enableVoice = hasTtsCapability(),
                 enableAdultContent = enableAdultContent.value,
@@ -1315,6 +1368,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 includeVision = includeVision,
                 includeAudio = includeAudioInput,
                 compressedSummary = activeSession.value?.compressedSummary ?: "",
+                postHistoryInstructions = promptParts.postHistoryInstructions,
+                card = characterCard,
+                regexScripts = cardRegexScripts(characterCard),
+                userName = userName.value,
+                worldInfoAtDepth = promptParts.worldInfoAtDepth,
+                presetMessages = promptParts.presetMessages,
+                maxContextTokens = boundPreset?.maxContext,
                 includeMessageTimestamps = sessionUsesSystemTime,
                 allowPhysicalContext = sessionUsesSystemTime,
                 allowGraphContext = enableGraphMemory.value
@@ -1354,22 +1414,26 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     llmClient.sendChatCompletionStream(
                         config = apiConfig,
                         messages = conversation,
-                        tools = sendTools
+                        tools = sendTools,
+                        generation = presetGeneration
                     ).collect { event ->
                         when (event) {
                             is StreamEvent.Thoughts -> {
                                 accumulatedThoughts += event.text
-                                currentList = messages.value.map { msg ->
-                                    if (msg.id == aiMessageId) {
-                                        msg.copy(
-                                            thoughts = accumulatedThoughts,
-                                            isThoughtsExpanded = if (msg.hasUserToggledThoughts) msg.isThoughtsExpanded else true
-                                        )
-                                    } else {
-                                        msg
+                                if (shouldPublishStreamUi()) {
+                                    val displayThoughts = sanitizeAndApplyCardReasoning(accumulatedThoughts)
+                                    currentList = messages.value.map { msg ->
+                                        if (msg.id == aiMessageId) {
+                                            msg.copy(
+                                                thoughts = displayThoughts,
+                                                isThoughtsExpanded = if (msg.hasUserToggledThoughts) msg.isThoughtsExpanded else true
+                                            )
+                                        } else {
+                                            msg
+                                        }
                                     }
+                                    messages.value = currentList
                                 }
-                                messages.value = currentList
                             }
                             is StreamEvent.Content -> {
                                 try {
@@ -1391,27 +1455,44 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 // 临时对准备渲染展示的内容进行半截过滤，不影响 accumulatedContent 的流拼接
                                 val displayContent = truncateIncompleteHaptic(accumulatedContent)
 
-                                if (calculatedDuration == null) {
-                                    val duration = ((System.currentTimeMillis() - startTime) / 1000).toInt()
-                                    calculatedDuration = if (accumulatedThoughts.isNotEmpty()) duration else 0
+                                if (shouldPublishStreamUi()) {
+                                    if (calculatedDuration == null) {
+                                        val duration = ((System.currentTimeMillis() - startTime) / 1000).toInt()
+                                        calculatedDuration = if (accumulatedThoughts.isNotEmpty()) duration else 0
+                                    }
+                                    currentList = messages.value.map { msg ->
+                                        if (msg.id == aiMessageId) {
+                                            msg.copy(
+                                                content = cleanFinalContent(displayContent),
+                                                contentSegments = currentSegments(),
+                                                thoughts = sanitizeAndApplyCardReasoning(accumulatedThoughts)
+                                                    .takeIf { it.isNotBlank() },
+                                                isStillThinking = false,
+                                                thoughtDurationSeconds = calculatedDuration ?: 0
+                                            )
+                                        } else {
+                                            msg
+                                        }
+                                    }
+                                    messages.value = currentList
                                 }
+                            }
+                            is StreamEvent.ToolCalls -> {
+                                // 本轮回文本段到此收拢（此后进入工具执行阶段，文本段在分段序列中定格）
+                                commitCurrentTextSegment()
                                 currentList = messages.value.map { msg ->
                                     if (msg.id == aiMessageId) {
                                         msg.copy(
-                                            content = cleanFinalContent(displayContent),
-                                            contentSegments = currentSegments(),
-                                            isStillThinking = false,
-                                            thoughtDurationSeconds = calculatedDuration ?: 0
+                                            content = cleanFinalContent(accumulatedContent),
+                                            contentSegments = segments.toList(),
+                                            thoughts = sanitizeAndApplyCardReasoning(accumulatedThoughts)
+                                                .takeIf { it.isNotBlank() }
                                         )
                                     } else {
                                         msg
                                     }
                                 }
                                 messages.value = currentList
-                            }
-                            is StreamEvent.ToolCalls -> {
-                                // 本轮回文本段到此收拢（此后进入工具执行阶段，文本段在分段序列中定格）
-                                commitCurrentTextSegment()
                                 streamToolCalls = event.calls
                             }
                             is StreamEvent.Error -> {
@@ -1443,7 +1524,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                     segmentCut = 0
                                 } else {
                                     // 流中断/出错时保留已生成的半截内容（附错误提示），不整体覆盖丢失，并落盘保存
-                                    val partialContent = accumulatedContent.trim()
+                                    val partialContent = cleanFinalContent(accumulatedContent)
                                     val errorDisplay = if (partialContent.isNotEmpty()) {
                                         "$partialContent\n\n⚠️ ${event.message.removePrefix("[错误] ")}"
                                     } else {
@@ -1476,6 +1557,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 hasRealUsage = true
                             }
                             is StreamEvent.Done -> {
+                                shouldPublishStreamUi(force = true)
                                 // 最终轮（无工具）时重算总耗时，让 "Thought for Xs" 覆盖整个多轮响应
                                 if (calculatedDuration == null || streamToolCalls.isEmpty()) {
                                     val duration = ((System.currentTimeMillis() - startTime) / 1000).toInt()
@@ -1485,6 +1567,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 currentList = messages.value.map { msg ->
                                     if (msg.id == aiMessageId) {
                                         msg.copy(
+                                            content = cleanFinalContent(accumulatedContent),
+                                            contentSegments = currentSegments(),
+                                            thoughts = sanitizeAndApplyCardReasoning(accumulatedThoughts)
+                                                .takeIf { it.isNotBlank() },
                                             isStillThinking = streamToolCalls.isNotEmpty(),
                                             // 多轮 Agent 式：中间轮有工具继续 → 思考块保持展开；最终轮（无工具）→ 自动折叠
                                             isThoughtsExpanded = if (msg.hasUserToggledThoughts) msg.isThoughtsExpanded else streamToolCalls.isNotEmpty(),
@@ -1499,7 +1585,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
                                 // AI 消息生成结束后，若开启了 TTS 且非工具流最终回合，则自动朗读
                                 if (enableTts.value && enableAutoTts.value && streamToolCalls.isEmpty()) {
-                                    playTts(aiMessageId, accumulatedContent)
+                                    playTts(aiMessageId, cleanFinalContent(accumulatedContent))
                                 }
 
                                 // 首轮 AI 回复完成后，尝试用 LLM 精修会话标题（静默失败、仅一次）
@@ -1525,7 +1611,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         nextConversation.add(
                             LlmChatMessage(
                                 role = "assistant",
-                                content = accumulatedContent.ifBlank { null },
+                                content = cleanFinalContent(accumulatedContent).ifBlank { null },
                                 toolCalls = streamToolCalls
                             )
                         )
@@ -1715,7 +1801,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         accumulatedThoughts += "\n\n💡 *（已在此处调用接口感知状态：$executedToolsStr）*\n\n"
                         currentList = messages.value.map { msg ->
                             if (msg.id == aiMessageId) {
-                                msg.copy(thoughts = accumulatedThoughts)
+                                msg.copy(thoughts = sanitizeAndApplyCardReasoning(accumulatedThoughts))
                             } else {
                                 msg
                             }
@@ -1851,10 +1937,79 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private fun collapseReplyNewlines(s: String): String = s.replace(Regex("\\n{2,}"), "\n\n")
 
     /** 段文本：折叠空行 + 去段首残留空行；保留段尾段落空行，让文本段与工具卡之间留空隙 */
-    private fun cleanSegmentText(s: String): String = collapseReplyNewlines(s).trimStart('\n', '\r')
+    private fun cleanSegmentText(s: String): String =
+        collapseReplyNewlines(sanitizeAndApplyCardRegex(s)).trimStart('\n', '\r')
 
     /** 最终全文：折叠 + 去首尾（思考块剥离残留 + 结尾空行） */
-    private fun cleanFinalContent(s: String): String = collapseReplyNewlines(s).trim('\n', '\r')
+    private fun cleanFinalContent(s: String): String =
+        collapseReplyNewlines(sanitizeAndApplyCardRegex(s)).trim('\n', '\r')
+
+    /** 角色卡 scoped regex 运行在输出层；核心元数据过滤放在最后，避免泄漏回用户界面。 */
+    private fun sanitizeAndApplyCardRegex(text: String): String {
+        val card = activeCharacterCard.value
+        val transformed = TavernRegexEngine.applyOutput(
+            text = text,
+            scripts = cardRegexScripts(card),
+            card = card,
+            userName = userName.value,
+            isMarkdown = true
+        )
+        return ReplyOutputSanitizer.sanitize(transformed)
+    }
+
+    /** reasoning 阶段也遵循卡片/预设 regex 的 placement=6，避免思维区成为旁路泄漏。 */
+    private fun sanitizeAndApplyCardReasoning(text: String): String {
+        val card = activeCharacterCard.value
+        val transformed = TavernRegexEngine.apply(
+            text = text,
+            scripts = cardRegexScripts(card),
+            placement = TavernRegexPlacement.REASONING,
+            card = card,
+            userName = userName.value,
+            isMarkdown = false,
+            isPrompt = false
+        )
+        return ReplyOutputSanitizer.sanitize(transformed)
+    }
+
+    private fun cardRegexScripts(card: CharacterCard): List<TavernRegexScript> {
+        if (regexCacheCardId != card.id ||
+            regexCacheExtensionsJson != card.extensionsJson ||
+            regexCacheRegistryRevision != tavernResourceRegistry.value.revision
+        ) {
+            regexCacheCardId = card.id
+            regexCacheExtensionsJson = card.extensionsJson
+            regexCacheRegistryRevision = tavernResourceRegistry.value.revision
+            val inline = TavernRegexEngine.fromCard(card)
+            val presetScripts = resolvePresetForCard(card)?.regexScripts.orEmpty()
+            val external = TavernCardResourceBindings.regexCollectionNames(card)
+                .flatMap { binding ->
+                    tavernResourceRegistry.value.regexCollections
+                        .filter { it.enabled && resourceMatches(it.id, it.name, binding) }
+                        .flatMap { resource -> TavernRegexEngine.parseScripts(resource.rawJson) }
+                }
+            regexCacheScripts = (inline + presetScripts + external)
+                .distinctBy { it.id to it.findRegex }
+        }
+        return regexCacheScripts
+    }
+
+    /** 角色卡绑定的 preset：内嵌内容优先，找不到时再按 id/name 查外部注册表。 */
+    private fun resolvePresetForCard(card: CharacterCard): TavernPromptPreset? {
+        TavernPresetCodec.fromCard(card)?.let { return it }
+        return TavernCardResourceBindings.presetNames(card)
+            .asSequence()
+            .flatMap { binding ->
+                tavernResourceRegistry.value.presets
+                    .asSequence()
+                    .filter { it.enabled && resourceMatches(it.id, it.name, binding) }
+            }
+            .mapNotNull { TavernPresetCodec.parse(it.rawJson) }
+            .firstOrNull()
+    }
+
+    private fun resourceMatches(id: String, name: String, binding: String): Boolean =
+        id.equals(binding, ignoreCase = true) || name.equals(binding, ignoreCase = true)
 
     /** 截掉未闭合的 [haptic: 尾部，避免半截标签进正文（抽取自流式 Content 事件处理） */
     private fun truncateIncompleteHaptic(s: String): String {
@@ -1903,6 +2058,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         includeVision: Boolean = true,
         includeAudio: Boolean = true,
         compressedSummary: String = "",
+        postHistoryInstructions: String = "",
+        card: CharacterCard? = null,
+        regexScripts: List<TavernRegexScript> = emptyList(),
+        userName: String = "User",
+        worldInfoAtDepth: Map<Int, List<WorldInfoMatcher.WorldInfoInjectionBlock>> = emptyMap(),
+        presetMessages: List<TavernPresetPrompt> = emptyList(),
+        maxContextTokens: Int? = null,
         includeMessageTimestamps: Boolean = false,
         allowPhysicalContext: Boolean = true,
         allowGraphContext: Boolean = true
@@ -1912,6 +2074,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         includeVision = includeVision,
         includeAudio = includeAudio,
         compressedSummary = compressedSummary,
+        postHistoryInstructions = postHistoryInstructions,
+        card = card,
+        regexScripts = regexScripts,
+        userName = userName,
+        worldInfoAtDepth = worldInfoAtDepth,
+        presetMessages = presetMessages,
+        maxContextTokens = maxContextTokens,
         includeMessageTimestamps = includeMessageTimestamps,
         allowPhysicalContext = allowPhysicalContext,
         allowGraphContext = allowGraphContext
@@ -2194,6 +2363,29 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** 保存完整世界书（条目 + 导入文件携带的全局配置），供 ST/Tavern 文件导入使用。 */
+    fun saveWorldInfoBook(book: WorldInfoBook, scope: WorldInfoScope = WorldInfoScope.GLOBAL) {
+        if (scope == WorldInfoScope.SESSION) {
+            val sessionId = currentSessionId.value
+            if (sessionId.isBlank()) return
+            viewModelScope.launch(Dispatchers.IO) {
+                storageManager.saveSessionWorldInfo(sessionId, book)
+                withContext(Dispatchers.Main) {
+                    sessionWorldInfo.value = book
+                }
+            }
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            storageManager.saveWorldInfo(book.entries)
+            WorldInfoConfigStorage.save(prefs, book.config)
+            withContext(Dispatchers.Main) {
+                worldInfoEntries.value = book.entries
+                worldInfoConfig.value = book.config
+            }
+        }
+    }
+
     /**
      * 保存世界观匹配配置：按 scope 路由。
      * - GLOBAL（默认）：落 prefs + 更新内存 state
@@ -2230,6 +2422,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             storageManager.deleteSessionWorldInfo(sessionId)
             withContext(Dispatchers.Main) {
                 sessionWorldInfo.value = null
+                worldInfoRuntimeState = WorldInfoRuntimeState()
             }
         }
     }
@@ -2254,27 +2447,115 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 解析匹配时使用的世界书：会话已配置专属书 → 用它；否则回退全局书。
+     * 解析匹配时使用的世界书：全局/会话书与当前角色卡绑定的 CharacterBook 叠加。
+     * 会话书仍然覆盖“会话对全局书的配置”，但不会把角色卡自己的书丢掉。
      */
-    private fun resolveWorldInfoBook(): WorldInfoBook =
-        sessionWorldInfo.value ?: WorldInfoBook(worldInfoEntries.value, worldInfoConfig.value)
+    private fun resolveWorldInfoBook(): WorldInfoBook {
+        val base = sessionWorldInfo.value ?: WorldInfoBook(worldInfoEntries.value, worldInfoConfig.value)
+        val card = activeCharacterCard.value
+        val inline = card?.let(TavernCharacterBookAdapter::toWorldInfoBook)
+        val inlineResources = card?.let(TavernCardResourceBindings::inlineWorldBooks).orEmpty()
+        val external = card?.let(TavernCardResourceBindings::worldBookNames).orEmpty()
+            .flatMap { binding ->
+                tavernResourceRegistry.value.worldBooks
+                    .filter { it.enabled && resourceMatches(it.id, it.name, binding) }
+                    .mapNotNull { resource ->
+                        TavernWorldBookCodec.parse(resource.rawJson)?.let { resource.id to it }
+                    }
+            }
+        return mergeWorldInfoBooks(
+            base,
+            inline?.let { "card" to it },
+            *inlineResources.map { (id, book) -> "card-inline::$id" to book }.toTypedArray(),
+            *external.toTypedArray()
+        )
+    }
+
+    private fun mergeWorldInfoBooks(
+        base: WorldInfoBook,
+        vararg additions: Pair<String, WorldInfoBook>?
+    ): WorldInfoBook {
+        val books = listOf("global" to base) + additions.filterNotNull()
+        val usedIds = mutableSetOf<String>()
+        val mergedEntries = books.flatMap { (source, book) ->
+            book.entries.mapIndexed { index, entry ->
+                var id = entry.id.ifBlank { "entry_${index + 1}" }
+                if (source != "global" || id in usedIds) id = "$source::$id"
+                while (!usedIds.add(id)) id = "$id-${usedIds.size}"
+                entry.copy(id = id)
+            }
+        }
+        val configs = books.map { it.second.config }
+        val tokenBudgets = configs.map { it.tokenBudget }.filter { it > 0L }
+        val mergedConfig = base.config.copy(
+            scanDepth = configs.maxOfOrNull { it.scanDepth } ?: base.config.scanDepth,
+            tokenBudget = tokenBudgets.minOrNull() ?: 0L,
+            allowRecursion = configs.all { it.allowRecursion },
+            recursionDepthCap = configs.maxOfOrNull { it.recursionDepthCap } ?: base.config.recursionDepthCap,
+            caseSensitive = configs.any { it.caseSensitive },
+            matchWholeWords = configs.any { it.matchWholeWords },
+            useGroupScoring = configs.any { it.useGroupScoring }
+        )
+        return WorldInfoBook(
+            entries = mergedEntries,
+            config = mergedConfig,
+            name = base.name,
+            description = base.description,
+            extensionsJson = base.extensionsJson,
+            rawJson = base.rawJson
+        )
+    }
 
     /**
      * 世界观关键词匹配并拼接注入块（委托 WorldInfoMatcher 纯函数，语义对齐 SillyTavern v2）。
      * - "system" 关键词扫描源使用角色卡 systemPrompt（persona）近似系统设定
      * - 概率随机源用「会话 id + 最后一条用户消息」稳定种子：同轮重试可复现同一注入集合 → 保前缀缓存
      */
-    private fun buildWorldInfoBlock(history: List<Message>): String? {
+    private fun buildWorldInfoRender(history: List<Message>): WorldInfoMatcher.WorldInfoRenderResult? {
         val seedKey = (activeSession.value?.id ?: "") + "|" +
             history.lastOrNull { it.sender == Sender.USER }?.content.orEmpty()
         val book = resolveWorldInfoBook()
-        return WorldInfoMatcher.worldInfoBlockFor(
+        val bookSignature = "${book.config.hashCode()}:${book.entries.hashCode()}"
+        val runtimeForBook = when {
+            worldInfoRuntimeState.bookSignature.isBlank() -> {
+                worldInfoRuntimeState.copy(bookSignature = bookSignature)
+            }
+            worldInfoRuntimeState.bookSignature == bookSignature -> worldInfoRuntimeState
+            else -> WorldInfoRuntimeState(bookSignature = bookSignature)
+        }
+        val lastUserMessage = history.lastOrNull { it.sender == Sender.USER }
+        val render = WorldInfoMatcher.worldInfoRenderFor(
             entries = book.entries,
             historyContents = history.map { it.content },
             userName = userName.value,
             systemPrompt = activeCharacterCard.value?.systemPrompt.orEmpty(),
             config = book.config,
-            random = kotlin.random.Random(seedKey.hashCode().toLong())
+            random = kotlin.random.Random(seedKey.hashCode().toLong()),
+            characterDescription = activeCharacterCard.value?.description.orEmpty(),
+            characterPersonality = activeCharacterCard.value?.personality.orEmpty(),
+            characterDepthPrompt = activeCharacterCard.value?.systemPrompt.orEmpty(),
+            scenario = activeCharacterCard.value?.scenario.orEmpty(),
+            creatorNotes = activeCharacterCard.value?.creatorNotes.orEmpty(),
+            characterName = activeCharacterCard.value?.name.orEmpty(),
+            characterTags = activeCharacterCard.value?.tags.orEmpty(),
+            runtimeState = runtimeForBook,
+            turnKey = lastUserMessage?.id.orEmpty(),
+            turnIndex = history.count { it.sender == Sender.USER }.toLong()
+        )
+        if (render.runtimeState != worldInfoRuntimeState) {
+            worldInfoRuntimeState = render.runtimeState
+            val sessionId = currentSessionId.value
+            if (sessionId.isNotBlank()) {
+                viewModelScope.launch(Dispatchers.IO) {
+                    storageManager.saveSessionWorldInfoRuntimeState(sessionId, render.runtimeState)
+                }
+            }
+        }
+        return TavernRegexEngine.applyToWorldInfoRender(
+            render = render,
+            scripts = cardRegexScripts(activeCharacterCard.value),
+            card = activeCharacterCard.value,
+            userName = userName.value
         )
     }
 
@@ -2825,7 +3106,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun cleanTextForTts(rawText: String, isMiMo: Boolean = false): String {
         if (rawText.isBlank()) return ""
-        var text = rawText
+        var text = ReplyOutputSanitizer.sanitize(rawText)
         // 1. 剔除 <think> 和 </think> 标签及其内部的思考内容
         text = text.replace(Regex("<think>[\\s\\S]*?</think>"), "")
         // 2. 剔除 XML 标签本身，如 <tool_call ...>...</tool_call>

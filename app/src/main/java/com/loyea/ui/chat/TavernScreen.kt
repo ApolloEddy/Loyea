@@ -38,9 +38,12 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.google.gson.GsonBuilder
+import com.google.gson.JsonArray
+import com.google.gson.JsonParser
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.security.MessageDigest
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -68,11 +71,93 @@ fun copyUriToLocal(context: Context, sourceUri: Uri, subDirName: String, fileNam
     }
 }
 
+/** 将 CHARX manifest 声明的资源安全地映射到应用私有目录，并回写本地 URI。 */
+private fun localizeCharxAssets(
+    context: Context,
+    card: CharacterCard,
+    archive: TavernCharxArchive
+): CharacterCard {
+    val assets = runCatching {
+        JsonParser.parseString(card.assetsJson).takeIf { it.isJsonArray }?.asJsonArray
+    }.getOrNull() ?: return card
+    val targetDir = File(context.filesDir, "tavern_assets/${card.id}").apply { mkdirs() }
+    var avatarPath: String? = null
+    var backgroundPath: String? = null
+    val localized = JsonArray()
+    assets.forEach { element ->
+        val asset = element.takeIf { it.isJsonObject }?.asJsonObject
+        if (asset == null) {
+            localized.add(element)
+            return@forEach
+        }
+        val uri = asset["uri"]?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
+        val name = asset["name"]?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
+        val candidates = listOf(uri, name).flatMap { value ->
+            if (value.isBlank()) emptyList() else {
+                val normalized = value.substringAfter("://", value)
+                    .substringBefore('?')
+                    .trimStart('/')
+                listOf(normalized, normalized.substringAfterLast('/'))
+            }
+        }.filter { it.isNotBlank() }.distinct()
+        val source = archive.assets.entries.firstOrNull { (path, _) ->
+            candidates.any { candidate -> path == candidate || path.endsWith("/$candidate") }
+        }
+        if (source == null) {
+            localized.add(asset)
+            return@forEach
+        }
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(source.value)
+            .joinToString("") { "%02x".format(it) }
+            .take(20)
+        val extension = name.substringAfterLast('.', "bin")
+            .filter { it.isLetterOrDigit() }
+            .take(8)
+            .ifBlank { "bin" }
+        val target = File(targetDir, "$digest.$extension")
+        if (!target.exists()) target.writeBytes(source.value)
+        asset.addProperty("uri", target.absolutePath)
+        localized.add(asset)
+        val type = asset["type"]?.takeIf { it.isJsonPrimitive }?.asString.orEmpty().lowercase()
+        when {
+            type.contains("icon") || type.contains("avatar") -> avatarPath = target.absolutePath
+            type.contains("background") -> backgroundPath = target.absolutePath
+        }
+    }
+    return card.copy(
+        avatarUri = avatarPath ?: card.avatarUri,
+        backgroundUri = backgroundPath ?: card.backgroundUri,
+        assetsJson = localized.toString()
+    )
+}
+
+/** 将编辑器中的逗号/换行列表稳定转换为 ST 数组，忽略空项并去重。 */
+private fun parseTavernListInput(value: String): List<String> = value
+    .split(',', '\n')
+    .map(String::trim)
+    .filter(String::isNotBlank)
+    .distinct()
+
+/** 可选的扩展 JSON 只接受完整 JSON 对象，避免导出后破坏角色卡结构。 */
+private fun isOptionalJsonObjectValid(value: String): Boolean = value.isBlank() || runCatching {
+    JsonParser.parseString(value).isJsonObject
+}.getOrDefault(false)
+
+/** 角色卡编辑器中的多条问候语以独立行保存；保留空行外的可见内容。 */
+private fun parseGreetingInput(value: String): List<String> = value
+    .split("\n---\n", "\n<GREETING>\n")
+    .map(String::trim)
+    .filter(String::isNotBlank)
+    .toList()
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TavernScreen(
     characterCardList: List<CharacterCard>,
     onCharacterCardListSave: (List<CharacterCard>) -> Unit,
+    tavernResourceRegistry: TavernResourceRegistry = TavernResourceRegistry(),
+    onTavernResourceRegistrySave: (TavernResourceRegistry) -> Unit = {},
     appLanguage: String,
     onBackClick: () -> Unit
 ) {
@@ -81,6 +166,7 @@ fun TavernScreen(
     val isEn = appLanguage == "en"
 
     var showCreateDialog by remember { mutableStateOf(false) }
+    var showResourceDialog by remember { mutableStateOf(false) }
     var cardToDelete by remember { mutableStateOf<CharacterCard?>(null) }
     var cardToEdit by remember { mutableStateOf<CharacterCard?>(null) }
 
@@ -116,17 +202,20 @@ fun TavernScreen(
         }
     }
 
-    // 2. JSON 导入启动器
+    // 2. JSON / CHARX 导入启动器：先按 JSON 读取，失败后尝试 V3 CHARX 容器
     val jsonImportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let {
             try {
                 contentResolver.openInputStream(uri)?.use { inputStream ->
-                    val jsonStr = inputStream.bufferedReader().use { it.readText() }
-                    val parsedCard = TavernCardParser.parseJsonCard(jsonStr)
+                    val bytes = inputStream.readBytes()
+                    val charxArchive = TavernCardCodec.parseCharxWithAssets(ByteArrayInputStream(bytes))
+                    val parsedCard = TavernCardParser.parseJsonCard(String(bytes, Charsets.UTF_8))
+                        ?: charxArchive?.document?.let(TavernCardParser::fromDocument)
                     if (parsedCard != null) {
-                        onCharacterCardListSave(characterCardList + parsedCard)
+                        val localizedCard = charxArchive?.let { localizeCharxAssets(context, parsedCard, it) } ?: parsedCard
+                        onCharacterCardListSave(characterCardList + localizedCard)
                         Toast.makeText(context, if (isEn) "Imported [${parsedCard.name}] successfully" else "成功导入角色卡 [${parsedCard.name}]", Toast.LENGTH_SHORT).show()
                     } else {
                         Toast.makeText(context, if (isEn) "Invalid JSON character card format" else "角色卡 JSON 格式不规范，解析失败", Toast.LENGTH_LONG).show()
@@ -135,6 +224,76 @@ fun TavernScreen(
             } catch (e: Exception) {
                 e.printStackTrace()
                 Toast.makeText(context, "${if (isEn) "Import failed" else "导入失败"}: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // 3. 外部酒馆资源导入：世界书 / preset / regex collection 统一登记，供卡片绑定引用。
+    val resourceImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            try {
+                val json = contentResolver.openInputStream(uri)?.bufferedReader()?.use { reader -> reader.readText() }
+                    .orEmpty()
+                if (json.isBlank()) throw IllegalArgumentException("empty resource")
+                val source = uri.toString()
+                val parsedRegistry = TavernResourceRegistryCodec.parse(json)
+                val importedRegistry = if (parsedRegistry != null && (
+                        parsedRegistry.worldBooks.isNotEmpty() ||
+                            parsedRegistry.presets.isNotEmpty() ||
+                            parsedRegistry.regexCollections.isNotEmpty()
+                        )) {
+                    parsedRegistry
+                } else {
+                    val root = runCatching { JsonParser.parseString(json).asJsonObject }.getOrNull()
+                    val name = root?.let { obj ->
+                        listOf("name", "title", "preset_name").asSequence()
+                            .mapNotNull { key -> obj[key] }
+                            .firstOrNull { it.isJsonPrimitive && it.asJsonPrimitive.isString }
+                            ?.asString
+                    }.orEmpty()
+                    val regexScripts = runCatching {
+                        root?.let(TavernRegexEngine::parseScriptElement).orEmpty()
+                    }.getOrDefault(emptyList())
+                    when {
+                        regexScripts.isNotEmpty() -> TavernResourceRegistry(
+                            regexCollections = listOf(
+                                TavernResourceRegistryCodec.regexResource("", name, json, source)
+                            )
+                        )
+                        TavernWorldBookCodec.parse(json)?.entries?.isNotEmpty() == true -> TavernResourceRegistry(
+                            worldBooks = listOf(
+                                TavernResourceRegistryCodec.worldBookResource("", name, json, source)
+                            )
+                        )
+                        else -> TavernPresetCodec.parse(json)?.takeIf { preset ->
+                            preset.prompts.isNotEmpty() || preset.name.isNotBlank() ||
+                                preset.temperature != null || preset.maxTokens != null ||
+                                preset.promptOrder.isNotEmpty()
+                        }?.let { TavernResourceRegistry(
+                            presets = listOf(
+                                TavernResourceRegistryCodec.presetResource("", name.ifBlank { it.name }, json, source)
+                            )
+                        ) }
+                    }
+                }
+                if (importedRegistry == null) throw IllegalArgumentException("unsupported resource")
+                val merged = tavernResourceRegistry.copy(
+                    worldBooks = (tavernResourceRegistry.worldBooks + importedRegistry.worldBooks)
+                        .distinctBy { it.id },
+                    presets = (tavernResourceRegistry.presets + importedRegistry.presets)
+                        .distinctBy { it.id },
+                    regexCollections = (tavernResourceRegistry.regexCollections + importedRegistry.regexCollections)
+                        .distinctBy { it.id }
+                )
+                onTavernResourceRegistrySave(merged)
+                val count = importedRegistry.worldBooks.size + importedRegistry.presets.size +
+                    importedRegistry.regexCollections.size
+                Toast.makeText(context, if (isEn) "Imported $count Tavern resource(s)" else "已登记 $count 个酒馆外部资源", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                e.printStackTrace()
+                Toast.makeText(context, if (isEn) "Unsupported Tavern resource" else "无法识别该酒馆资源文件", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -153,8 +312,14 @@ fun TavernScreen(
                     IconButton(onClick = { pngImportLauncher.launch("image/png") }) {
                         Icon(imageVector = Icons.Default.Image, contentDescription = "Import PNG", tint = MaterialTheme.colorScheme.primary)
                     }
-                    IconButton(onClick = { jsonImportLauncher.launch("application/json") }) {
-                        Icon(imageVector = Icons.Default.Code, contentDescription = "Import JSON", tint = MaterialTheme.colorScheme.primary)
+                    IconButton(onClick = { jsonImportLauncher.launch("*/*") }) {
+                        Icon(imageVector = Icons.Default.Code, contentDescription = "Import JSON / CHARX", tint = MaterialTheme.colorScheme.primary)
+                    }
+                    IconButton(onClick = { resourceImportLauncher.launch("application/json") }) {
+                        Icon(imageVector = Icons.Default.FolderOpen, contentDescription = "Import Tavern resources", tint = MaterialTheme.colorScheme.primary)
+                    }
+                    IconButton(onClick = { showResourceDialog = true }) {
+                        Icon(imageVector = Icons.Default.List, contentDescription = "Manage Tavern resources", tint = MaterialTheme.colorScheme.primary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
@@ -202,6 +367,24 @@ fun TavernScreen(
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                         lineHeight = 18.sp
                     )
+                    if (tavernResourceRegistry.worldBooks.isNotEmpty() ||
+                        tavernResourceRegistry.presets.isNotEmpty() ||
+                        tavernResourceRegistry.regexCollections.isNotEmpty()
+                    ) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = if (isEn) {
+                                "External resources: ${tavernResourceRegistry.worldBooks.size} world book(s), " +
+                                    "${tavernResourceRegistry.presets.size} preset(s), " +
+                                    "${tavernResourceRegistry.regexCollections.size} regex collection(s)"
+                            } else {
+                                "已登记外部资源：世界书 ${tavernResourceRegistry.worldBooks.size} 个，" +
+                                    "预设 ${tavernResourceRegistry.presets.size} 个，正则集合 ${tavernResourceRegistry.regexCollections.size} 个"
+                            },
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
             }
 
@@ -227,6 +410,8 @@ fun TavernScreen(
                             appLanguage = appLanguage,
                             onExportPng = { shareCharacterCardPng(context, card) },
                             onExportJson = { shareCharacterCardJson(context, card) },
+                            onExportJsonV3 = { shareCharacterCardJsonV3(context, card) },
+                            onExportCharx = { shareCharacterCardCharx(context, card) },
                             onEdit = { cardToEdit = card },
                             onDelete = { cardToDelete = card }
                         )
@@ -244,6 +429,8 @@ fun TavernScreen(
                             appLanguage = appLanguage,
                             onExportPng = { shareCharacterCardPng(context, card) },
                             onExportJson = { shareCharacterCardJson(context, card) },
+                            onExportJsonV3 = { shareCharacterCardJsonV3(context, card) },
+                            onExportCharx = { shareCharacterCardCharx(context, card) },
                             onEdit = { cardToEdit = card },
                             onDelete = { cardToDelete = card }
                         )
@@ -314,6 +501,203 @@ fun TavernScreen(
                 }
             )
         }
+
+        if (showResourceDialog) {
+            TavernResourceRegistryDialog(
+                registry = tavernResourceRegistry,
+                isEn = isEn,
+                onSave = onTavernResourceRegistrySave,
+                onDismiss = { showResourceDialog = false }
+            )
+        }
+    }
+}
+
+/**
+ * 外部酒馆资源管理器：导入后的世界书、预设和正则集合都可以独立停用或删除。
+ * 原始 JSON 保留在 registry 中，删除只影响本地登记，不会修改角色卡文件。
+ */
+@Composable
+private fun TavernResourceRegistryDialog(
+    registry: TavernResourceRegistry,
+    isEn: Boolean,
+    onSave: (TavernResourceRegistry) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = if (isEn) "Tavern resources" else "酒馆外部资源",
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 520.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (registry.worldBooks.isEmpty() && registry.presets.isEmpty() && registry.regexCollections.isEmpty()) {
+                    Text(
+                        text = if (isEn) "No external resources registered. Use the folder button to import JSON." else "暂无外部资源，请使用顶部文件夹按钮导入 JSON。",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                TavernWorldBookResourceSection(
+                    title = if (isEn) "World books" else "世界书",
+                    resources = registry.worldBooks,
+                    isEn = isEn,
+                    onToggle = { id, enabled ->
+                        onSave(registry.copy(worldBooks = registry.worldBooks.map { if (it.id == id) it.copy(enabled = enabled) else it }))
+                    },
+                    onDelete = { id ->
+                        onSave(registry.copy(worldBooks = registry.worldBooks.filterNot { it.id == id }))
+                    }
+                )
+                TavernPresetResourceSection(
+                    title = if (isEn) "Presets" else "预设",
+                    resources = registry.presets,
+                    isEn = isEn,
+                    onToggle = { id, enabled ->
+                        onSave(registry.copy(presets = registry.presets.map { if (it.id == id) it.copy(enabled = enabled) else it }))
+                    },
+                    onDelete = { id ->
+                        onSave(registry.copy(presets = registry.presets.filterNot { it.id == id }))
+                    }
+                )
+                TavernRegexResourceSection(
+                    title = if (isEn) "Regex collections" else "正则集合",
+                    resources = registry.regexCollections,
+                    isEn = isEn,
+                    onToggle = { id, enabled ->
+                        onSave(registry.copy(regexCollections = registry.regexCollections.map { if (it.id == id) it.copy(enabled = enabled) else it }))
+                    },
+                    onDelete = { id ->
+                        onSave(registry.copy(regexCollections = registry.regexCollections.filterNot { it.id == id }))
+                    }
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(if (isEn) "Done" else "完成")
+            }
+        }
+    )
+}
+
+@Composable
+private fun TavernWorldBookResourceSection(
+    title: String,
+    resources: List<TavernWorldBookResource>,
+    isEn: Boolean,
+    onToggle: (String, Boolean) -> Unit,
+    onDelete: (String) -> Unit
+) {
+    if (resources.isEmpty()) return
+    Text(title, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+    resources.forEach { resource ->
+        TavernResourceRow(
+            name = resource.name,
+            id = resource.id,
+            enabled = resource.enabled,
+            source = resource.source,
+            isEn = isEn,
+            onEnabledChange = { onToggle(resource.id, it) },
+            onDelete = { onDelete(resource.id) }
+        )
+    }
+}
+
+@Composable
+private fun TavernPresetResourceSection(
+    title: String,
+    resources: List<TavernPresetResource>,
+    isEn: Boolean,
+    onToggle: (String, Boolean) -> Unit,
+    onDelete: (String) -> Unit
+) {
+    if (resources.isEmpty()) return
+    Text(title, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+    resources.forEach { resource ->
+        TavernResourceRow(
+            name = resource.name,
+            id = resource.id,
+            enabled = resource.enabled,
+            source = resource.source,
+            isEn = isEn,
+            onEnabledChange = { onToggle(resource.id, it) },
+            onDelete = { onDelete(resource.id) }
+        )
+    }
+}
+
+@Composable
+private fun TavernRegexResourceSection(
+    title: String,
+    resources: List<TavernRegexResource>,
+    isEn: Boolean,
+    onToggle: (String, Boolean) -> Unit,
+    onDelete: (String) -> Unit
+) {
+    if (resources.isEmpty()) return
+    Text(title, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+    resources.forEach { resource ->
+        TavernResourceRow(
+            name = resource.name,
+            id = resource.id,
+            enabled = resource.enabled,
+            source = resource.source,
+            isEn = isEn,
+            onEnabledChange = { onToggle(resource.id, it) },
+            onDelete = { onDelete(resource.id) }
+        )
+    }
+}
+
+@Composable
+private fun TavernResourceRow(
+    name: String,
+    id: String,
+    enabled: Boolean,
+    source: String,
+    isEn: Boolean,
+    onEnabledChange: (Boolean) -> Unit,
+    onDelete: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f)
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 10.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(name.ifBlank { id }, fontWeight = FontWeight.Medium, maxLines = 1)
+                Text(
+                    text = if (source.isBlank()) id else source,
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = enabled,
+                onCheckedChange = onEnabledChange,
+                thumbContent = null
+            )
+            IconButton(onClick = onDelete) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = if (isEn) "Delete" else "删除",
+                    tint = MaterialTheme.colorScheme.error
+                )
+            }
+        }
     }
 }
 
@@ -326,6 +710,8 @@ fun TavernCardItem(
     appLanguage: String,
     onExportPng: () -> Unit,
     onExportJson: () -> Unit,
+    onExportJsonV3: () -> Unit = {},
+    onExportCharx: () -> Unit = {},
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -561,6 +947,20 @@ fun TavernCardItem(
                                 onExportJson()
                             }
                         )
+                        DropdownMenuItem(
+                            text = { Text(if (isEn) "Export as V3 JSON (full fields)" else "导出为 V3 JSON（完整字段）") },
+                            onClick = {
+                                exportMenuExpanded = false
+                                onExportJsonV3()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (isEn) "Export as CHARX (V3 + assets)" else "导出为 CHARX V3（含资源）") },
+                            onClick = {
+                                exportMenuExpanded = false
+                                onExportCharx()
+                            }
+                        )
                     }
                 }
 
@@ -595,6 +995,22 @@ fun CreatePersonaDialog(
     var personality by remember { mutableStateOf("") }
     var scenario by remember { mutableStateOf("") }
     var chatExamples by remember { mutableStateOf("") }
+    var description by remember { mutableStateOf("") }
+    var creatorNotes by remember { mutableStateOf("") }
+    var postHistoryInstructions by remember { mutableStateOf("") }
+    var alternateGreetings by remember { mutableStateOf("") }
+    var groupOnlyGreetings by remember { mutableStateOf("") }
+    var tags by remember { mutableStateOf("") }
+    var nickname by remember { mutableStateOf("") }
+    var characterVersion by remember { mutableStateOf("") }
+    var source by remember { mutableStateOf("") }
+    var extensionsJson by remember { mutableStateOf("") }
+    var characterBookJson by remember { mutableStateOf("") }
+
+    val extensionsJsonValid = isOptionalJsonObjectValid(extensionsJson)
+    val characterBookJsonValid = isOptionalJsonObjectValid(characterBookJson)
+    val canSave = name.isNotBlank() && systemPrompt.isNotBlank() &&
+        extensionsJsonValid && characterBookJsonValid
 
     // 本地头像及背景 URI 绝对路径
     var localAvatarUri by remember { mutableStateOf<String?>(null) }
@@ -651,32 +1067,43 @@ fun CreatePersonaDialog(
                         actions = {
                             TextButton(
                                 onClick = {
-                                    if (name.isNotBlank() && systemPrompt.isNotBlank()) {
+                                    if (canSave) {
                                         val newCard = CharacterCard(
                                             id = "char_" + System.currentTimeMillis() + "_" + (100..999).random(),
-                                            name = name,
+                                            name = name.trim(),
                                             avatarUri = localAvatarUri,
                                             avatarColor = colors[selectedColorIndex],
                                             shortIntro = intro.ifBlank { if (isEn) "A unique custom companion." else "充满个性的自定义伙伴。" },
-                                            systemPrompt = systemPrompt,
+                                            systemPrompt = systemPrompt.trim(),
                                             personality = personality,
                                             scenario = scenario,
                                             firstMessage = firstMessage,
                                             chatExamples = chatExamples,
                                             isBuiltIn = false,
                                             creatorName = creator.ifBlank { if (isEn) "User Custom" else "用户自建" },
-                                            backgroundUri = localBackgroundUri
+                                            backgroundUri = localBackgroundUri,
+                                            description = description.ifBlank { intro },
+                                            creatorNotes = creatorNotes,
+                                            postHistoryInstructions = postHistoryInstructions,
+                                            alternateGreetings = parseGreetingInput(alternateGreetings),
+                                            groupOnlyGreetings = parseGreetingInput(groupOnlyGreetings),
+                                            tags = parseTavernListInput(tags),
+                                            characterVersion = characterVersion.trim(),
+                                            nickname = nickname.trim().ifBlank { null },
+                                            source = parseTavernListInput(source),
+                                            extensionsJson = extensionsJson.trim().ifBlank { "{}" },
+                                            characterBookJson = characterBookJson.trim().ifBlank { null }
                                         )
                                         onSave(newCard)
                                     }
                                 },
-                                enabled = name.isNotBlank() && systemPrompt.isNotBlank()
+                                enabled = canSave
                             ) {
                                 Text(
                                     text = if (isEn) "Save" else "保存",
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 16.sp,
-                                    color = if (name.isNotBlank() && systemPrompt.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                                    color = if (canSave) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
                                 )
                             }
                         },
@@ -891,6 +1318,107 @@ fun CreatePersonaDialog(
                         modifier = Modifier.fillMaxWidth()
                     )
 
+                    Text(
+                        text = if (isEn) "SillyTavern / Tavern fields" else "SillyTavern / Tavern 兼容字段",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    OutlinedTextField(
+                        value = description,
+                        onValueChange = { description = it },
+                        label = { Text(if (isEn) "Full description" else "完整角色描述（description）") },
+                        minLines = 3,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = creatorNotes,
+                        onValueChange = { creatorNotes = it },
+                        label = { Text(if (isEn) "Creator notes" else "创作者备注（creator_notes）") },
+                        minLines = 2,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = postHistoryInstructions,
+                        onValueChange = { postHistoryInstructions = it },
+                        label = { Text(if (isEn) "Post-history instructions" else "历史消息后指令（post_history_instructions）") },
+                        minLines = 2,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = alternateGreetings,
+                        onValueChange = { alternateGreetings = it },
+                        label = { Text(if (isEn) "Alternate greetings (split with ---)" else "备用开场白（用单独一行 --- 分隔）") },
+                        minLines = 3,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = groupOnlyGreetings,
+                        onValueChange = { groupOnlyGreetings = it },
+                        label = { Text(if (isEn) "Group-only greetings (split with ---)" else "仅群聊开场白（用单独一行 --- 分隔）") },
+                        minLines = 2,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = nickname,
+                            onValueChange = { nickname = it },
+                            label = { Text(if (isEn) "Nickname" else "昵称 / 宏名") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = characterVersion,
+                            onValueChange = { characterVersion = it },
+                            label = { Text(if (isEn) "Version" else "角色版本") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    OutlinedTextField(
+                        value = tags,
+                        onValueChange = { tags = it },
+                        label = { Text(if (isEn) "Tags (comma or newline separated)" else "标签（逗号或换行分隔）") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = source,
+                        onValueChange = { source = it },
+                        label = { Text(if (isEn) "Sources (comma or newline separated)" else "来源（逗号或换行分隔）") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = characterBookJson,
+                        onValueChange = { characterBookJson = it },
+                        label = { Text(if (isEn) "Embedded Character Book JSON (optional)" else "内嵌角色世界书 JSON（可选）") },
+                        minLines = 4,
+                        isError = !characterBookJsonValid,
+                        supportingText = {
+                            if (!characterBookJsonValid) {
+                                Text(if (isEn) "Must be a valid JSON object" else "必须是有效的 JSON 对象")
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = extensionsJson,
+                        onValueChange = { extensionsJson = it },
+                        label = { Text(if (isEn) "Card extensions JSON (optional)" else "角色卡扩展字段 JSON（可选）") },
+                        minLines = 3,
+                        isError = !extensionsJsonValid,
+                        supportingText = {
+                            if (!extensionsJsonValid) {
+                                Text(if (isEn) "Must be a valid JSON object" else "必须是有效的 JSON 对象")
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
                     Spacer(modifier = Modifier.height(20.dp))
                 }
             }
@@ -920,6 +1448,22 @@ fun EditPersonaDialog(
     var personality by remember { mutableStateOf(existingCard.personality) }
     var scenario by remember { mutableStateOf(existingCard.scenario) }
     var chatExamples by remember { mutableStateOf(existingCard.chatExamples) }
+    var description by remember { mutableStateOf(existingCard.description) }
+    var creatorNotes by remember { mutableStateOf(existingCard.creatorNotes) }
+    var postHistoryInstructions by remember { mutableStateOf(existingCard.postHistoryInstructions) }
+    var alternateGreetings by remember { mutableStateOf(existingCard.alternateGreetings.joinToString("\n---\n")) }
+    var groupOnlyGreetings by remember { mutableStateOf(existingCard.groupOnlyGreetings.joinToString("\n---\n")) }
+    var tags by remember { mutableStateOf(existingCard.tags.joinToString(", ")) }
+    var nickname by remember { mutableStateOf(existingCard.nickname.orEmpty()) }
+    var characterVersion by remember { mutableStateOf(existingCard.characterVersion) }
+    var source by remember { mutableStateOf(existingCard.source.joinToString(", ")) }
+    var characterBookJson by remember { mutableStateOf(existingCard.characterBookJson.orEmpty()) }
+    var extensionsJson by remember { mutableStateOf(existingCard.extensionsJson.takeIf { it != "{}" }.orEmpty()) }
+
+    val extensionsJsonValid = isOptionalJsonObjectValid(extensionsJson)
+    val characterBookJsonValid = isOptionalJsonObjectValid(characterBookJson)
+    val canSave = name.isNotBlank() && systemPrompt.isNotBlank() &&
+        extensionsJsonValid && characterBookJsonValid
 
     // 本地头像及背景 URI 绝对路径
     var localAvatarUri by remember { mutableStateOf(existingCard.avatarUri) }
@@ -978,30 +1522,41 @@ fun EditPersonaDialog(
                         actions = {
                             TextButton(
                                 onClick = {
-                                    if (name.isNotBlank() && systemPrompt.isNotBlank()) {
+                                    if (canSave) {
                                         val updatedCard = existingCard.copy(
-                                            name = name,
+                                            name = name.trim(),
                                             avatarUri = localAvatarUri,
                                             avatarColor = colors[selectedColorIndex],
                                             shortIntro = intro.ifBlank { if (isEn) "A unique custom companion." else "充满个性的自定义伙伴。" },
-                                            systemPrompt = systemPrompt,
+                                            systemPrompt = systemPrompt.trim(),
                                             personality = personality,
                                             scenario = scenario,
                                             firstMessage = firstMessage,
                                             chatExamples = chatExamples,
                                             creatorName = creator.ifBlank { if (isEn) "User Custom" else "用户自建" },
-                                            backgroundUri = localBackgroundUri
+                                            backgroundUri = localBackgroundUri,
+                                            description = description.ifBlank { intro },
+                                            creatorNotes = creatorNotes,
+                                            postHistoryInstructions = postHistoryInstructions,
+                                            alternateGreetings = parseGreetingInput(alternateGreetings),
+                                            groupOnlyGreetings = parseGreetingInput(groupOnlyGreetings),
+                                            tags = parseTavernListInput(tags),
+                                            characterVersion = characterVersion.trim(),
+                                            nickname = nickname.trim().ifBlank { null },
+                                            source = parseTavernListInput(source),
+                                            characterBookJson = characterBookJson.trim().ifBlank { null },
+                                            extensionsJson = extensionsJson.trim().ifBlank { "{}" }
                                         )
                                         onSave(updatedCard)
                                     }
                                 },
-                                enabled = name.isNotBlank() && systemPrompt.isNotBlank()
+                                enabled = canSave
                             ) {
                                 Text(
                                     text = if (isEn) "Save" else "保存",
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 16.sp,
-                                    color = if (name.isNotBlank() && systemPrompt.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                                    color = if (canSave) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
                                 )
                             }
                         },
@@ -1216,6 +1771,107 @@ fun EditPersonaDialog(
                         modifier = Modifier.fillMaxWidth()
                     )
 
+                    Text(
+                        text = if (isEn) "SillyTavern / Tavern fields" else "SillyTavern / Tavern 兼容字段",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    OutlinedTextField(
+                        value = description,
+                        onValueChange = { description = it },
+                        label = { Text(if (isEn) "Full description" else "完整角色描述（description）") },
+                        minLines = 3,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = creatorNotes,
+                        onValueChange = { creatorNotes = it },
+                        label = { Text(if (isEn) "Creator notes" else "创作者备注（creator_notes）") },
+                        minLines = 2,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = postHistoryInstructions,
+                        onValueChange = { postHistoryInstructions = it },
+                        label = { Text(if (isEn) "Post-history instructions" else "历史消息后指令（post_history_instructions）") },
+                        minLines = 2,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = alternateGreetings,
+                        onValueChange = { alternateGreetings = it },
+                        label = { Text(if (isEn) "Alternate greetings (split with ---)" else "备用开场白（用单独一行 --- 分隔）") },
+                        minLines = 3,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = groupOnlyGreetings,
+                        onValueChange = { groupOnlyGreetings = it },
+                        label = { Text(if (isEn) "Group-only greetings (split with ---)" else "仅群聊开场白（用单独一行 --- 分隔）") },
+                        minLines = 2,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = nickname,
+                            onValueChange = { nickname = it },
+                            label = { Text(if (isEn) "Nickname" else "昵称 / 宏名") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = characterVersion,
+                            onValueChange = { characterVersion = it },
+                            label = { Text(if (isEn) "Version" else "角色版本") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    OutlinedTextField(
+                        value = tags,
+                        onValueChange = { tags = it },
+                        label = { Text(if (isEn) "Tags (comma or newline separated)" else "标签（逗号或换行分隔）") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = source,
+                        onValueChange = { source = it },
+                        label = { Text(if (isEn) "Sources (comma or newline separated)" else "来源（逗号或换行分隔）") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = characterBookJson,
+                        onValueChange = { characterBookJson = it },
+                        label = { Text(if (isEn) "Embedded Character Book JSON (optional)" else "内嵌角色世界书 JSON（可选）") },
+                        minLines = 4,
+                        isError = !characterBookJsonValid,
+                        supportingText = {
+                            if (!characterBookJsonValid) {
+                                Text(if (isEn) "Must be a valid JSON object" else "必须是有效的 JSON 对象")
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = extensionsJson,
+                        onValueChange = { extensionsJson = it },
+                        label = { Text(if (isEn) "Card extensions JSON (optional)" else "角色卡扩展字段 JSON（可选）") },
+                        minLines = 3,
+                        isError = !extensionsJsonValid,
+                        supportingText = {
+                            if (!extensionsJsonValid) {
+                                Text(if (isEn) "Must be a valid JSON object" else "必须是有效的 JSON 对象")
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
                     Spacer(modifier = Modifier.height(20.dp))
                 }
             }
@@ -1228,29 +1884,15 @@ fun EditPersonaDialog(
  */
 fun buildTavernValueV2Json(card: CharacterCard): String {
     val gson = GsonBuilder().setPrettyPrinting().create()
-    
-    val data = mutableMapOf<String, Any>()
-    data["name"] = card.name
-    data["description"] = card.shortIntro
-    data["short_description"] = card.shortIntro
-    data["personality"] = card.personality
-    data["scenario"] = card.scenario
-    data["first_mes"] = card.firstMessage
-    data["mes_example"] = card.chatExamples
-    data["creator_notes"] = ""
-    data["system_prompt"] = card.systemPrompt
-    data["post_history_instructions"] = ""
-    data["alternate_greetings"] = emptyList<String>()
-    data["creator"] = card.creatorName ?: "Loyea"
-    data["character_version"] = "1.0"
-    data["extensions"] = emptyMap<String, Any>()
+    val document = TavernCardCodec.fromCharacterCard(card)
+    return gson.toJson(JsonParser.parseString(TavernCardCodec.toJson(document, "chara_card_v2")))
+}
 
-    val root = mutableMapOf<String, Any>()
-    root["spec"] = "chara_card_v2"
-    root["spec_version"] = "2.0"
-    root["data"] = data
-
-    return gson.toJson(root)
+/** V3 JSON 导出：保留 nickname、群聊开场白、source、assets 等 V3 字段。 */
+fun buildTavernValueV3Json(card: CharacterCard): String {
+    val gson = GsonBuilder().setPrettyPrinting().create()
+    val document = TavernCardCodec.fromCharacterCard(card)
+    return gson.toJson(JsonParser.parseString(TavernCardCodec.toJson(document, "chara_card_v3")))
 }
 
 /**
@@ -1495,5 +2137,110 @@ fun shareCharacterCardJson(context: Context, card: CharacterCard) {
     } catch (e: Exception) {
         e.printStackTrace()
         Toast.makeText(context, "分享失败: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+    }
+}
+
+/** 分享完整 V3 JSON；与 V2 导出并列，避免用户必须选择 CHARX 才能保留高级字段。 */
+fun shareCharacterCardJsonV3(context: Context, card: CharacterCard) {
+    try {
+        val jsonV3 = buildTavernValueV3Json(card)
+        val exportsDir = File(context.cacheDir, "exports")
+        if (!exportsDir.exists()) exportsDir.mkdirs()
+
+        val fileName = "${card.name.replace(Regex("[\\\\/:*?\"<>|]"), "_")}.v3.json"
+        val outFile = File(exportsDir, fileName)
+        FileOutputStream(outFile).use { fos ->
+            fos.write(jsonV3.toByteArray(java.nio.charset.StandardCharsets.UTF_8))
+        }
+
+        val fileUri = FileProvider.getUriForFile(context, "com.loyea.fileprovider", outFile)
+        val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+            type = "application/json"
+            putExtra(android.content.Intent.EXTRA_STREAM, fileUri)
+            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(android.content.Intent.createChooser(intent, "分享 V3 JSON 角色卡"))
+    } catch (e: Exception) {
+        e.printStackTrace()
+        Toast.makeText(context, "V3 JSON 分享失败: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+    }
+}
+
+/** 构造 V3 CHARX：card.json 使用 embeded URI，资源只打包应用私有目录中明确存在的文件。 */
+private fun buildTavernCharxBytes(card: CharacterCard): ByteArray {
+    val document = TavernCardCodec.fromCharacterCard(card)
+    val assets = runCatching {
+        JsonParser.parseString(card.assetsJson).takeIf { it.isJsonArray }?.asJsonArray
+    }.getOrNull() ?: JsonArray()
+    val usedNames = mutableSetOf<String>()
+    val files = mutableListOf<Pair<String, ByteArray>>()
+    val localizedAssets = JsonArray()
+    assets.forEachIndexed { index, element ->
+        val asset = element.takeIf { it.isJsonObject }?.asJsonObject ?: run {
+            localizedAssets.add(element)
+            return@forEachIndexed
+        }
+        val uri = asset["uri"]?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
+        val path = when {
+            uri.startsWith("file://") -> Uri.parse(uri).path
+            uri.startsWith("/") -> uri
+            else -> null
+        }
+        val file = path?.let(::File)?.takeIf { it.isFile }
+        if (file == null) {
+            localizedAssets.add(asset)
+            return@forEachIndexed
+        }
+        val rawName = asset["name"]?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
+        val baseName = rawName.substringAfterLast('/').substringAfterLast('\\')
+            .replace(Regex("[^A-Za-z0-9._-]"), "_")
+            .ifBlank { "asset_$index.bin" }
+        var name = baseName
+        var suffix = 1
+        while (!usedNames.add(name)) {
+            name = "${baseName.substringBeforeLast('.', baseName)}_$suffix" +
+                baseName.substringAfterLast('.', "").let { ext -> if (ext.isBlank()) "" else ".$ext" }
+            suffix++
+        }
+        asset.addProperty("uri", "embeded://$name")
+        localizedAssets.add(asset)
+        files += name to file.readBytes()
+    }
+    val v3Document = document.copy(
+        spec = "chara_card_v3",
+        specVersion = "3.0",
+        data = document.data.copy(assetsJson = localizedAssets.toString())
+    )
+    val cardJson = TavernCardCodec.toJson(v3Document, "chara_card_v3")
+    return java.io.ByteArrayOutputStream().also { output ->
+        java.util.zip.ZipOutputStream(output).use { zip ->
+            zip.putNextEntry(java.util.zip.ZipEntry("card.json"))
+            zip.write(cardJson.toByteArray(Charsets.UTF_8))
+            zip.closeEntry()
+            files.forEach { (name, bytes) ->
+                zip.putNextEntry(java.util.zip.ZipEntry(name))
+                zip.write(bytes)
+                zip.closeEntry()
+            }
+        }
+    }.toByteArray()
+}
+
+fun shareCharacterCardCharx(context: Context, card: CharacterCard) {
+    try {
+        val exportsDir = File(context.cacheDir, "exports").apply { mkdirs() }
+        val fileName = "${card.name.replace(Regex("[\\\\/:*?\"<>|]"), "_")}.charx"
+        val outFile = File(exportsDir, fileName)
+        FileOutputStream(outFile).use { it.write(buildTavernCharxBytes(card)) }
+        val fileUri = FileProvider.getUriForFile(context, "com.loyea.fileprovider", outFile)
+        val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+            type = "application/zip"
+            putExtra(android.content.Intent.EXTRA_STREAM, fileUri)
+            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(android.content.Intent.createChooser(intent, "分享 CHARX 角色卡"))
+    } catch (e: Exception) {
+        e.printStackTrace()
+        Toast.makeText(context, "CHARX 分享失败: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
     }
 }

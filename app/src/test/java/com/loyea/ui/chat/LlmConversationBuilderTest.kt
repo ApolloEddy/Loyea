@@ -156,4 +156,60 @@ class LlmConversationBuilderTest {
         assertFalse(content.contains("GRAPH MEMORY CONTEXT"))
         assertTrue(content.contains("keep-world"))
     }
+
+    @Test
+    fun postHistoryInstructionsArePlacedAfterConversationHistory() {
+        val built = LlmConversationBuilder.build(
+            systemPrompt = "stable",
+            history = listOf(Message("u", "hello", Sender.USER)),
+            postHistoryInstructions = "stay in character"
+        )
+        assertEquals("user", built[1].role)
+        assertEquals("system", built[2].role)
+        assertTrue(built[2].content!!.contains("stay in character"))
+    }
+
+    @Test
+    fun worldInfoAtDepthUsesMessageBoundaryAndRole() {
+        val built = LlmConversationBuilder.build(
+            systemPrompt = "stable",
+            history = listOf(
+                Message("u1", "one", Sender.USER),
+                Message("a1", "two", Sender.AI),
+                Message("u2", "three", Sender.USER)
+            ),
+            worldInfoAtDepth = mapOf(
+                1 to listOf(WorldInfoMatcher.WorldInfoInjectionBlock("before latest", "assistant")),
+                0 to listOf(WorldInfoMatcher.WorldInfoInjectionBlock("after latest", "user"))
+            )
+        )
+        assertEquals(
+            listOf(
+                "stable",
+                "one",
+                "two",
+                "[WORLD INFO @ DEPTH / 深度世界书]\nbefore latest",
+                "three",
+                "[WORLD INFO @ DEPTH / 深度世界书]\nafter latest"
+            ),
+            built.map { it.content }
+        )
+        assertEquals("assistant", built[3].role)
+        assertEquals("user", built[5].role)
+    }
+
+    @Test
+    fun presetContextBudgetDropsOldestHistoryFirst() {
+        val built = LlmConversationBuilder.build(
+            systemPrompt = "stable",
+            history = listOf(
+                Message("old", "old old old old", Sender.USER),
+                Message("middle", "middle middle middle", Sender.AI),
+                Message("latest", "latest", Sender.USER)
+            ),
+            maxContextTokens = 5
+        )
+        assertFalse(built.any { it.content?.contains("old old") == true })
+        assertTrue(built.any { it.content == "latest" })
+    }
 }

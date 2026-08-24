@@ -16,6 +16,13 @@ object LlmConversationBuilder {
         includeVision: Boolean = true,
         includeAudio: Boolean = true,
         compressedSummary: String = "",
+        postHistoryInstructions: String = "",
+        card: CharacterCard? = null,
+        regexScripts: List<TavernRegexScript> = emptyList(),
+        userName: String = "User",
+        worldInfoAtDepth: Map<Int, List<WorldInfoMatcher.WorldInfoInjectionBlock>> = emptyMap(),
+        presetMessages: List<TavernPresetPrompt> = emptyList(),
+        maxContextTokens: Int? = null,
         includeMessageTimestamps: Boolean = false,
         allowPhysicalContext: Boolean = true,
         allowGraphContext: Boolean = true,
@@ -24,6 +31,19 @@ object LlmConversationBuilder {
         val result = mutableListOf<LlmChatMessage>()
         if (!systemPrompt.isNullOrBlank()) {
             result.add(LlmChatMessage(role = "system", content = systemPrompt))
+        }
+        presetMessages.filter { it.content.isNotBlank() }.forEach { prompt ->
+            val role = when (prompt.role.lowercase()) {
+                "user" -> "user"
+                "assistant" -> "assistant"
+                else -> "system"
+            }
+            result.add(
+                LlmChatMessage(
+                    role = role,
+                    content = "[PRESET SLOT / ${prompt.identifier}]\n${prompt.content.trim()}"
+                )
+            )
         }
         if (compressedSummary.isNotBlank()) {
             result.add(
@@ -43,7 +63,7 @@ object LlmConversationBuilder {
             .toList()
             .takeLast(20)
 
-        recentHistory.forEachIndexed { index, message ->
+        val historyMessages = recentHistory.mapIndexed { index, message ->
             val effectiveImage = if (includeVision && !message.imageUrl.isNullOrBlank()) message.imageUrl else null
             val effectiveAudio = if (
                 includeAudio && index == recentHistory.lastIndex && !message.audioUrl.isNullOrBlank()
@@ -54,6 +74,16 @@ object LlmConversationBuilder {
             }
 
             var textContent = message.content
+            if (message.sender == Sender.USER && regexScripts.isNotEmpty()) {
+                textContent = TavernRegexEngine.apply(
+                    text = textContent,
+                    scripts = regexScripts,
+                    placement = TavernRegexPlacement.USER_INPUT,
+                    card = card,
+                    userName = userName,
+                    isPrompt = true
+                )
+            }
             if (effectiveImage == null && !message.imageUrl.isNullOrBlank()) {
                 textContent = (if (textContent.isBlank()) "" else "$textContent\n") + "[图片]"
             }
@@ -80,17 +110,79 @@ object LlmConversationBuilder {
                 append(textContent)
             }
 
+            LlmChatMessage(
+                role = if (message.sender == Sender.USER) "user" else "assistant",
+                content = providerContent,
+                imageUrl = effectiveImage,
+                audioUrl = effectiveAudio
+            )
+        }
+        val boundedHistory = trimHistoryToContextBudget(
+            history = historyMessages,
+            maxContextTokens = maxContextTokens,
+            fixedMessages = result,
+            worldInfoAtDepth = worldInfoAtDepth,
+            postHistoryInstructions = postHistoryInstructions
+        )
+        if (worldInfoAtDepth.isEmpty()) {
+            result.addAll(boundedHistory)
+        } else {
+            val blocksByBoundary = worldInfoAtDepth.entries
+                .filter { (depth, _) -> depth >= 0 }
+                .groupBy { (depth, _) ->
+                    (boundedHistory.size - depth).coerceIn(0, boundedHistory.size)
+                }
+                .mapValues { (_, entries) -> entries.flatMap { it.value } }
+            for (boundary in 0..boundedHistory.size) {
+                blocksByBoundary[boundary].orEmpty().forEach { block ->
+                    result.add(
+                        LlmChatMessage(
+                            role = normalizeWorldInfoRole(block.role),
+                            content = "[WORLD INFO @ DEPTH / 深度世界书]\n${block.content}"
+                        )
+                    )
+                }
+                if (boundary < boundedHistory.size) result.add(boundedHistory[boundary])
+            }
+        }
+        if (postHistoryInstructions.isNotBlank()) {
             result.add(
                 LlmChatMessage(
-                    role = if (message.sender == Sender.USER) "user" else "assistant",
-                    content = providerContent,
-                    imageUrl = effectiveImage,
-                    audioUrl = effectiveAudio
+                    role = "system",
+                    content = "[POST-HISTORY INSTRUCTIONS / 历史消息后指令]\n$postHistoryInstructions"
                 )
             )
         }
         return result
     }
+
+    private fun normalizeWorldInfoRole(role: String?): String = when (role?.lowercase()) {
+        "user" -> "user"
+        "assistant" -> "assistant"
+        else -> "system"
+    }
+
+    private fun trimHistoryToContextBudget(
+        history: List<LlmChatMessage>,
+        maxContextTokens: Int?,
+        fixedMessages: List<LlmChatMessage>,
+        worldInfoAtDepth: Map<Int, List<WorldInfoMatcher.WorldInfoInjectionBlock>>,
+        postHistoryInstructions: String
+    ): List<LlmChatMessage> {
+        val limit = maxContextTokens?.takeIf { it > 0 } ?: return history
+        val fixedCost = fixedMessages.sumOf { estimateTokens(it.content) }
+        val worldInfoCost = worldInfoAtDepth.values.flatten().sumOf { estimateTokens(it.content) }
+        val postCost = if (postHistoryInstructions.isBlank()) 0 else estimateTokens(postHistoryInstructions)
+        val historyBudget = (limit - fixedCost - worldInfoCost - postCost).coerceAtLeast(1)
+        val selected = history.toMutableList()
+        while (selected.size > 1 && selected.sumOf { estimateTokens(it.content) } > historyBudget) {
+            selected.removeAt(0)
+        }
+        return selected
+    }
+
+    private fun estimateTokens(content: String?): Int =
+        ((content?.length ?: 0) / 4).coerceAtLeast(1)
 
     private fun sanitizeSnapshot(
         snapshot: String,

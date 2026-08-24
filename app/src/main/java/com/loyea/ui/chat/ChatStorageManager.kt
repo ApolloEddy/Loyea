@@ -60,7 +60,43 @@ data class WorldInfoEntry(
     val excludeRecursion: Boolean = false, // 只能被直接扫描激活，不能被其他条目 content 激活
     val keysContainedIn: String = "chat", // 主关键词扫描源（chat/user/system/world 逗号分隔）
     val position: Int = 0,           // 条内插入位置微调（当前仅保留字段）
-    val weight: Int = 0              // 排序权重（order 相等时的次序）
+    val weight: Int = 0,             // 排序权重（order 相等时的次序）
+    // ---- ST/Tavern 扩展字段 ----
+    val useRegex: Boolean = false,       // 关键词按正则匹配；保留 /pattern/flags 写法
+    val caseSensitive: Boolean? = null,  // null 使用世界书全局设置
+    val matchWholeWords: Boolean? = null,
+    val positionType: String = "legacy",      // legacy/before_char/after_char/at_depth/ANTop/ANBottom/outlet
+    val injectionDepth: Int = 0,          // position=at_depth 时的消息深度
+    val role: String? = null,             // system/user/assistant（at_depth 注入角色）
+    val outletName: String? = null,
+    val groupOverride: Boolean = false,
+    val groupWeight: Int = 100,
+    val useGroupScoring: Boolean = false,
+    val priority: Int? = null,
+    val scanDepthOverride: Int? = null,   // 与 ST 的 scanDepth 区分；null 表示旧 Loyea depth 语义
+    val sticky: Int = 0,
+    val cooldown: Int = 0,
+    val delay: Int = 0,
+    val triggers: List<String> = emptyList(),
+    val extensionsJson: String = "{}",
+    // ---- ST global-scan / extension fields ----
+    val automationId: String = "",
+    val vectorized: Boolean = false,
+    val matchPersonaDescription: Boolean = false,
+    val matchCharacterDescription: Boolean = false,
+    val matchCharacterPersonality: Boolean = false,
+    val matchCharacterDepthPrompt: Boolean = false,
+    val matchScenario: Boolean = false,
+    val matchCreatorNotes: Boolean = false,
+    val ignoreBudget: Boolean = false,
+    // ---- ST character filter / editor metadata ----
+    val characterFilterNames: List<String> = emptyList(),
+    val characterFilterTags: List<String> = emptyList(),
+    val characterFilterExclude: Boolean = false,
+    val addMemo: Boolean = true,
+    val displayIndex: Int = 0,
+    /** Preserve unknown direct entry fields for non-destructive worldbook export. */
+    val rawJson: String? = null
 )
 
 /**
@@ -69,7 +105,12 @@ data class WorldInfoEntry(
  */
 data class WorldInfoBook(
     val entries: List<WorldInfoEntry> = emptyList(),
-    val config: WorldInfoConfig = WorldInfoConfig()
+    val config: WorldInfoConfig = WorldInfoConfig(),
+    val name: String = "",
+    val description: String = "",
+    val extensionsJson: String = "{}",
+    /** Preserve unknown root fields for non-destructive worldbook export. */
+    val rawJson: String? = null
 )
 
 /**
@@ -87,6 +128,7 @@ class ChatStorageManager(private val context: Context) {
         private val messagesMutex = Mutex()
         private val cardsMutex = Mutex()
         private val worldInfoMutex = Mutex()
+        private val tavernResourcesMutex = Mutex()
     }
 
     private fun saveSessionListInternal(sessions: List<ChatSession>) {
@@ -198,7 +240,25 @@ class ChatStorageManager(private val context: Context) {
                     chatExamples = raw.chatExamples ?: "",
                     isBuiltIn = raw.isBuiltIn,
                     creatorName = raw.creatorName,
-                    backgroundUri = raw.backgroundUri
+                    backgroundUri = raw.backgroundUri,
+                    description = raw.description ?: "",
+                    creatorNotes = raw.creatorNotes ?: "",
+                    postHistoryInstructions = raw.postHistoryInstructions ?: "",
+                    alternateGreetings = raw.alternateGreetings ?: emptyList(),
+                    groupOnlyGreetings = raw.groupOnlyGreetings ?: emptyList(),
+                    tags = raw.tags ?: emptyList(),
+                    characterVersion = raw.characterVersion ?: "",
+                    nickname = raw.nickname,
+                    source = raw.source ?: emptyList(),
+                    creationDate = raw.creationDate,
+                    modificationDate = raw.modificationDate,
+                    creatorNotesMultilingualJson = raw.creatorNotesMultilingualJson ?: "{}",
+                    assetsJson = raw.assetsJson ?: "[]",
+                    extensionsJson = raw.extensionsJson ?: "{}",
+                    characterBookJson = raw.characterBookJson,
+                    spec = raw.spec ?: "chara_card_v2",
+                    specVersion = raw.specVersion ?: "2.0",
+                    originalCardJson = raw.originalCardJson
                 )
             }
         } catch (e: Exception) {
@@ -286,6 +346,10 @@ class ChatStorageManager(private val context: Context) {
                     if (wiFile.exists()) {
                         wiFile.delete()
                     }
+                    val wiStateFile = File(sessionsDir, "world_info_state_$sessionId.json")
+                    if (wiStateFile.exists()) {
+                        wiStateFile.delete()
+                    }
                     // 2. 从会话列表中移除并重新保存元数据
                     val currentSessions = loadSessionListInternal().filter { it.id != sessionId }
                     saveSessionListInternal(currentSessions)
@@ -299,6 +363,8 @@ class ChatStorageManager(private val context: Context) {
     private val cardsFile = File(context.filesDir, "character_cards.json")
 
     private val worldInfoFile = File(context.filesDir, "global_world_info.json")
+
+    private val tavernResourcesFile = File(context.filesDir, "tavern_resources.json")
 
     /**
      * 保存全局世界观条目列表
@@ -344,8 +410,40 @@ class ChatStorageManager(private val context: Context) {
                 excludeRecursion = raw.excludeRecursion ?: false,
                 keysContainedIn = raw.keysContainedIn ?: "chat",
                 position = raw.position ?: 0,
-                weight = raw.weight ?: 0
-            )
+                weight = raw.weight ?: 0,
+                useRegex = raw.useRegex ?: false,
+                caseSensitive = raw.caseSensitive,
+                matchWholeWords = raw.matchWholeWords,
+                positionType = raw.positionType ?: "legacy",
+                injectionDepth = raw.injectionDepth ?: 0,
+                role = raw.role,
+                outletName = raw.outletName,
+                groupOverride = raw.groupOverride ?: false,
+                groupWeight = raw.groupWeight ?: 100,
+                useGroupScoring = raw.useGroupScoring ?: false,
+                priority = raw.priority,
+                scanDepthOverride = raw.scanDepthOverride,
+                sticky = raw.sticky ?: 0,
+                cooldown = raw.cooldown ?: 0,
+                delay = raw.delay ?: 0,
+                triggers = raw.triggers ?: emptyList(),
+                extensionsJson = raw.extensionsJson ?: "{}",
+                automationId = raw.automationId ?: "",
+                vectorized = raw.vectorized ?: false,
+                matchPersonaDescription = raw.matchPersonaDescription ?: false,
+                matchCharacterDescription = raw.matchCharacterDescription ?: false,
+                matchCharacterPersonality = raw.matchCharacterPersonality ?: false,
+                matchCharacterDepthPrompt = raw.matchCharacterDepthPrompt ?: false,
+                matchScenario = raw.matchScenario ?: false,
+                matchCreatorNotes = raw.matchCreatorNotes ?: false,
+                ignoreBudget = raw.ignoreBudget ?: false,
+                characterFilterNames = raw.characterFilterNames ?: emptyList(),
+                characterFilterTags = raw.characterFilterTags ?: emptyList(),
+                characterFilterExclude = raw.characterFilterExclude ?: false,
+                addMemo = raw.addMemo ?: true,
+                displayIndex = raw.displayIndex ?: 0,
+                rawJson = raw.rawJson
+                )
         }
 
     /**
@@ -398,6 +496,9 @@ class ChatStorageManager(private val context: Context) {
      * 某会话专属世界书文件路径（文件存在 = 该会话自定义书，替代全局书）。
      */
     private fun sessionWorldInfoFile(sessionId: String): File = File(sessionsDir, "world_info_$sessionId.json")
+
+    private fun sessionWorldInfoRuntimeStateFile(sessionId: String): File =
+        File(sessionsDir, "world_info_state_$sessionId.json")
 
     /**
      * 读取某会话专属世界书；文件不存在返回 null（调用方回退全局书）。
@@ -457,6 +558,62 @@ class ChatStorageManager(private val context: Context) {
                 if (file.exists()) {
                     file.delete()
                 }
+                val stateFile = sessionWorldInfoRuntimeStateFile(sessionId)
+                if (stateFile.exists()) {
+                    stateFile.delete()
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    /** 读取会话专属世界书的 sticky/cooldown 运行时状态；旧会话没有文件时返回空状态。 */
+    suspend fun loadSessionWorldInfoRuntimeState(sessionId: String): WorldInfoRuntimeState {
+        return worldInfoMutex.withLock {
+            val file = sessionWorldInfoRuntimeStateFile(sessionId)
+            if (!file.exists()) return@withLock WorldInfoRuntimeState()
+            try {
+                val raw = gson.fromJson(file.readText(), WorldInfoRuntimeState::class.java)
+                WorldInfoRuntimeState(
+                    turnKey = raw?.turnKey ?: "",
+                    turnIndex = raw?.turnIndex ?: 0L,
+                    bookSignature = raw?.bookSignature ?: "",
+                    entries = raw?.entries.orEmpty().mapNotNull { (id, state) ->
+                        id?.takeIf { it.isNotBlank() }?.let { key ->
+                            key to WorldInfoEntryRuntimeState(
+                                lastActivatedTurn = state?.lastActivatedTurn ?: -1L,
+                                stickyUntilTurn = state?.stickyUntilTurn ?: -1L,
+                                cooldownUntilTurn = state?.cooldownUntilTurn ?: -1L
+                            )
+                        }
+                    }.toMap()
+                )
+            } catch (e: Exception) {
+                e.printStackTrace()
+                backupCorruptFile(file)
+                WorldInfoRuntimeState()
+            }
+        }
+    }
+
+    /** 原子保存会话世界书的 timed runtime state，不修改用户可见世界书内容。 */
+    suspend fun saveSessionWorldInfoRuntimeState(sessionId: String, state: WorldInfoRuntimeState) {
+        worldInfoMutex.withLock {
+            try {
+                atomicWrite(sessionWorldInfoRuntimeStateFile(sessionId), gson.toJson(state))
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    /** 清除会话世界书及其运行时状态，恢复真正的全局回退语义。 */
+    suspend fun deleteSessionWorldInfoRuntimeState(sessionId: String) {
+        worldInfoMutex.withLock {
+            try {
+                val file = sessionWorldInfoRuntimeStateFile(sessionId)
+                if (file.exists()) file.delete()
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -478,6 +635,32 @@ class ChatStorageManager(private val context: Context) {
     suspend fun loadCharacterCards(): List<CharacterCard> {
         return cardsMutex.withLock {
             loadCharacterCardsInternal()
+        }
+    }
+
+    /** 读取外部酒馆资源注册表；文件不存在时返回空注册表。 */
+    suspend fun loadTavernResourceRegistry(): TavernResourceRegistry {
+        return tavernResourcesMutex.withLock {
+            if (!tavernResourcesFile.exists()) return@withLock TavernResourceRegistry()
+            try {
+                TavernResourceRegistryCodec.parse(tavernResourcesFile.readText())
+                    ?: TavernResourceRegistry()
+            } catch (e: Exception) {
+                e.printStackTrace()
+                backupCorruptFile(tavernResourcesFile)
+                TavernResourceRegistry()
+            }
+        }
+    }
+
+    /** 原子保存外部酒馆资源注册表。revision 由调用方递增，供运行时缓存失效。 */
+    suspend fun saveTavernResourceRegistry(registry: TavernResourceRegistry) {
+        tavernResourcesMutex.withLock {
+            try {
+                atomicWrite(tavernResourcesFile, TavernResourceRegistryCodec.toJson(registry))
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
     }
 

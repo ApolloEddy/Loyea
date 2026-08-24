@@ -116,6 +116,26 @@ class PromptAssemblerTest {
         assertTrue(parts.stableSystemPrompt.contains("[MESSAGE TIME: ...]"))
     }
 
+    @Test
+    fun fullCardFieldsAndMacrosAreRendered() {
+        val card = card(systemPrompt = "设定 {{char}} 应称呼 {{user}}，{{description}}").copy(
+            description = "完整描述",
+            creatorNotes = "作者备注",
+            characterVersion = "2.1",
+            postHistoryInstructions = "历史之后仍要记住 {{charCreatorNotes}} / {{charVersion}}",
+            alternateGreetings = listOf("备用首句")
+        )
+        val parts = PromptAssembler.assemblePromptParts(
+            card = card,
+            userName = "Eddy",
+            enableVoice = false,
+            trustedCard = true
+        )
+        assertTrue(parts.stableSystemPrompt.contains("完整描述"))
+        assertTrue(parts.stableSystemPrompt.contains("Test Character 应称呼 Eddy，完整描述"))
+        assertEquals("历史之后仍要记住 作者备注 / 2.1", parts.postHistoryInstructions)
+    }
+
     private fun card(systemPrompt: String) = CharacterCard(
         id = "test-card",
         name = "Test Character",

@@ -112,13 +112,39 @@ class LlmClient {
         }
     }
 
+    /** 将卡内 preset 的通用采样字段映射到 OpenAI-compatible 请求；空字段不覆盖应用配置。 */
+    private fun applyGenerationOverrides(
+        requestJson: JsonObject,
+        config: com.loyea.ui.settings.ApiConfig,
+        generation: TavernGenerationOverrides?
+    ) {
+        if (generation == null) return
+        generation.temperature?.let { requestJson.addProperty("temperature", it) }
+        generation.topP?.let { requestJson.addProperty("top_p", it) }
+        generation.maxTokens?.takeIf { it > 0 }?.let { requestJson.addProperty("max_tokens", it) }
+        generation.frequencyPenalty?.let { requestJson.addProperty("frequency_penalty", it) }
+        generation.presencePenalty?.let { requestJson.addProperty("presence_penalty", it) }
+        if (generation.stopStrings.isNotEmpty()) {
+            requestJson.add("stop", JsonArray().apply { generation.stopStrings.forEach(::add) })
+        }
+
+        // OpenAI/DeepSeek/Anthropic/MiMo 的兼容网关通常不接受 top_k/repetition_penalty；
+        // 本地/开源网关则可继续使用这两个 ST preset 字段。
+        val strictProvider = config.provider.lowercase() in setOf("openai", "deepseek", "anthropic", "mimo")
+        if (!strictProvider) {
+            generation.topK?.let { requestJson.addProperty("top_k", it) }
+            generation.repetitionPenalty?.let { requestJson.addProperty("repetition_penalty", it) }
+        }
+    }
+
     /**
      * 发送 Chat Completion 流式对话请求 (SSE)
      */
     fun sendChatCompletionStream(
         config: com.loyea.ui.settings.ApiConfig,
         messages: List<LlmChatMessage>,
-        tools: List<McpTool> = emptyList()
+        tools: List<McpTool> = emptyList(),
+        generation: TavernGenerationOverrides? = null
     ): Flow<StreamEvent> = flow {
         if (config.apiKey.isBlank()) {
             emit(StreamEvent.Error("[错误] API Key 未配置，请在设置中配置您的 Key 后重试。"))
@@ -136,6 +162,7 @@ class LlmClient {
                 addProperty("model", targetModel)
                 add("messages", toProviderMessages(processedMessages))
                 addProperty("stream", true)
+                applyGenerationOverrides(requestJson = this, config = config, generation = generation)
                 // 仅在明确支持的 provider 上请求流式 usage（DeepSeek/OpenAI 官方支持 stream_options），
                 // 其它 provider（如 MiMo）不发送该字段，避免严格网关 400；无 usage 时上层用字符估算兜底
                 if (config.provider.equals("DeepSeek", ignoreCase = true) ||
@@ -244,6 +271,7 @@ class LlmClient {
                                     // 1. 官方 reasoning_content 推理流 (Deepseek R1 官方标准字段)
                                     val reasoningContent = delta.get("reasoning_content")?.takeIf { !it.isJsonNull }?.asString
                                     if (!reasoningContent.isNullOrEmpty()) {
+                                        // 由上层按完整 reasoning 累计值过滤，避免元数据跨两个 delta 时第二段残留。
                                         emit(StreamEvent.Thoughts(reasoningContent))
                                     }
 
@@ -363,7 +391,8 @@ class LlmClient {
         config: com.loyea.ui.settings.ApiConfig,
         systemPrompt: String?,
         history: List<Message>,
-        tools: List<McpTool> = emptyList()
+        tools: List<McpTool> = emptyList(),
+        generation: TavernGenerationOverrides? = null
     ): Flow<StreamEvent> {
         val chatHistory = mutableListOf<LlmChatMessage>()
         if (!systemPrompt.isNullOrBlank()) {
@@ -379,7 +408,7 @@ class LlmClient {
                 )
             }
         )
-        return sendChatCompletionStream(config, chatHistory, tools)
+        return sendChatCompletionStream(config, chatHistory, tools, generation)
     }
 
     /**
@@ -388,7 +417,8 @@ class LlmClient {
     suspend fun sendChatCompletion(
         config: com.loyea.ui.settings.ApiConfig,
         systemPrompt: String?,
-        history: List<Message>
+        history: List<Message>,
+        generation: TavernGenerationOverrides? = null
     ): LlmResponse = withContext(Dispatchers.IO) {
         if (config.apiKey.isBlank()) {
             return@withContext LlmResponse(
@@ -428,6 +458,7 @@ class LlmClient {
             val requestJson = JsonObject().apply {
                 addProperty("model", targetModel)
                 add("messages", gson.toJsonTree(chatHistory))
+                applyGenerationOverrides(requestJson = this, config = config, generation = generation)
                 if (config.enableSearch && !config.provider.equals("MiMo", ignoreCase = true)) {
                     addProperty("web_search", true)
                 }
@@ -491,17 +522,19 @@ class LlmClient {
                 var finalContent = rawContent
 
                 if (!reasoningContent.isNullOrBlank()) {
-                    finalThoughts = reasoningContent
+                    finalThoughts = ReplyOutputSanitizer.sanitize(reasoningContent)
                 }
 
                 val thinkRegex = Regex("<think>([\\s\\S]*?)</think>")
                 val matchResult = thinkRegex.find(rawContent)
                 if (matchResult != null) {
                     if (finalThoughts == null) {
-                        finalThoughts = matchResult.groupValues[1].trim()
+                        finalThoughts = ReplyOutputSanitizer.sanitize(matchResult.groupValues[1].trim())
                     }
                     finalContent = rawContent.replace(thinkRegex, "").trim()
                 }
+
+                finalContent = ReplyOutputSanitizer.sanitize(finalContent)
 
                 val usage = parseUsage(responseJson)
                 return@withContext LlmResponse(
@@ -526,9 +559,10 @@ class LlmClient {
     suspend fun sendChatCompletionWithTools(
         config: com.loyea.ui.settings.ApiConfig,
         messages: List<LlmChatMessage>,
-        tools: List<McpTool>
+        tools: List<McpTool>,
+        generation: TavernGenerationOverrides? = null
     ): LlmResponse = withContext(Dispatchers.IO) {
-        sendRawChatCompletion(config, messages, tools, stream = false)
+        sendRawChatCompletion(config, messages, tools, stream = false, generation = generation)
     }
 
     fun sendRawChatCompletionStream(
@@ -744,7 +778,8 @@ class LlmClient {
         config: com.loyea.ui.settings.ApiConfig,
         messages: List<LlmChatMessage>,
         tools: List<McpTool>,
-        stream: Boolean
+        stream: Boolean,
+        generation: TavernGenerationOverrides? = null
     ): LlmResponse = withContext(Dispatchers.IO) {
         if (config.apiKey.isBlank()) {
             return@withContext LlmResponse(
@@ -760,6 +795,7 @@ class LlmClient {
                 addProperty("model", resolveTargetModel(config))
                 add("messages", toProviderMessages(processedMessages))
                 addProperty("stream", stream)
+                applyGenerationOverrides(requestJson = this, config = config, generation = generation)
                 if (tools.isNotEmpty()) {
                     add("tools", toProviderTools(tools))
                     addProperty("tool_choice", "auto")
@@ -863,8 +899,12 @@ class LlmClient {
             } else emptyList()
 
             val parsedState = parseIncrementalStreamState(rawContent, isDone = true)
-            val finalThoughts = if (!reasoningContent.isNullOrBlank()) reasoningContent else parsedState.thoughts.takeIf { it.isNotBlank() }
-            val finalContent = parsedState.visibleContent.trim()
+            val finalThoughts = if (!reasoningContent.isNullOrBlank()) {
+                ReplyOutputSanitizer.sanitize(reasoningContent)
+            } else {
+                ReplyOutputSanitizer.sanitize(parsedState.thoughts).takeIf { it.isNotBlank() }
+            }
+            val finalContent = ReplyOutputSanitizer.sanitize(parsedState.visibleContent).trim()
             val combinedToolCalls = apiToolCalls + parsedState.completedXmlCalls
             val usage = parseUsage(responseJson)
 
@@ -1796,8 +1836,8 @@ class LlmClient {
         }
 
         return ParsedStreamState(
-            thoughts = thoughtsAccumulator.trim(),
-            visibleContent = visibleContentAccumulator,
+            thoughts = ReplyOutputSanitizer.sanitize(thoughtsAccumulator.trim()),
+            visibleContent = ReplyOutputSanitizer.sanitize(visibleContentAccumulator),
             completedXmlCalls = completedXmlCalls
         )
     }
@@ -1932,4 +1972,3 @@ class LlmClient {
         return result
     }
 }
-
