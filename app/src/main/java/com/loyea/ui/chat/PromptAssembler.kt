@@ -98,7 +98,7 @@ object PromptAssembler {
     ): PromptParts {
         val sb = StringBuilder()
         val contextSb = StringBuilder()
-        val effectivePreset = preset ?: TavernPresetCodec.fromCard(card)
+        val effectivePreset = preset ?: TavernCardPresetAdapter.presetFrom(card)
         val effectiveWorldInfoRender = worldInfoRender?.let { renderPresetWorldInfo(it, effectivePreset) }
         val legacyWorldInfo = effectiveWorldInfoRender?.let(::legacyOrAllWorldInfo)
         val effectiveWorldInfo = if (effectiveWorldInfoRender == null) {

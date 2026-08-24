@@ -104,39 +104,7 @@ data class TavernPromptPreset(
 }
 
 object TavernPresetCodec {
-    private val presetKeys = listOf(
-        "preset", "prompt_preset", "promptPreset", "tavern_preset", "tavernPreset", "api_preset", "apiPreset"
-    )
-
-    /** 从角色卡 extensions 或原始卡 JSON 中发现内嵌 preset。 */
-    fun fromCard(card: CharacterCard): TavernPromptPreset? {
-        val roots = buildList {
-            parseObject(card.extensionsJson)?.let(::add)
-            card.originalCardJson?.let(::parseObject)?.let { rawRoot ->
-                add(rawRoot)
-                rawRoot["data"]?.takeIf { it.isJsonObject }?.asJsonObject?.let(::add)
-                rawRoot["data"]?.takeIf { it.isJsonObject }?.asJsonObject?.get("extensions")
-                    ?.takeIf { it.isJsonObject }?.asJsonObject?.let(::add)
-            }
-        }.distinctBy { it.toString() }
-        val keys = presetKeys.map(::normalizeKey).toSet()
-        roots.asSequence()
-            .mapNotNull { findEmbeddedPreset(it, keys) }
-            .firstOrNull()
-            ?.let { return it }
-        return null
-    }
-
     fun parse(json: String): TavernPromptPreset? = parseObject(json)?.let(::parseObject)
-
-    private fun parseCandidate(candidate: com.google.gson.JsonElement?): TavernPromptPreset? {
-        if (candidate == null || candidate.isJsonNull) return null
-        return when {
-            candidate.isJsonObject -> parseObject(candidate.asJsonObject)
-            candidate.isJsonPrimitive && candidate.asJsonPrimitive.isString -> parse(candidate.asString)
-            else -> null
-        }
-    }
 
     private fun parseObject(json: String): JsonObject? = runCatching {
         JsonParser.parseString(json).takeIf { it.isJsonObject }?.asJsonObject
@@ -220,30 +188,6 @@ object TavernPresetCodec {
             rawJson = obj.toString()
         )
     }
-
-    /** 第三方卡常把 preset 再包在 vendor/metadata 多层对象中。 */
-    private fun findEmbeddedPreset(
-        element: com.google.gson.JsonElement,
-        keys: Set<String>
-    ): TavernPromptPreset? {
-        if (element.isJsonObject) {
-            element.asJsonObject.entrySet().forEach { (key, value) ->
-                if (normalizeKey(key) in keys) {
-                    parseCandidate(value)?.let { return it }
-                }
-                findEmbeddedPreset(value, keys)?.let { return it }
-            }
-        } else if (element.isJsonArray) {
-            element.asJsonArray.forEach { child ->
-                findEmbeddedPreset(child, keys)?.let { return it }
-            }
-        }
-        return null
-    }
-
-    private fun normalizeKey(value: String): String = value
-        .filter(Char::isLetterOrDigit)
-        .lowercase()
 
     private fun parsePromptOrder(element: com.google.gson.JsonElement?): List<TavernPresetPromptOrder> {
         if (element == null || !element.isJsonArray) return emptyList()

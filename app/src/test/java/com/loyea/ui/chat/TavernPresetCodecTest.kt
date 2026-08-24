@@ -39,7 +39,7 @@ class TavernPresetCodecTest {
             systemPrompt = "system",
             extensionsJson = """{"preset":$presetJson}"""
         )
-        val preset = TavernPresetCodec.fromCard(card)
+        val preset = TavernCardPresetAdapter.presetFrom(card)
         requireNotNull(preset)
         assertEquals(0.4, preset.temperature!!, 0.001)
         assertEquals(8192, preset.maxContext)

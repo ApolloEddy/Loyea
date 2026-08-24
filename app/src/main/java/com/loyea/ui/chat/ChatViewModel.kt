@@ -2004,7 +2004,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 角色卡绑定的 preset：内嵌内容优先，找不到时再按 id/name 查外部注册表。 */
     private fun resolvePresetForCard(card: CharacterCard): TavernPromptPreset? {
-        TavernPresetCodec.fromCard(card)?.let { return it }
+        TavernCardPresetAdapter.presetFrom(card)?.let { return it }
         return TavernCardResourceBindings.presetNames(card)
             .asSequence()
             .flatMap { binding ->
