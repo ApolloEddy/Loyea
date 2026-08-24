@@ -100,6 +100,28 @@ class ChatStorageManagerTest {
     }
 
     @Test
+    fun `Tavern group roster persists with session and can return to solo mode`() = runBlocking {
+        storageManager.saveSessionList(listOf(ChatSession("group", "Group", 1000L)))
+        val group = TavernGroupChat(
+            id = "group-1",
+            name = "Party",
+            members = listOf(
+                TavernGroupMember("alice", "Alice"),
+                TavernGroupMember("bob", "Bob", muted = true)
+            ),
+            replyMode = TavernGroupReplyMode.ALL_MEMBERS
+        )
+
+        storageManager.updateSessionGroupChat("group", group)
+        val loaded = storageManager.loadSessionList().single()
+        assertEquals(TavernGroupCodec.toJson(group), loaded.groupChatJson)
+        assertEquals(group, loaded.tavernGroupChat())
+
+        storageManager.updateSessionGroupChat("group", null)
+        assertNull(storageManager.loadSessionList().single().tavernGroupChat())
+    }
+
+    @Test
     fun `legacy session persona owners migrate once and persist`() = runBlocking {
         val sessionsFile = File(tempFolder.root, "files/sessions_metadata.json")
         val legacyJson = """

@@ -63,8 +63,14 @@ data class ChatSession(
     val authorNote: String = "",
     val authorNotePosition: String = "in_chat",
     val authorNoteDepth: Int = 4,
-    val authorNoteFrequency: Int = 1
+    val authorNoteFrequency: Int = 1,
+    /** Optional serialized Tavo/SillyTavern group roster for this chat session. */
+    val groupChatJson: String? = null
 )
+
+fun ChatSession.tavernGroupChat(): TavernGroupChat? = groupChatJson
+    ?.takeIf(String::isNotBlank)
+    ?.let(TavernGroupCodec::parse)
 
 enum class BackgroundGreetingCommitStatus {
     COMMITTED,
@@ -185,7 +191,12 @@ class ChatStorageManager internal constructor(
                     completionTokens = raw.completionTokens ?: 0,
                     lastContextTokens = raw.lastContextTokens ?: 0,
                     promptCacheHitTokens = raw.promptCacheHitTokens ?: 0,
-                    promptCacheMissTokens = raw.promptCacheMissTokens ?: 0
+                    promptCacheMissTokens = raw.promptCacheMissTokens ?: 0,
+                    authorNote = raw.authorNote ?: "",
+                    authorNotePosition = raw.authorNotePosition ?: "in_chat",
+                    authorNoteDepth = raw.authorNoteDepth ?: 4,
+                    authorNoteFrequency = raw.authorNoteFrequency ?: 1,
+                    groupChatJson = raw.groupChatJson?.takeIf(String::isNotBlank)
                 )
             }
             if (personaMigrationNeeded) {
@@ -1026,6 +1037,16 @@ class ChatStorageManager internal constructor(
             val current = loadSessionListInternal()
             val updated = reconcilePersonaBindingRevisions(current, updateBlock(current))
             saveSessionListInternal(updated)
+        }
+    }
+
+    /** Atomically persists a Tavern/Tavo group roster without changing persona binding fields. */
+    suspend fun updateSessionGroupChat(sessionId: String, group: TavernGroupChat?) {
+        val groupJson = group?.let(TavernGroupCodec::toJson)
+        updateSessionList { current ->
+            current.map { session ->
+                if (session.id == sessionId) session.copy(groupChatJson = groupJson) else session
+            }
         }
     }
 

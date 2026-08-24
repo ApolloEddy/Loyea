@@ -140,7 +140,11 @@ object TavernGroupPlanner {
                 .ifEmpty { deterministicPick(active, request.randomSeed)?.let(::listOf).orEmpty() }
                 .take(group.maxReplies)
             TavernGroupReplyMode.ALL_MEMBERS -> active
-            TavernGroupReplyMode.DESIGNATED_SPEAKER -> listOfNotNull(explicit ?: mentioned.firstOrNull())
+            TavernGroupReplyMode.DESIGNATED_SPEAKER -> listOfNotNull(
+                explicit
+                    ?: group.findMember(group.designatedSpeakerId)
+                    ?: mentioned.firstOrNull()
+            )
             TavernGroupReplyMode.CONTEXTUAL_SPEAKER -> emptyList()
         }
         val selectionPrompt = if (group.replyMode == TavernGroupReplyMode.CONTEXTUAL_SPEAKER) {

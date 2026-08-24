@@ -26,7 +26,7 @@ World Info 的 Include Names 已同时影响扫描缓冲和聊天消息前缀，
 
 Prompt Manager 与宏运行时现在共享请求启动时冻结的 `TavernMacroContext`：角色卡字段、历史最后消息、当前输入、生成类型、请求时间、命名 outlet 和只读变量会同时用于系统提示、preset slot、World Info Regex 和输出 Regex。Preset slot 会按 generation trigger 过滤，并保留 relative / in-chat + depth 的消息位置；Continue 请求会消费 `continue_nudge_prompt`、`continue_prefill` 和 `continue_postfix`，Prefill 以最终 assistant 消息前缀发送。宏引擎支持嵌套读取、条件块、时间/历史宏和 legacy `<USER>/<CHAR>` 标记，并补齐 `allChatRange`、`idleDuration`、`timeDiff`、UTC 偏移、`random/pick/roll`、`trim`、`hasExtension` 等只读子集；随机与掷骰由请求级种子冻结。`setvar`、脚本执行、扩展副作用仍未开放，避免把第三方卡片当作宿主代码执行。
 
-群聊核心已按 Tavo 当前公开语义提供 roster 与回合规划：自然聊天按 `@name` 优先、无提及时对未静音成员做稳定选择；全员回复返回全部未静音成员；指定发言者只接受显式/提及角色；上下文选角返回带 `{{group}}` 的冻结选择提示，并只接受模型返回的已知成员。成员 JSON 支持启用/静音、权重、指定发言者和策略别名。当前 Android 宿主还没有把群聊配置接入会话创建/成员面板与多请求循环，因此这一提交先闭合插件运行时契约，真实多角色 UI 验收仍是后续门禁。
+群聊核心已按 Tavo 当前公开语义提供 roster 与回合规划：自然聊天按 `@name` 优先、无提及时对未静音成员做稳定选择；全员回复返回全部未静音成员；指定发言者按显式角色、配置的 designated speaker 或提及角色解析；上下文选角返回带 `{{group}}` 的冻结选择提示，并只接受模型返回的已知成员。成员 JSON 支持启用/静音、权重、指定发言者和策略别名。当前 Android 宿主已将 roster 写入会话元数据，并在每次请求启动时解析一次，统一供 `{{group}}`（包含静音成员）、`{{groupNotMuted}}`、`{{notChar}}`、群聊系统块和插件回合工厂消费；同一请求内后续编辑不会改变快照。Android 成员面板、角色卡选择和逐成员多请求循环尚未接入，真实多角色 UI 验收仍是后续门禁。
 
 聊天文件核心现在按 SillyTavern 当前 `ChatHeader`/`ChatMessage` JSONL 形状读写：首行 `chat_metadata`、消息 `mes/is_user/is_system/send_date/swipes/swipe_id/extra` 和未知字段均可往返，Tavo/旧客户端常见别名也会归一化；坏行不会静默丢失，而是通过行号诊断返回。Branch 会复制到目标消息并切换到新文件，Checkpoint 会复制但留在当前文件，父文件分别回写 `extra.branches` 或 `extra.bookmark_link`，并通过 `main_chat` 建立返回父聊天的链接。Android 文件选择器、会话持久化和导入后的角色名匹配尚未接入，当前只闭合纯核心格式/分支契约。
 

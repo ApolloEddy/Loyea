@@ -46,6 +46,14 @@ class TavernGroupChatTest {
             TavernGroupTurnRequest(group(TavernGroupReplyMode.DESIGNATED_SPEAKER), "missing")
         )
         assertTrue(missing.speakers.isEmpty())
+
+        val defaultDesignated = TavernGroupPlanner.plan(
+            TavernGroupTurnRequest(
+                group(TavernGroupReplyMode.DESIGNATED_SPEAKER, designatedSpeakerId = "bob"),
+                "default-designated"
+            )
+        )
+        assertEquals(listOf("bob"), defaultDesignated.speakers.map { it.id })
     }
 
     @Test
@@ -103,8 +111,12 @@ class TavernGroupChatTest {
         val insertion = prepared.plan.insertions.single()
         assertEquals(InsertionAnchor.AFTER_SYSTEM_BEFORE_SUMMARY, insertion.anchor)
         assertEquals(ChatRole.SYSTEM, insertion.role)
-        assertTrue(insertion.content.contains("Alice, Bob"))
-        assertEquals("[Alice, Bob]", prepared.transform(com.loyea.plugin.api.TextStage.MODEL_OUTPUT, "{{group}}"))
+        assertTrue(insertion.content.contains("Group members: Alice, Bob, Muted"))
+        assertTrue(insertion.content.contains("Reply-capable members: Alice, Bob"))
+        assertEquals(
+            "[Alice, Bob, Muted]",
+            prepared.transform(com.loyea.plugin.api.TextStage.MODEL_OUTPUT, "{{group}}")
+        )
     }
 
     private fun group(

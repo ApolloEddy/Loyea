@@ -753,6 +753,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     // --- 会话与对话处理业务逻辑 ---
 
+    /**
+     * Persists the current session's Tavern/Tavo group roster. The roster is immutable for a
+     * request once its macro context is captured; passing null returns the session to solo mode.
+     */
+    fun setSessionGroupChat(group: TavernGroupChat?) {
+        val sessionId = currentSessionId.value
+        if (sessionId.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            storageManager.updateSessionGroupChat(sessionId, group)
+            val updated = storageManager.loadSessionList().sortedByDescending { it.lastActiveTime }
+            withContext(Dispatchers.Main) {
+                sessions.value = updated
+            }
+        }
+    }
+
     fun deleteSession(deleteId: String) {
         // 删除当前会话时立即停止其正在进行的流式回复，防止流继续写回已删除会话文件
         stopResponse()
@@ -1670,6 +1686,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val worldInfoPosition = if (worldInfoConfig.value.position == "top") "top" else "bottom"
             val userTurnIndex = history.count { it.sender == Sender.USER }.toLong()
             val frozenAuthorNote = activeTavernAuthorNote(characterCard, userTurnIndex)
+            val tavernGroupChat = activeSession.value
+                ?.takeIf { it.id == sessionId }
+                ?.tavernGroupChat()
             val lastUserMessage = history.lastOrNull { it.sender == Sender.USER }
             val lastCharacterMessage = history.lastOrNull { it.sender == Sender.AI }
             val lastMessageIndex = history.lastIndex
@@ -1695,6 +1714,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 authorNote = frozenAuthorNote?.text.orEmpty(),
                 timestampMillis = snapshotTime,
                 alternateGreetings = characterCard.alternateGreetings,
+                group = tavernGroupChat?.groupMacro(includeMuted = true).orEmpty(),
+                groupNotMuted = tavernGroupChat?.groupMacro().orEmpty(),
+                notCharacter = tavernGroupChat?.unmutedMembers
+                    ?.filterNot { it.name.equals(characterCard.name, ignoreCase = true) }
+                    ?.joinToString(", ") { it.name }
+                    .orEmpty(),
                 // ST exposes chat message indices here, not Loyea's UUIDs.
                 lastMessageId = lastMessageIndex.takeIf { it >= 0 }?.toString().orEmpty(),
                 firstIncludedMessageId = history.indices.firstOrNull()?.toString().orEmpty(),
@@ -1784,7 +1809,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 userTurnIndex = userTurnIndex,
                 macroContext = requestMacroContext,
                 continueNudge = continueNudge,
-                continuePrefill = boundPreset?.continuePrefill == true
+                continuePrefill = boundPreset?.continuePrefill == true,
+                groupChat = tavernGroupChat
             )
             preparedTurn = if (personaRef.isNative) {
                 TavernPreparedTurnFactory.prepare(tavernTurnSpec)

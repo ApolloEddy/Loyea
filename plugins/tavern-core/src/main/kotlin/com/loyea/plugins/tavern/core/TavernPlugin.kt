@@ -121,22 +121,26 @@ object TavernPreparedTurnFactory {
         )
         val groupMacroContext = frozenSpec.groupChat?.let { group ->
             frozenSpec.macroContext.copy(
-                group = group.groupMacro(),
+                // SillyTavern's {{group}} includes muted members; {{groupNotMuted}}
+                // is the reply-capable subset. Disabled roster entries stay hidden.
+                group = group.groupMacro(includeMuted = true),
                 groupNotMuted = group.groupMacro()
             )
         } ?: frozenSpec.macroContext
         val insertions = buildList {
             var order = 0
             frozenSpec.groupChat?.let { group ->
-                val activeNames = group.groupMacro()
-                if (activeNames.isNotBlank()) {
+                val memberNames = group.groupMacro(includeMuted = true)
+                val replyNames = group.groupMacro()
+                if (memberNames.isNotBlank()) {
                     add(
                         ConversationInsertion(
                             anchor = InsertionAnchor.AFTER_SYSTEM_BEFORE_SUMMARY,
                             role = ChatRole.SYSTEM,
                             content = buildString {
                                 append("[GROUP CHAT / 群聊]\n")
-                                append("Active members: ").append(activeNames).append('\n')
+                                append("Group members: ").append(memberNames).append('\n')
+                                append("Reply-capable members: ").append(replyNames).append('\n')
                                 append("Reply mode: ").append(group.replyMode.wireName()).append(".\n")
                                 when (group.replyMode) {
                                     TavernGroupReplyMode.NATURAL_CHAT -> append(
