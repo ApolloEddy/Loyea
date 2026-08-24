@@ -4,7 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class TavernResourceRegistryTest {
+class TavernResourceCodecTest {
     @Test
     fun registryRoundTripKeepsRawResources() {
         val registry = TavernResourceRegistry(
@@ -31,6 +31,7 @@ class TavernResourceRegistryTest {
             ),
             revision = 7
         )
+
         val parsed = TavernResourceRegistryCodec.parse(TavernResourceRegistryCodec.toJson(registry))!!
         assertEquals(7, parsed.revision)
         assertEquals(registry.worldBooks.single().rawJson, parsed.worldBooks.single().rawJson)
@@ -40,53 +41,50 @@ class TavernResourceRegistryTest {
 
     @Test
     fun worldBookCodecMapsStandardEntryFields() {
-        val json = """
+        val book = TavernWorldBookCodec.parse(
+            """
             {
               "name":"Lore",
               "scan_depth":12,
               "token_budget":512,
               "recursive_scanning":false,
-              "entries":{
-                "7":{
-                  "uid":7,
-                  "key":["castle"],
-                  "keysecondary":["night"],
-                  "content":"Castle at night",
-                  "selective":true,
-                  "selectiveLogic":3,
-                  "constant":false,
-                  "position":4,
-                  "depth":2,
-                  "role":"system",
-                  "useRegex":true
-                }
-              }
+              "entries":{"7":{
+                "uid":7,
+                "key":["castle"],
+                "keysecondary":["night"],
+                "content":"Castle at night",
+                "selective":true,
+                "selectiveLogic":3,
+                "position":4,
+                "depth":2,
+                "role":"system",
+                "useRegex":true
+              }}
             }
-        """.trimIndent()
-        val book = TavernWorldBookCodec.parse(json)!!
+            """.trimIndent()
+        )!!
+
         assertEquals(12, book.config.scanDepth)
         assertEquals(512, book.config.tokenBudget)
         assertTrue(!book.config.allowRecursion)
-        val entry = book.entries.single()
-        assertEquals(listOf("castle"), entry.keywords)
-        assertEquals(listOf("night"), entry.keysecondary)
-        assertEquals("at_depth", entry.positionType)
-        assertEquals("system", entry.role)
-        assertTrue(entry.useRegex)
+        assertEquals(listOf("castle"), book.entries.single().keywords)
+        assertEquals(listOf("night"), book.entries.single().keysecondary)
+        assertEquals("at_depth", book.entries.single().positionType)
+        assertEquals("system", book.entries.single().role)
+        assertTrue(book.entries.single().useRegex)
     }
 
     @Test
     fun worldBookCodecUsesObjectKeyAndHonorsDisableFlag() {
         val book = TavernWorldBookCodec.parse(
             """
-            {
-              "entries": {
-                "stable-key": {"key":["x"],"content":"disabled","enabled":true,"disable":true},
-                "active-key": {"key":["x"],"content":"active"}
-              }
-            }
+            {"entries":{
+              "stable-key":{"key":["x"],"content":"disabled","enabled":true,"disable":true},
+              "active-key":{"key":["x"],"content":"active"}
+            }}
             """.trimIndent()
         )!!
+
         assertEquals(listOf("stable-key", "active-key"), book.entries.map { it.id })
         assertTrue(!book.entries.first().enabled)
         assertTrue(book.entries[1].enabled)
@@ -110,6 +108,7 @@ class TavernResourceRegistryTest {
                 budgetCap = 99
             )
         )
+
         val parsed = TavernWorldBookCodec.parse(TavernWorldBookCodec.export(source))!!
         assertEquals(source.config.scanDepth, parsed.config.scanDepth)
         assertEquals(source.config.position, parsed.config.position)
@@ -122,51 +121,5 @@ class TavernResourceRegistryTest {
         assertTrue(parsed.config.matchWholeWords)
         assertTrue(parsed.config.useGroupScoring)
         assertEquals(source.config.budgetCap, parsed.config.budgetCap)
-    }
-
-    @Test
-    fun cardBindingsReadCommonExternalReferenceShapes() {
-        val card = CharacterCard(
-            id = "card",
-            name = "Card",
-            shortIntro = "",
-            systemPrompt = "",
-            extensionsJson = """{"world_info":"Lore","preset":{"name":"unused"},"boundRegex":["Clean"]}"""
-        )
-        assertEquals(listOf("Lore"), TavernCardResourceBindings.worldBookNames(card))
-        assertEquals(listOf("Clean"), TavernCardResourceBindings.regexCollectionNames(card))
-    }
-
-    @Test
-    fun cardBindingsFindNestedSillyTavernWorldReference() {
-        val card = CharacterCard(
-            id = "card",
-            name = "Card",
-            shortIntro = "",
-            systemPrompt = "",
-            extensionsJson = """{"vendor":{"metadata":{"world":"Nested Lore"}}}"""
-        )
-        assertEquals(listOf("Nested Lore"), TavernCardResourceBindings.worldBookNames(card))
-    }
-
-    @Test
-    fun inlineWorldBookObjectIsAvailableWithoutExternalRegistry() {
-        val card = CharacterCard(
-            id = "card",
-            name = "Card",
-            shortIntro = "",
-            systemPrompt = "",
-            extensionsJson = """
-                {"vendor":{"world":{"name":"Inline","entries":{
-                  "entry-a":{"key":["tower"],"content":"Tower lore","role":2,
-                    "characterFilter":{"names":["Card"],"isExclude":false}}
-                }}}}
-            """.trimIndent()
-        )
-        val inline = TavernCardResourceBindings.inlineWorldBooks(card)
-        assertEquals(1, inline.size)
-        assertEquals("Tower lore", inline.single().second.entries.single().content)
-        assertEquals("assistant", inline.single().second.entries.single().role)
-        assertEquals(listOf("Card"), inline.single().second.entries.single().characterFilterNames)
     }
 }

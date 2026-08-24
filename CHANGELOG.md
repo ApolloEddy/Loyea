@@ -20,6 +20,7 @@ All notable changes to this project will be documented in this file.
 - **角色卡高级编辑与导出**：编辑/创建页补齐 description、creator notes、post-history、备用/群聊开场白、标签、来源、昵称、版本、内嵌 CharacterBook 与 extensions JSON；新增 V3 JSON 和 CHARX（含安全资源）导出。
 
 ### Changed (变更)
+- **外部资源 codec 迁出 app**：Tavern 世界书/preset/Regex 资源模型、registry JSON 往返、稳定资源 ID 与世界书导入导出 codec 迁入 `:plugins:tavern-core`；`ChatStorageManager` 仅负责原子文件读写，卡片绑定遍历继续由 app 适配器承担。
 - **Preset 运行时迁出 app**：preset prompt/顺序模型、JSON codec、模板渲染、post-history 合并和 `GenerationPatch` 投影迁入 `:plugins:tavern-core`；卡片内嵌 preset 的递归发现改由宿主 `TavernCardPresetAdapter` 单向桥接。
 - **Regex 运行时迁出 app**：Regex placement/script 模型、JSON 解析、受控执行、世界书槽位变换与编译缓存迁入 `:plugins:tavern-core`；核心改为消费冻结的 `TavernMacroContext`，不再接触宿主 `CharacterCard`。
 - **世界书运行时迁出 app**：`WorldInfoEntry/Book/Config/RuntimeState`、`WorldInfoMatcher` 与 CharacterBook 运行时投影整体迁入纯 Kotlin/JVM `:plugins:tavern-core`；Android `SharedPreferences`、会话文件存储和设置 UI 继续留在宿主侧，字段名、默认值、匹配顺序与预算行为保持兼容。
@@ -45,6 +46,7 @@ All notable changes to this project will be documented in this file.
 - 修复未标记 `markdownOnly/promptOnly` 的 Regex 在 World Info/prompt 阶段被错误跳过；修复切换会话期间旧异步加载结果覆盖当前世界书运行时状态。
 
 ### Architecture (架构影响)
+- 原先混在同一文件的 `TavernResourceRegistryCodec/TavernWorldBookCodec` 与 `TavernCardResourceBindings` 已物理拆开；纯 codec 测试归属 Tavern 模块，宿主测试只覆盖 `CharacterCard` 外部引用和内嵌世界书发现。
 - `TavernPresetCodec` 不再接收 `CharacterCard`；核心模块独立测试锁定 prompt order、post-history、generation 参数与 preset-scoped Regex，宿主测试锁定第三方卡嵌套字符串 preset 的发现兼容性。
 - `TavernCardRegexAdapter` 成为宿主卡片到插件 Regex 的单向桥接：脚本发现和 `CharacterCard` 字段投影留在 app，请求开始后只冻结角色名、描述与用户名；模块测试同时覆盖纯执行语义和宿主嵌套资源发现。
 - 世界书核心源码已不再导入 Android、AndroidX、网络库或 Loyea 宿主模型；matcher 的 token 预算估算也由 Tavern 核心自身冻结，避免运行语义暗中依赖 app 的用量统计兜底函数。
