@@ -18,12 +18,14 @@
   ├─ :plugin-host
   ├─ :knowledge-core
   ├─ :plugins:tavern-core
-  └─ :plugins:tavern-storage
+  ├─ :plugins:tavern-storage
+  └─ :plugins:tavern-ui
 
 :plugin-host ──> :plugin-api
 :knowledge-core ──> （无生产依赖）
 :plugins:tavern-core ──> :plugin-api + :knowledge-core
 :plugins:tavern-storage ──> （无生产依赖）
+:plugins:tavern-ui ──> （无生产依赖）
 ```
 
 - `:plugin-api`：稳定身份、能力、冻结回合、提示词 patch、生成 patch 与输出变换契约。
@@ -32,6 +34,7 @@
 - `:knowledge-core`：位于 `com.loyea.context.core` 的中立纯 Kotlin 运行时；当前保留 `WorldInfo*` 兼容命名，承载通用条目模型、匹配、预算、递归和深度注入，不依赖 Android 或 Tavern 实现。
 - `:plugins:tavern-core`：位于独立 `com.loyea.plugins.tavern.core` 命名空间，不依赖 Android、Compose、ViewModel 或宿主消息模型；负责 Tavern 文档 codec、CharacterBook/Preset/Regex 和插件回合，并通过 `:knowledge-core` 投影通用知识上下文。
 - `:plugins:tavern-storage`：位于 `com.loyea.plugins.tavern.storage` 的纯 Kotlin/JVM 私有存储边界，负责 registry/cards/assets 目录、SHA-256 文件校验、原子复制和迁移标记；不持有会话或消息。
+- `:plugins:tavern-ui`：位于 `com.loyea.plugins.tavern.ui` 的纯 Kotlin/JVM 状态/事件边界，只保存弹窗和卡片 ID，不依赖 Android、Compose 或宿主 `CharacterCard`；界面副作用仍由 app 组合。
 - `:app`：Android 组装入口、持久化适配器、WorkManager、Compose 控制面，以及迁移期间尚未移出的旧 UI/存储适配层。
 
 核心 API 与中立知识模块不得依赖 Tavern 实现模块。Android 宿主仅可在 composition root 和 Tavern 适配器中引用具体插件类型；迁移期间的 World Info 存储/UI 仍暂留 `:app`。
@@ -84,11 +87,13 @@
 
 人格投影边界已收敛：`TavernCharacterCardAdapter` 同时提供 `CharacterCard → PersonaProjection` 与 `CharacterCard → TavernCardDocument` 两条单向路径；请求运行时只消费 `PersonaProjection`，完整 Tavern 字段和未知 JSON 仍留在文档路径。
 
+UI 状态边界已建立：`:plugins:tavern-ui` 的 `TavernUiState`/`TavernUiEvent` 负责创建、资源管理、编辑和删除确认的互斥状态；`TavernScreen` 通过卡片 ID 归并状态，SAF、Toast、分享和 FileProvider 等 Android 副作用仍留在宿主。
+
 后续按以下顺序推进，避免把数据迁移、包名重写与 UI 拆分混成一次不可回退的大改动：
 
 1. 完成 `:plugins:tavern-storage` 的资源文件接管，并为旧 registry/raw card 文档补齐恢复与冲突可观测性；会话/消息仍由宿主持有。
 2. 将 `CharacterCard` 中尚未迁出的 Tavern 扩展字段拆成原生 `PersonaSummary` 与插件私有 `TavernCardDocument`，通过 adapter 投影，保留一次性旧 JSON 迁移和原始备份。
-3. 把 `TavernScreen` 改为 state + callback 控制面，再迁入 `:plugins:tavern-ui`；SAF、分享和 FileProvider 能力由宿主端口提供。
+3. 将 `TavernScreen` 的剩余渲染与 callback 控制面迁入 `:plugins:tavern-ui`，保留当前已抽出的 state/events；SAF、分享和 FileProvider 能力由宿主端口提供。
 4. 清除宿主核心签名中的 Tavern/WorldInfo/Regex/Preset 具体类型，并增加依赖方向架构测试。
 
 核心 package rename 已作为独立迁移完成；`:plugins:tavern-core:test` 会先执行命名空间与宿主 import 防回退门禁，不与后续存储格式迁移混在同一提交。
@@ -98,7 +103,7 @@
 每个迁移提交都必须满足：
 
 ```powershell
-.\gradlew.bat --no-daemon --no-build-cache --rerun-tasks :plugin-api:test :plugin-host:test :knowledge-core:test :plugins:tavern-core:test :plugins:tavern-storage:test :app:testDebugUnitTest
+.\gradlew.bat --no-daemon --no-build-cache --rerun-tasks :plugin-api:test :plugin-host:test :knowledge-core:test :plugins:tavern-core:test :plugins:tavern-storage:test :plugins:tavern-ui:test :app:testDebugUnitTest
 ```
 
 其中 `:knowledge-core:test` 会先执行命名空间和宿主/Tavern 禁止导入门禁，确保中立知识核心不会重新依赖具体插件或 Android 宿主实现。

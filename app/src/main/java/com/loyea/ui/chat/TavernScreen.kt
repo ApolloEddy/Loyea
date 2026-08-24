@@ -1,6 +1,8 @@
 package com.loyea.ui.chat
 
 import com.loyea.plugins.tavern.core.*
+import com.loyea.plugins.tavern.ui.TavernUiEvent
+import com.loyea.plugins.tavern.ui.TavernUiState
 
 import android.content.Context
 import android.net.Uri
@@ -167,10 +169,16 @@ fun TavernScreen(
     val contentResolver = context.contentResolver
     val isEn = appLanguage == "en"
 
-    var showCreateDialog by remember { mutableStateOf(false) }
-    var showResourceDialog by remember { mutableStateOf(false) }
-    var cardToDelete by remember { mutableStateOf<CharacterCard?>(null) }
-    var cardToEdit by remember { mutableStateOf<CharacterCard?>(null) }
+    var uiState by remember { mutableStateOf(TavernUiState()) }
+    fun dispatch(event: TavernUiEvent) {
+        uiState = uiState.reduce(event)
+    }
+    val cardToDelete = uiState.cardToDeleteId?.let { cardId ->
+        characterCardList.firstOrNull { it.id == cardId }
+    }
+    val cardToEdit = uiState.cardToEditId?.let { cardId ->
+        characterCardList.firstOrNull { it.id == cardId }
+    }
 
     // 1. PNG 导入启动器
     val pngImportLauncher = rememberLauncherForActivityResult(
@@ -320,7 +328,7 @@ fun TavernScreen(
                     IconButton(onClick = { resourceImportLauncher.launch("application/json") }) {
                         Icon(imageVector = Icons.Default.FolderOpen, contentDescription = "Import Tavern resources", tint = MaterialTheme.colorScheme.primary)
                     }
-                    IconButton(onClick = { showResourceDialog = true }) {
+                    IconButton(onClick = { dispatch(TavernUiEvent.ResourceRequested) }) {
                         Icon(imageVector = Icons.Default.List, contentDescription = "Manage Tavern resources", tint = MaterialTheme.colorScheme.primary)
                     }
                 },
@@ -329,7 +337,7 @@ fun TavernScreen(
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
-                onClick = { showCreateDialog = true },
+                onClick = { dispatch(TavernUiEvent.CreateRequested) },
                 icon = { Icon(Icons.Default.Add, contentDescription = null) },
                 text = { Text(if (isEn) "Create Persona" else "自定义角色") },
                 containerColor = MaterialTheme.colorScheme.primary,
@@ -414,8 +422,8 @@ fun TavernScreen(
                             onExportJson = { shareCharacterCardJson(context, card) },
                             onExportJsonV3 = { shareCharacterCardJsonV3(context, card) },
                             onExportCharx = { shareCharacterCardCharx(context, card) },
-                            onEdit = { cardToEdit = card },
-                            onDelete = { cardToDelete = card }
+                            onEdit = { dispatch(TavernUiEvent.EditRequested(card.id)) },
+                            onDelete = { dispatch(TavernUiEvent.DeleteRequested(card.id)) }
                         )
                     }
                 }
@@ -433,8 +441,8 @@ fun TavernScreen(
                             onExportJson = { shareCharacterCardJson(context, card) },
                             onExportJsonV3 = { shareCharacterCardJsonV3(context, card) },
                             onExportCharx = { shareCharacterCardCharx(context, card) },
-                            onEdit = { cardToEdit = card },
-                            onDelete = { cardToDelete = card }
+                            onEdit = { dispatch(TavernUiEvent.EditRequested(card.id)) },
+                            onDelete = { dispatch(TavernUiEvent.DeleteRequested(card.id)) }
                         )
                     }
                 }
@@ -442,23 +450,22 @@ fun TavernScreen(
         }
 
         // 3. 自定义创建弹窗
-        if (showCreateDialog) {
+        if (uiState.showCreateDialog) {
             CreatePersonaDialog(
                 appLanguage = appLanguage,
-                onDismiss = { showCreateDialog = false },
+                onDismiss = { dispatch(TavernUiEvent.CreateDismissed) },
                 onSave = { newCard ->
                     onCharacterCardListSave(characterCardList + newCard)
-                    showCreateDialog = false
+                    dispatch(TavernUiEvent.CreateCompleted)
                     Toast.makeText(context, if (isEn) "Created successfully" else "角色创建成功", Toast.LENGTH_SHORT).show()
                 }
             )
         }
 
         // 4. 删除确认
-        if (cardToDelete != null) {
-            val targetCard = cardToDelete!!
+        cardToDelete?.let { targetCard ->
             AlertDialog(
-                onDismissRequest = { cardToDelete = null },
+                onDismissRequest = { dispatch(TavernUiEvent.DeleteDismissed) },
                 title = { Text(if (isEn) "Delete Persona?" else "确认删除角色？", fontWeight = FontWeight.Bold) },
                 text = { Text(if (isEn) "Are you sure you want to delete [${targetCard.name}]? Built-in presets cannot be deleted." else "确认要删除角色 [${targetCard.name}] 吗？系统内置的预置人格无法删除。") },
                 confirmButton = {
@@ -472,7 +479,7 @@ fun TavernScreen(
                                 targetCard.avatarUri?.let { File(it).apply { if (exists()) delete() } }
                                 Toast.makeText(context, if (isEn) "Deleted" else "删除成功", Toast.LENGTH_SHORT).show()
                             }
-                            cardToDelete = null
+                            dispatch(TavernUiEvent.DeleteCompleted)
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                     ) {
@@ -480,7 +487,7 @@ fun TavernScreen(
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { cardToDelete = null }) {
+                    TextButton(onClick = { dispatch(TavernUiEvent.DeleteDismissed) }) {
                         Text(if (isEn) "Cancel" else "取消", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                     }
                 }
@@ -488,28 +495,27 @@ fun TavernScreen(
         }
 
         // 5. 编辑弹窗
-        if (cardToEdit != null) {
-            val targetCard = cardToEdit!!
+        cardToEdit?.let { targetCard ->
             EditPersonaDialog(
                 existingCard = targetCard,
                 appLanguage = appLanguage,
-                onDismiss = { cardToEdit = null },
+                onDismiss = { dispatch(TavernUiEvent.EditDismissed) },
                 onSave = { updatedCard ->
                     onCharacterCardListSave(
                         characterCardList.map { if (it.id == updatedCard.id) updatedCard else it }
                     )
-                    cardToEdit = null
+                    dispatch(TavernUiEvent.EditCompleted)
                     Toast.makeText(context, if (isEn) "Updated successfully" else "角色更新成功", Toast.LENGTH_SHORT).show()
                 }
             )
         }
 
-        if (showResourceDialog) {
+        if (uiState.showResourceDialog) {
             TavernResourceRegistryDialog(
                 registry = tavernResourceRegistry,
                 isEn = isEn,
                 onSave = onTavernResourceRegistrySave,
-                onDismiss = { showResourceDialog = false }
+                onDismiss = { dispatch(TavernUiEvent.ResourceDismissed) }
             )
         }
     }

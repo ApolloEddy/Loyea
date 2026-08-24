@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added (新增)
 - **Tavern 私有存储模块**：新增纯 Kotlin/JVM `:plugins:tavern-storage`，提供受根目录约束的 registry/cards/assets 布局、SHA-256 文件指纹、原子复制、冲突保留和可重入迁移标记；不承载会话或消息。
+- **Tavern UI 状态模块**：新增纯 Kotlin/JVM `:plugins:tavern-ui`，以 `TavernUiState`/`TavernUiEvent` 统一创建、资源管理、编辑和删除确认的互斥状态；不依赖 Android、Compose 或宿主 `CharacterCard`。
 - **中立知识核心模块**：新增纯 Kotlin/JVM `:knowledge-core`（`com.loyea.context.core`），承载通用 World Info 匹配、预算、递归、深度注入和运行时状态；保留现有 `WorldInfo*` 命名以保证本阶段序列化与 Prompt 兼容。
 - **Tavern 物理拆分边界测试**：新增宿主 `CharacterCard` 与 Tavern 文档之间的迁移特征测试，锁定稳定角色 ID、未知字段往返和原生/Tavern 人格归属隔离，为后续私有存储迁移提供回归门禁。
 - **独立插件 API 基线**：新增纯 Kotlin/JVM `:plugin-api` 模块，定义稳定插件命名空间、原生/插件人格归属、能力声明、API 版本兼容检查与不可变运行代次；该模块不依赖 Android、Compose、Gson、网络库或 Tavern 具体实现。
