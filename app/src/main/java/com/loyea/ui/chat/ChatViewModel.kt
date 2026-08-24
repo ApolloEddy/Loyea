@@ -189,17 +189,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private var responseJob: kotlinx.coroutines.Job? = null
+    /** Invalidates queued Tavern group speakers when the user stops or starts another turn. */
+    private var groupReplySequence: Long = 0L
     private var regexCacheCardId: String? = null
     private var regexCacheExtensionsJson: String? = null
     private var regexCacheRegistryRevision: Long = Long.MIN_VALUE
     private var regexCacheScripts: List<TavernRegexScript> = emptyList()
 
     fun stopResponse() {
+        val wasThinking = isThinking.value
+        groupReplySequence++
         responseJob?.cancel()
         isThinking.value = false
         isMcpRunning.value = false
         val lastMsg = messages.value.lastOrNull()
-        if (lastMsg != null && lastMsg.sender == Sender.AI && (lastMsg.isStillThinking || isThinking.value)) {
+        if (wasThinking && lastMsg != null && lastMsg.sender == Sender.AI && lastMsg.isStillThinking) {
             val updated = messages.value.map { msg ->
                 if (msg.id == lastMsg.id) msg.copy(isStillThinking = false) else msg
             }
@@ -769,6 +773,242 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun groupSequenceIsCurrent(
+        token: Long,
+        sessionId: String,
+        binding: PersonaBindingSnapshot
+    ): Boolean = token == groupReplySequence &&
+        currentSessionId.value == sessionId &&
+        binding.matches(activeSession.value)
+
+    private fun showGroupReplyNotice(message: String) {
+        android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
+    }
+
+    private fun availableGroupCards(): List<CharacterCard> =
+        (characterCardList.value + listOfNotNull(boundPersona.value?.card))
+            .distinctBy { it.id.lowercase() }
+
+    /** Starts a frozen group turn after the user message has been durably merged. */
+    private fun startGroupReplySequence(
+        sessionId: String,
+        history: List<Message>,
+        group: TavernGroupChat,
+        plan: TavernGroupTurnPlan,
+        binding: PersonaBindingSnapshot,
+        turnId: String,
+        input: String
+    ) {
+        val token = ++groupReplySequence
+        if (plan.isAwaitingSpeakerSelection) {
+            startContextualGroupSelection(
+                token = token,
+                sessionId = sessionId,
+                history = history,
+                group = group,
+                plan = plan,
+                binding = binding,
+                turnId = turnId,
+                input = input
+            )
+            return
+        }
+        if (plan.speakers.isEmpty()) {
+            showGroupReplyNotice(
+                if (appLanguage.value == "en") {
+                    "No reply-capable group member is available for this turn."
+                } else {
+                    "本轮没有可回复的群成员。"
+                }
+            )
+            isThinking.value = false
+            isMcpRunning.value = false
+            return
+        }
+        val resolution = TavernGroupReplyCoordinator.resolve(
+            speakers = plan.speakers,
+            cards = availableGroupCards()
+        )
+        if (resolution.missingMemberNames.isNotEmpty()) {
+            val missing = resolution.missingMemberNames.joinToString(", ")
+            showGroupReplyNotice(
+                if (appLanguage.value == "en") {
+                    "These group members are not installed and will be skipped: $missing"
+                } else {
+                    "以下群成员未安装对应角色卡，将跳过：$missing"
+                }
+            )
+        }
+        startResolvedGroupSpeakers(
+            token = token,
+            sessionId = sessionId,
+            history = history,
+            group = group,
+            binding = binding,
+            targets = resolution.targets,
+            index = 0
+        )
+    }
+
+    private fun startContextualGroupSelection(
+        token: Long,
+        sessionId: String,
+        history: List<Message>,
+        group: TavernGroupChat,
+        plan: TavernGroupTurnPlan,
+        binding: PersonaBindingSnapshot,
+        turnId: String,
+        input: String
+    ) {
+        val selectionConfig = activeApiConfig.value
+        val selectionJob = viewModelScope.launch {
+            var queueStarted = false
+            try {
+                val transcript = history.takeLast(12).joinToString("\n") { message ->
+                    val speaker = when {
+                        message.sender == Sender.USER -> userName.value.ifBlank { "User" }
+                        !message.tavernName.isNullOrBlank() -> message.tavernName.orEmpty()
+                        else -> "Character"
+                    }
+                    "$speaker: ${message.content.take(1_200)}"
+                }
+                val selectionPrompt = buildString {
+                    append(plan.selectionPrompt.orEmpty())
+                    if (transcript.isNotBlank()) {
+                        append("\n\nRecent chat:\n")
+                        append(transcript)
+                    }
+                    append("\n\nReturn only the known character name(s), separated by commas.")
+                }.take(20_000)
+                val response = llmClient.sendChatCompletion(
+                    config = selectionConfig,
+                    systemPrompt = selectionPrompt,
+                    history = emptyList(),
+                    generation = GenerationPatch(maxOutputTokens = 64, temperature = 0.0)
+                )
+                if (!groupSequenceIsCurrent(token, sessionId, binding)) return@launch
+                val selectedMembers = if (response.isError) {
+                    emptyList()
+                } else {
+                    TavernGroupPlanner.resolveSelection(group, response.content)
+                }
+                val selectedPlan = if (selectedMembers.isNotEmpty()) {
+                    plan.copy(speakers = selectedMembers, selectionPrompt = null)
+                } else {
+                    showGroupReplyNotice(
+                        if (appLanguage.value == "en") {
+                            "Contextual speaker selection failed; using natural-chat fallback."
+                        } else {
+                            "上下文选角失败，将使用自然聊天回退策略。"
+                        }
+                    )
+                    TavernGroupReplyCoordinator.naturalFallback(group, turnId, input)
+                }
+                val resolution = TavernGroupReplyCoordinator.resolve(
+                    speakers = selectedPlan.speakers,
+                    cards = availableGroupCards()
+                )
+                if (resolution.missingMemberNames.isNotEmpty()) {
+                    val missing = resolution.missingMemberNames.joinToString(", ")
+                    showGroupReplyNotice(
+                        if (appLanguage.value == "en") {
+                            "These selected members are not installed and will be skipped: $missing"
+                        } else {
+                            "选中的群成员未安装对应角色卡，将跳过：$missing"
+                        }
+                    )
+                }
+                queueStarted = true
+                startResolvedGroupSpeakers(
+                    token = token,
+                    sessionId = sessionId,
+                    history = history,
+                    group = group,
+                    binding = binding,
+                    targets = resolution.targets,
+                    index = 0
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (t: Throwable) {
+                Log.e("ChatViewModel", "Tavern contextual speaker selection failed", t)
+                if (groupSequenceIsCurrent(token, sessionId, binding)) {
+                    showGroupReplyNotice(
+                        if (appLanguage.value == "en") {
+                            "Contextual speaker selection failed."
+                        } else {
+                            "上下文选角请求失败。"
+                        }
+                    )
+                }
+            } finally {
+                if (!queueStarted && groupSequenceIsCurrent(token, sessionId, binding)) {
+                    isThinking.value = false
+                    isMcpRunning.value = false
+                }
+            }
+        }
+        responseJob = selectionJob
+    }
+
+    private fun startResolvedGroupSpeakers(
+        token: Long,
+        sessionId: String,
+        history: List<Message>,
+        group: TavernGroupChat,
+        binding: PersonaBindingSnapshot,
+        targets: List<TavernGroupSpeakerTarget>,
+        index: Int
+    ) {
+        if (!groupSequenceIsCurrent(token, sessionId, binding)) return
+        if (index >= targets.size) {
+            isThinking.value = false
+            isMcpRunning.value = false
+            return
+        }
+        val target = targets[index]
+        val speakerRef = CharacterPersonaOwnership.refFor(target.card)
+        val runtimeLease = if (speakerRef.isNative) {
+            null
+        } else {
+            getApplication<LoyeaApplication>().acquirePersonaRuntime(speakerRef.ownerId)
+        }
+        if (!speakerRef.isNative && runtimeLease == null) {
+            showGroupReplyNotice(
+                if (appLanguage.value == "en") {
+                    "${target.member.name} is unavailable; continuing with the next member."
+                } else {
+                    "${target.member.name} 当前不可用，将继续下一位成员。"
+                }
+            )
+            startResolvedGroupSpeakers(token, sessionId, history, group, binding, targets, index + 1)
+            return
+        }
+        startAiResponseStream(
+            sessionId = sessionId,
+            history = history,
+            characterCard = target.card,
+            personaRef = speakerRef,
+            requestBinding = binding,
+            initialRuntimeLease = runtimeLease,
+            speakerDisplayName = target.member.name,
+            groupChatSnapshot = group,
+            onFinished = { completed ->
+                if (completed) {
+                    startResolvedGroupSpeakers(
+                        token = token,
+                        sessionId = sessionId,
+                        history = messages.value,
+                        group = group,
+                        binding = binding,
+                        targets = targets,
+                        index = index + 1
+                    )
+                }
+            }
+        )
+    }
+
     /** Exports the foreground session through the loss-aware Tavern JSONL adapter. */
     fun exportCurrentSessionTavernChat(): String {
         val persona = boundPersona.value ?: BoundCharacterPersona(
@@ -983,6 +1223,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             android.widget.Toast.makeText(context, "AI 正在回复中，请稍候或点击停止", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
+        // A new user turn invalidates any stale group callback that might still be queued.
+        groupReplySequence++
 
         val activePersona = boundPersona.value ?: run {
             showPersonaUnavailableMessage()
@@ -1009,17 +1251,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val activeCard = activePersona.card
-        val runtimeLease = if (activePersona.ref.isNative) {
-            null
-        } else {
-            getApplication<LoyeaApplication>().acquirePersonaRuntime(activePersona.ref.ownerId)
-        }
-        if (!activePersona.ref.isNative && runtimeLease == null) {
-            showPersonaUnavailableMessage()
-            return
-        }
-        isThinking.value = true
-        
         // 发送新消息时，主动折叠之前的历史 Thinking 过程
         val collapsedHistory = messages.value.map { msg ->
             if (msg.sender == Sender.AI && msg.isThoughtsExpanded) {
@@ -1034,12 +1265,30 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             content = inputText,
             sender = Sender.USER,
             characterId = activeCard.id,
+            tavernName = userName.value.takeIf(String::isNotBlank),
             imageUrl = imageUrl,
             audioUrl = audioUrl,
             audioDuration = audioDuration
         )
         val memoryMsgs = collapsedHistory + userMsg
-        
+
+        // Freeze group planning before persistence. Later roster edits must not change this turn.
+        val groupChat = activeSession.value
+            ?.takeIf { it.id == sessionId }
+            ?.tavernGroupChat()
+        val groupPlan = groupChat?.let { TavernGroupReplyCoordinator.plan(it, userMsg.id, inputText) }
+        val groupGenerationRequested = groupChat != null && groupPlan != null
+        val runtimeLease = if (groupGenerationRequested || activePersona.ref.isNative) {
+            null
+        } else {
+            getApplication<LoyeaApplication>().acquirePersonaRuntime(activePersona.ref.ownerId)
+        }
+        if (!groupGenerationRequested && !activePersona.ref.isNative && runtimeLease == null) {
+            showPersonaUnavailableMessage()
+            return
+        }
+        isThinking.value = true
+
         val leaseHandedToStream = java.util.concurrent.atomic.AtomicBoolean(false)
         val saveBeforeStreamJob = viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -1049,15 +1298,27 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     messages.value = finalMsgs
                     // 更新会话标题
                     updateSessionTitleIfNeeded(sessionId, finalMsgs)
-                    // SSE 流式接收；从点击开始持有的 lease 转交给完整请求生命周期。
-                    startAiResponseStream(
-                        sessionId = sessionId,
-                        history = finalMsgs,
-                        characterCard = activeCard,
-                        personaRef = activePersona.ref,
-                        requestBinding = binding,
-                        initialRuntimeLease = runtimeLease
-                    )
+                    if (groupGenerationRequested && groupChat != null && groupPlan != null) {
+                        startGroupReplySequence(
+                            sessionId = sessionId,
+                            history = finalMsgs,
+                            group = groupChat,
+                            plan = groupPlan,
+                            binding = binding,
+                            turnId = userMsg.id,
+                            input = inputText
+                        )
+                    } else {
+                        // SSE 流式接收；从点击开始持有的 lease 转交给完整请求生命周期。
+                        startAiResponseStream(
+                            sessionId = sessionId,
+                            history = finalMsgs,
+                            characterCard = activeCard,
+                            personaRef = activePersona.ref,
+                            requestBinding = binding,
+                            initialRuntimeLease = runtimeLease
+                        )
+                    }
                     leaseHandedToStream.set(true)
                 }
             } finally {
@@ -1520,9 +1781,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         impersonationPrompt: String = "",
         impersonate: Boolean = false,
         generationType: String = "normal",
-        continuationPrefix: String = ""
+        continuationPrefix: String = "",
+        speakerDisplayName: String? = null,
+        groupChatSnapshot: TavernGroupChat? = null,
+        onFinished: ((Boolean) -> Unit)? = null
     ) {
-        responseJob = viewModelScope.launch {
+        val responseCharacterName = speakerDisplayName?.trim()?.takeIf(String::isNotBlank)
+            ?: characterCard.nickname?.takeIf { it.isNotBlank() }
+            ?: characterCard.name
+        val streamJob = viewModelScope.launch {
             isThinking.value = true
             isMcpRunning.value = false
             
@@ -1544,7 +1811,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 isStillThinking = true,
                 isError = false,
                 isThoughtsExpanded = true,
-                isAudioSynthesizing = false
+                isAudioSynthesizing = false,
+                tavernName = responseCharacterName
             ) ?: Message(
                 id = aiMessageId,
                 content = "",
@@ -1553,6 +1821,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 isThoughtsExpanded = true,
                 thoughtDurationSeconds = 0,
                 isStillThinking = true,
+                tavernName = responseCharacterName,
                 characterId = characterCard.id
             )
             messages.value = if (continuationOf == null) {
@@ -1585,6 +1854,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             lateinit var preparedTurn: PreparedPersonaTurn
             var tavernRuntimeLease: PersonaRuntimeLease? = initialRuntimeLease
             var conversation = emptyList<LlmChatMessage>()
+            var completedNormally = false
 
             fun shouldPublishStreamUi(force: Boolean = false): Boolean {
                 val now = System.nanoTime()
@@ -1761,14 +2031,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val worldInfoPosition = if (worldInfoConfig.value.position == "top") "top" else "bottom"
             val userTurnIndex = history.count { it.sender == Sender.USER }.toLong()
             val frozenAuthorNote = activeTavernAuthorNote(characterCard, userTurnIndex)
-            val tavernGroupChat = activeSession.value
+            val tavernGroupChat = groupChatSnapshot ?: activeSession.value
                 ?.takeIf { it.id == sessionId }
                 ?.tavernGroupChat()
             val lastUserMessage = history.lastOrNull { it.sender == Sender.USER }
             val lastCharacterMessage = history.lastOrNull { it.sender == Sender.AI }
             val lastMessageIndex = history.lastIndex
             val macroContext = TavernMacroContext(
-                characterName = characterCard.nickname?.takeIf { it.isNotBlank() } ?: characterCard.name,
+                characterName = responseCharacterName,
                 description = characterCard.description.ifBlank { characterCard.shortIntro },
                 userName = userName.value,
                 personality = characterCard.personality,
@@ -1792,7 +2062,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 group = tavernGroupChat?.groupMacro(includeMuted = true).orEmpty(),
                 groupNotMuted = tavernGroupChat?.groupMacro().orEmpty(),
                 notCharacter = tavernGroupChat?.unmutedMembers
-                    ?.filterNot { it.name.equals(characterCard.name, ignoreCase = true) }
+                    ?.filterNot { it.name.equals(responseCharacterName, ignoreCase = true) }
                     ?.joinToString(", ") { it.name }
                     .orEmpty(),
                 // ST exposes chat message indices here, not Loyea's UUIDs.
@@ -1935,7 +2205,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 includeAudio = includeAudioInput,
                 includeNames = boundPreset?.includeNames ?: resolveWorldInfoBook(characterCard).config.includeNames,
                 userName = userName.value,
-                characterName = characterCard.nickname?.takeIf { it.isNotBlank() } ?: characterCard.name,
+                characterName = responseCharacterName,
                 compressedSummary = activeSession.value?.compressedSummary ?: "",
                 postHistoryInstructions = pluginPrompt.postHistoryText,
                 preparedTurn = preparedTurn,
@@ -2389,6 +2659,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         messages.value = currentList
                         if (!impersonate) saveMessagesAsync(sessionId, currentList, requestBinding)
                         checkAndTriggerMemorySummaryAsync(sessionId)
+                        completedNormally = true
                         break
                     }
                 }
@@ -2416,6 +2687,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     messages.value = currentList
                     if (!impersonate) saveMessagesAsync(sessionId, currentList, requestBinding)
+                    completedNormally = true
                 }
             } catch (t: Throwable) {
                 if (t is kotlinx.coroutines.CancellationException) throw t
@@ -2487,10 +2759,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     cacheMissTokens = accumulatedCacheMissTokens,
                     binding = requestBinding
                 )
+                runCatching { onFinished?.invoke(completedNormally) }
+                    .onFailure { callbackError ->
+                        Log.e("ChatViewModel", "Tavern group completion callback failed", callbackError)
+                    }
             }
         }
+        responseJob = streamJob
         // A scope cancelled before the coroutine body starts must still release the pre-acquired lease.
-        responseJob?.invokeOnCompletion { initialRuntimeLease?.close() }
+        streamJob.invokeOnCompletion { initialRuntimeLease?.close() }
     }
 
     private suspend fun prepareTavernPersonaTurn(
