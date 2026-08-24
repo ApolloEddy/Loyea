@@ -28,6 +28,8 @@ Prompt Manager 与宏运行时现在共享请求启动时冻结的 `TavernMacroC
 
 群聊核心已按 Tavo 当前公开语义提供 roster 与回合规划：自然聊天按 `@name` 优先、无提及时对未静音成员做稳定选择；全员回复返回全部未静音成员；指定发言者只接受显式/提及角色；上下文选角返回带 `{{group}}` 的冻结选择提示，并只接受模型返回的已知成员。成员 JSON 支持启用/静音、权重、指定发言者和策略别名。当前 Android 宿主还没有把群聊配置接入会话创建/成员面板与多请求循环，因此这一提交先闭合插件运行时契约，真实多角色 UI 验收仍是后续门禁。
 
+聊天文件核心现在按 SillyTavern 当前 `ChatHeader`/`ChatMessage` JSONL 形状读写：首行 `chat_metadata`、消息 `mes/is_user/is_system/send_date/swipes/swipe_id/extra` 和未知字段均可往返，Tavo/旧客户端常见别名也会归一化；坏行不会静默丢失，而是通过行号诊断返回。Branch 会复制到目标消息并切换到新文件，Checkpoint 会复制但留在当前文件，父文件分别回写 `extra.branches` 或 `extra.bookmark_link`，并通过 `main_chat` 建立返回父聊天的链接。Android 文件选择器、会话持久化和导入后的角色名匹配尚未接入，当前只闭合纯核心格式/分支契约。
+
 ## 当前模块与依赖方向
 
 ```text
@@ -91,6 +93,7 @@ Prompt Manager 与宏运行时现在共享请求启动时冻结的 `TavernMacroC
 - Preset prompt order、生成参数覆盖、角色卡资源绑定与 Regex 输入/输出链。
 - Prompt Manager generation trigger、in-chat/depth slot、Continue Nudge/Prefill/Postfix，以及请求级宏和只读变量读取。
 - 群聊 roster、成员静音、四种回复模式、上下文选角提示与安全的 speaker 结果解析。
+- 聊天 JSONL 首行元数据、消息/swipes/extra/未知字段往返，以及 Branch/Checkpoint 截断、父链和书签链接核心模型。
 - 流式回复、MCP 多轮、后台主动问候、长会话压缩、生图和记忆整理的插件租约接入。
 
 ## 尚未完成的物理拆分
