@@ -5,7 +5,11 @@ import com.loyea.context.core.*
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import java.time.Instant
+import java.time.format.DateTimeParseException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.Random
+import java.util.TimeZone
 
 /** SillyTavern Regex extension 的 placement 常量。 */
 object TavernRegexPlacement {
@@ -74,7 +78,15 @@ data class TavernMacroContext(
     val maxPrompt: String = "",
     val maxContextTokens: String = "",
     val maxResponseTokens: String = "",
-    val customMacros: Map<String, String> = emptyMap()
+    val customMacros: Map<String, String> = emptyMap(),
+    /** SillyTavern chat range, normally `0-<lastMessageId>`. */
+    val allChatRange: String = "",
+    /** Timestamp of the most recent user message for idleDuration. */
+    val lastUserMessageTimestampMillis: Long? = null,
+    /** Frozen request seed; prevents prompt output changing mid-request. */
+    val macroSeed: Long = 0L,
+    val isMobile: Boolean = true,
+    val extensionNames: Set<String> = emptySet()
 )
 
 /**
@@ -171,6 +183,9 @@ object TavernMacroEngine {
         "firstdisplayedmessageid" -> context.firstDisplayedMessageId
         "lastswipeid" -> context.lastSwipeId
         "currentswipeid" -> context.currentSwipeId
+        "allchatrange" -> context.allChatRange.ifBlank {
+            context.lastMessageId.takeIf { it.isNotBlank() }?.let { "0-$it" }.orEmpty()
+        }
         "summary" -> context.summary
         "input" -> context.input
         "original" -> context.original
@@ -181,6 +196,12 @@ object TavernMacroEngine {
         "isotime" -> formatTimestamp(context.timestampMillis, "HH:mm")
         "isodate" -> formatTimestamp(context.timestampMillis, "yyyy-MM-dd")
         "datetimeformat" -> formatTimestamp(context.timestampMillis, argument.ifBlank { "yyyy-MM-dd HH:mm:ss" })
+        "idleduration" -> formatDuration(
+            ((context.timestampMillis ?: System.currentTimeMillis()) -
+                (context.lastUserMessageTimestampMillis ?: context.timestampMillis
+                ?: System.currentTimeMillis())).coerceAtLeast(0L)
+        )
+        "timediff" -> formatTimeDifference(argument, context)
         "model" -> context.model
         "maxprompt" -> context.maxPrompt
         "maxcontexttokens" -> context.maxContextTokens
@@ -189,8 +210,11 @@ object TavernMacroEngine {
         "newline" -> "\n".repeat(argument.toIntOrNull()?.coerceIn(1, 64) ?: 1)
         "space" -> " ".repeat(argument.toIntOrNull()?.coerceIn(1, 64) ?: 1)
         "noop" -> ""
-        "trim" -> ""
+        "trim" -> argument.trim()
         "reverse" -> argument.reversed()
+        "random" -> selectRandom(argument, context, stable = false)
+        "pick" -> selectRandom(argument, context, stable = true)
+        "roll" -> rollDice(argument, context)
         "outlet" -> context.outlets.entries
             .firstOrNull { it.key.equals(argument, ignoreCase = true) }
             ?.value
@@ -199,7 +223,9 @@ object TavernMacroEngine {
         "getglobalvar" -> context.globalVariables[argument].orEmpty()
         "hasvar" -> (argument in context.localVariables).toString()
         "hasglobalvar" -> (argument in context.globalVariables).toString()
-        "ismobile" -> "true"
+        "ismobile" -> context.isMobile.toString()
+        "hasextension" -> context.extensionNames.any { it.equals(argument, ignoreCase = true) }.toString()
+        "systemprompt", "defaultsystemprompt" -> context.charPrompt
         "banned" -> ""
         else -> null
         }
@@ -218,20 +244,110 @@ object TavernMacroEngine {
 
     private fun isTruthy(value: String): Boolean = value.trim().lowercase() !in setOf("", "false", "0", "off", "no", "null")
 
-    private fun formatTimestamp(timestampMillis: Long?, pattern: String): String = runCatching {
-        java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault()).format(
-            java.util.Date(timestampMillis ?: System.currentTimeMillis())
-        )
+    private fun formatTimestamp(
+        timestampMillis: Long?,
+        pattern: String,
+        timeZone: TimeZone = TimeZone.getDefault()
+    ): String = runCatching {
+        java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault()).apply {
+            this.timeZone = timeZone
+        }.format(java.util.Date(timestampMillis ?: System.currentTimeMillis()))
     }.getOrDefault("")
 
     private fun formatTime(timestampMillis: Long?, argument: String): String {
-        val pattern = if (argument.startsWith("UTC", ignoreCase = true)) "HH:mm:ss z" else "HH:mm:ss"
-        return formatTimestamp(timestampMillis, pattern)
+        val normalized = argument.trim()
+        val pattern = if (normalized.startsWith("UTC", ignoreCase = true)) "HH:mm:ss z" else "HH:mm:ss"
+        return formatTimestamp(timestampMillis, pattern, timeZoneForUtcArgument(normalized) ?: TimeZone.getDefault())
     }
 
     private fun formatDate(timestampMillis: Long?): String = formatTimestamp(timestampMillis, "yyyy-MM-dd")
 
     private fun formatWeekday(timestampMillis: Long?): String = formatTimestamp(timestampMillis, "EEEE")
+
+    private fun timeZoneForUtcArgument(argument: String): TimeZone? {
+        if (argument.equals("UTC", ignoreCase = true)) return TimeZone.getTimeZone("UTC")
+        val match = Regex("^UTC([+-])(\\d{1,2})(?::?(\\d{2}))?$", RegexOption.IGNORE_CASE)
+            .matchEntire(argument) ?: return null
+        val sign = match.groupValues[1]
+        val hours = match.groupValues[2].toIntOrNull() ?: return null
+        val minutes = match.groupValues[3].ifBlank { "0" }.toIntOrNull() ?: return null
+        if (hours > 23 || minutes > 59) return null
+        return TimeZone.getTimeZone("GMT$sign%02d:%02d".format(hours, minutes))
+    }
+
+    private fun formatTimeDifference(argument: String, context: TavernMacroContext): String {
+        val parts = splitArguments(argument)
+        val now = context.timestampMillis ?: System.currentTimeMillis()
+        val left = parts.getOrNull(0)?.let(::parseTimestamp) ?: return ""
+        val right = parts.getOrNull(1)?.let(::parseTimestamp) ?: now
+        return formatDuration(kotlin.math.abs(left - right))
+    }
+
+    private fun parseTimestamp(value: String): Long? {
+        val normalized = value.trim()
+        normalized.toLongOrNull()?.let { numeric ->
+            return if (kotlin.math.abs(numeric) < 100_000_000_000L) numeric * 1_000L else numeric
+        }
+        return try {
+            Instant.parse(normalized).toEpochMilli()
+        } catch (_: DateTimeParseException) {
+            runCatching {
+                java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.ROOT).apply {
+                    timeZone = TimeZone.getDefault()
+                }.parse(normalized)?.time
+            }.getOrNull()
+        }
+    }
+
+    private fun formatDuration(milliseconds: Long): String {
+        var seconds = milliseconds / 1_000L
+        val days = seconds / 86_400L
+        seconds %= 86_400L
+        val hours = seconds / 3_600L
+        seconds %= 3_600L
+        val minutes = seconds / 60L
+        seconds %= 60L
+        return buildList {
+            if (days > 0) add("${days}d")
+            if (hours > 0 || isNotEmpty()) add("${hours}h")
+            if (minutes > 0 || isNotEmpty()) add("${minutes}m")
+            add("${seconds}s")
+        }.joinToString(" ")
+    }
+
+    private fun splitArguments(argument: String): List<String> = argument
+        .split("::")
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+
+    private fun selectRandom(argument: String, context: TavernMacroContext, stable: Boolean): String {
+        val choices = splitArguments(argument).ifEmpty {
+            argument.split(',').map(String::trim).filter(String::isNotEmpty)
+        }
+        if (choices.isEmpty()) return ""
+        val random = Random(macroSeed(context, argument, if (stable) "pick" else "random"))
+        return choices[random.nextInt(choices.size)]
+    }
+
+    private fun rollDice(argument: String, context: TavernMacroContext): String {
+        val match = Regex("(?i)^(\\d*)d(\\d+)([+-]\\d+)?$").matchEntire(argument.trim()) ?: return ""
+        val count = (match.groupValues[1].ifBlank { "1" }.toIntOrNull() ?: return "")
+            .coerceIn(1, 100)
+        val sides = (match.groupValues[2].toIntOrNull() ?: return "").coerceIn(1, 100_000)
+        val modifier = match.groupValues[3].toIntOrNull() ?: 0
+        val random = Random(macroSeed(context, argument, "roll"))
+        return (List(count) { random.nextInt(sides) + 1 }.sum() + modifier).toString()
+    }
+
+    private fun macroSeed(context: TavernMacroContext, argument: String, kind: String): Long {
+        val base = if (context.macroSeed != 0L) context.macroSeed else listOf(
+            context.characterName,
+            context.userName,
+            context.lastMessageId,
+            context.timestampMillis?.toString().orEmpty()
+        ).joinToString("\u0000").hashCode().toLong()
+        return base xor argument.hashCode().toLong() xor kind.hashCode().toLong()
+    }
 }
 
 /**

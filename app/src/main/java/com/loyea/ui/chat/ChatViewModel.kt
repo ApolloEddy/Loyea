@@ -1670,6 +1670,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val worldInfoPosition = if (worldInfoConfig.value.position == "top") "top" else "bottom"
             val userTurnIndex = history.count { it.sender == Sender.USER }.toLong()
             val frozenAuthorNote = activeTavernAuthorNote(characterCard, userTurnIndex)
+            val lastUserMessage = history.lastOrNull { it.sender == Sender.USER }
+            val lastCharacterMessage = history.lastOrNull { it.sender == Sender.AI }
+            val lastMessageIndex = history.lastIndex
             val macroContext = TavernMacroContext(
                 characterName = characterCard.nickname?.takeIf { it.isNotBlank() } ?: characterCard.name,
                 description = characterCard.description.ifBlank { characterCard.shortIntro },
@@ -1692,13 +1695,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 authorNote = frozenAuthorNote?.text.orEmpty(),
                 timestampMillis = snapshotTime,
                 alternateGreetings = characterCard.alternateGreetings,
-                lastMessageId = history.lastOrNull()?.id.orEmpty(),
-                firstIncludedMessageId = history.firstOrNull()?.id.orEmpty(),
-                firstDisplayedMessageId = history.firstOrNull()?.id.orEmpty(),
+                // ST exposes chat message indices here, not Loyea's UUIDs.
+                lastMessageId = lastMessageIndex.takeIf { it >= 0 }?.toString().orEmpty(),
+                firstIncludedMessageId = history.indices.firstOrNull()?.toString().orEmpty(),
+                firstDisplayedMessageId = history.indices.firstOrNull()?.toString().orEmpty(),
+                lastSwipeId = lastCharacterMessage?.versions?.size
+                    ?.takeIf { it > 0 }?.toString().orEmpty(),
+                currentSwipeId = lastCharacterMessage?.versions
+                    ?.takeIf { it.isNotEmpty() }
+                    ?.let { (lastCharacterMessage.activeVersionIndex.coerceIn(0, it.lastIndex) + 1).toString() }
+                    .orEmpty(),
                 summary = activeSession.value?.compressedSummary.orEmpty(),
                 model = apiConfig.modelName,
                 maxContextTokens = boundPreset?.maxContext?.toString().orEmpty(),
-                maxResponseTokens = boundPreset?.maxTokens?.toString().orEmpty()
+                maxResponseTokens = boundPreset?.maxTokens?.toString().orEmpty(),
+                allChatRange = lastMessageIndex.takeIf { it >= 0 }?.let { "0-$it" }.orEmpty(),
+                lastUserMessageTimestampMillis = lastUserMessage?.timestamp,
+                macroSeed = requestId.hashCode().toLong()
             )
             val worldInfoRender = if (needsTurnSnapshot || worldInfoPosition == "top") {
                 buildWorldInfoRender(history, characterCard, generationType, macroContext)

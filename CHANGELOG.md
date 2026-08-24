@@ -31,6 +31,7 @@ All notable changes to this project will be documented in this file.
 ### Changed (变更)
 - **Include Names、outlet 与 Author’s Note 运行语义**：World Info 默认按 SillyTavern 规则把用户/角色名称加入扫描缓冲；聊天上下文可按 preset 或世界书配置写入名称前缀。`{{outlet::Name}}` 现在只展开被提示词引用的命名 outlet，不再把全部 outlet 作为隐藏上下文追加。会话级 Author’s Note 支持 `After Scenario`/`In-chat`、深度和按用户回合计数的频率（`0` 禁用、`1` 每回合）；请求启动时冻结文本与注入参数，编辑面板限制文本/数值输入并防止重复保存。
 - **请求级宏与 Prompt Manager 运行语义**：系统提示、preset slot、World Info Regex 和输出 Regex 现在共享同一份冻结 `TavernMacroContext`；补齐角色/历史尾部/生成类型/时间/legacy 标记/条件块/只读变量宏，未知或写入类脚本保持安全边界。Preset slot 按 `normal/continue/impersonate/swipe/regenerate/quiet` trigger 过滤，支持 relative 与 in-chat/depth；Continue Nudge、Continue Prefill 和 Continue Postfix 进入真实 provider 消息序列。
+- **当前 SillyTavern 只读宏补齐**：冻结请求上下文新增 `allChatRange`、最近用户消息时间、swipe 索引、扩展名和移动端状态；宏引擎补齐 `idleDuration`、`timeDiff`、UTC 偏移、`random/pick/roll`、`trim`、`hasExtension` 等安全子集。随机与掷骰使用请求级种子，保证一次请求内 Prompt/Regex 重算不会漂移；`setvar/addvar/inc/dec` 等写入宏仍保持字面量，不执行宿主副作用。
 - **群聊成员与回复策略核心**：新增纯 JVM 的群聊 roster/静音/启用状态、自然聊天、全员回复、指定发言者和上下文选角规划器；`{{group}}`/`{{groupNotMuted}}` 与输出 Regex 共用冻结成员快照，Tavo 群聊 JSON 可读写并拒绝未知/静音成员成为发言者。
 - **SillyTavern/Tavo 聊天 JSONL 与分支核心**：新增当前 `ChatHeader`/`ChatMessage` JSONL 的容错解析与标准导出，保留 swipes、`extra`、时间字段和未识别直字段；损坏行返回带行号诊断。新增 Branch/Checkpoint 纯核心规划器，按消息截断复制并写入 `main_chat`，同时维护 `extra.branches`/`extra.bookmark_link`，支持选择指定 swipe。
 - **Continue/Swipe 生成入口**：新增最后一条 AI 回复的 Continue 与 Swipe 操作。Continue 保留原 AI 消息 ID、把原文放回 provider 上下文并将新流式文本追加到同一气泡；Swipe 使用独立的 `swipe` 生成类型并复用版本归并，继续让 World Info 的生成类型过滤看到真实请求。插件暂不把 impersonate 伪装成普通回复。
