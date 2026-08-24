@@ -32,6 +32,13 @@ data class TavernRegexScript(
     val rawJson: String? = null
 )
 
+/** Immutable macro values captured when a Tavern request starts. */
+data class TavernMacroContext(
+    val characterName: String = "Char",
+    val description: String = "",
+    val userName: String = "User"
+)
+
 /**
  * 受控的 Regex find/replace 引擎。
  *
@@ -47,28 +54,6 @@ object TavernRegexEngine {
     private val compiledRegexCache = ConcurrentHashMap<String, Regex>()
     private val invalidRegexCache = ConcurrentHashMap.newKeySet<String>()
     private val groupPattern = Regex("\\$(\\d+)|\\$<([^>]+)>")
-
-    fun fromCard(card: CharacterCard): List<TavernRegexScript> {
-        parseScripts(card.extensionsJson).takeIf { it.isNotEmpty() }?.let { return it }
-        val roots = buildList {
-            runCatching { JsonParser.parseString(card.extensionsJson) }
-                .getOrNull()?.takeIf { it.isJsonObject }?.let { add(it) }
-            runCatching { JsonParser.parseString(card.originalCardJson.orEmpty()) }
-                .getOrNull()?.takeIf { it.isJsonObject }?.let { rawRoot ->
-                    add(rawRoot)
-                    rawRoot.asJsonObject["data"]?.takeIf { it.isJsonObject }?.let(::add)
-                    rawRoot.asJsonObject["data"]?.takeIf { it.isJsonObject }?.asJsonObject
-                        ?.get("extensions")?.takeIf { it.isJsonObject }?.let(::add)
-                }
-        }.distinctBy { it.toString() }
-        val keys = setOf("regex_scripts", "regexScripts", "regex_collection", "regexCollection", "regex")
-            .map { normalizeKey(it) }.toSet()
-        roots.asSequence()
-            .mapNotNull { findEmbeddedScripts(it, keys) }
-            .firstOrNull { it.isNotEmpty() }
-            ?.let { return it }
-        return emptyList()
-    }
 
     fun parseScripts(extensionsJson: String): List<TavernRegexScript> {
         val root = runCatching { JsonParser.parseString(extensionsJson) }.getOrNull() ?: return emptyList()
@@ -102,8 +87,7 @@ object TavernRegexEngine {
         text: String,
         scripts: List<TavernRegexScript>,
         placement: Int,
-        card: CharacterCard? = null,
-        userName: String = "User",
+        context: TavernMacroContext = TavernMacroContext(),
         depth: Int? = null,
         isMarkdown: Boolean = false,
         isPrompt: Boolean = false,
@@ -124,7 +108,7 @@ object TavernRegexEngine {
             }
             if (!stageAllowed) return@forEach
             if (!withinDepth(script, depth)) return@forEach
-            result = applyOne(result, script, card, userName)
+            result = applyOne(result, script, context)
         }
         return result
     }
@@ -133,8 +117,7 @@ object TavernRegexEngine {
     fun applyOutput(
         text: String,
         scripts: List<TavernRegexScript>,
-        card: CharacterCard,
-        userName: String,
+        context: TavernMacroContext,
         depth: Int? = null,
         isMarkdown: Boolean = true,
         isEdit: Boolean = false
@@ -145,8 +128,7 @@ object TavernRegexEngine {
             text = text,
             scripts = aiOutputScripts,
             placement = TavernRegexPlacement.AI_OUTPUT,
-            card = card,
-            userName = userName,
+            context = context,
             depth = depth,
             isMarkdown = false,
             isEdit = isEdit
@@ -155,8 +137,7 @@ object TavernRegexEngine {
             text = afterAiOutput,
             scripts = displayScripts,
             placement = TavernRegexPlacement.DISPLAY,
-            card = card,
-            userName = userName,
+            context = context,
             depth = depth,
             isMarkdown = isMarkdown,
             isEdit = isEdit
@@ -167,8 +148,7 @@ object TavernRegexEngine {
     fun applyToWorldInfoRender(
         render: WorldInfoMatcher.WorldInfoRenderResult,
         scripts: List<TavernRegexScript>,
-        card: CharacterCard,
-        userName: String
+        context: TavernMacroContext
     ): WorldInfoMatcher.WorldInfoRenderResult {
         if (scripts.isEmpty()) return render
         fun transform(value: String?): String? = value?.let {
@@ -176,8 +156,7 @@ object TavernRegexEngine {
                 text = it,
                 scripts = scripts,
                 placement = TavernRegexPlacement.WORLD_INFO,
-                card = card,
-                userName = userName,
+                context = context,
                 isPrompt = true
             )
         }
@@ -195,8 +174,7 @@ object TavernRegexEngine {
                     text = value,
                     scripts = scripts,
                     placement = TavernRegexPlacement.WORLD_INFO,
-                    card = card,
-                    userName = userName,
+                    context = context,
                     isPrompt = true
                 )
             },
@@ -205,8 +183,7 @@ object TavernRegexEngine {
                     text = value,
                     scripts = scripts,
                     placement = TavernRegexPlacement.WORLD_INFO,
-                    card = card,
-                    userName = userName,
+                    context = context,
                     isPrompt = true
                 )
             },
@@ -217,8 +194,7 @@ object TavernRegexEngine {
                             text = block.content,
                             scripts = scripts,
                             placement = TavernRegexPlacement.WORLD_INFO,
-                            card = card,
-                            userName = userName,
+                            context = context,
                             isPrompt = true
                         )
                     )
@@ -230,10 +206,9 @@ object TavernRegexEngine {
     private fun applyOne(
         input: String,
         script: TavernRegexScript,
-        card: CharacterCard?,
-        userName: String
+        context: TavernMacroContext
     ): String {
-        val regexSource = substituteMacros(script.findRegex, script.substituteRegex, card, userName)
+        val regexSource = substituteMacros(script.findRegex, script.substituteRegex, context)
         if (regexSource.length > MAX_PATTERN_LENGTH) return input
         val parsed = parseRegexSource(regexSource) ?: return input
         val cacheKey = parsed.body + "\u0000" + parsed.options.joinToString(",")
@@ -250,7 +225,7 @@ object TavernRegexEngine {
         }
         val replacement = { match: MatchResult ->
             val filteredMatch = script.trimStrings.fold(match.value) { value, trim -> value.replace(trim, "") }
-            expandReplacement(script.replaceString, match, filteredMatch, card, userName)
+            expandReplacement(script.replaceString, match, filteredMatch, context)
         }
         return if ('g' in parsed.flags) {
             regex.replace(input, replacement)
@@ -264,13 +239,12 @@ object TavernRegexEngine {
         template: String,
         match: MatchResult,
         filteredMatch: String,
-        card: CharacterCard?,
-        userName: String
+        context: TavernMacroContext
     ): String {
         var result = template
             .replace("{{match}}", filteredMatch, ignoreCase = true)
-            .replace("{{char}}", card?.nickname?.takeIf { it.isNotBlank() } ?: card?.name ?: "Char", ignoreCase = true)
-            .replace("{{user}}", userName.ifBlank { "User" }, ignoreCase = true)
+            .replace("{{char}}", context.characterName.ifBlank { "Char" }, ignoreCase = true)
+            .replace("{{user}}", context.userName.ifBlank { "User" }, ignoreCase = true)
         return groupPattern.replace(result) { group ->
             val index = group.groups[1]?.value?.toIntOrNull()
             val name = group.groups[2]?.value
@@ -286,13 +260,12 @@ object TavernRegexEngine {
     private fun substituteMacros(
         value: String,
         mode: Int,
-        card: CharacterCard?,
-        userName: String
+        context: TavernMacroContext
     ): String {
         if (mode == SUBSTITUTE_NONE) return value
-        val charName = card?.nickname?.takeIf { it.isNotBlank() } ?: card?.name ?: "Char"
-        val safeUser = userName.ifBlank { "User" }
-        val description = card?.description.ifNullOrBlank { card?.shortIntro.orEmpty() }
+        val charName = context.characterName.ifBlank { "Char" }
+        val safeUser = context.userName.ifBlank { "User" }
+        val description = context.description
         return if (mode == SUBSTITUTE_ESCAPED) {
             value
                 .replace("{{char}}", Regex.escape(charName), ignoreCase = true)
@@ -388,29 +361,4 @@ object TavernRegexEngine {
         )
     }
 
-    private fun findEmbeddedScripts(
-        element: com.google.gson.JsonElement,
-        keys: Set<String>
-    ): List<TavernRegexScript>? {
-        if (element.isJsonObject) {
-            element.asJsonObject.entrySet().forEach { (key, value) ->
-                if (normalizeKey(key) in keys) {
-                    parseScripts(value.toString()).takeIf { it.isNotEmpty() }?.let { return it }
-                }
-                findEmbeddedScripts(value, keys)?.let { return it }
-            }
-        } else if (element.isJsonArray) {
-            element.asJsonArray.forEach { child ->
-                findEmbeddedScripts(child, keys)?.let { return it }
-            }
-        }
-        return null
-    }
-
-    private fun normalizeKey(value: String): String = value
-        .filter(Char::isLetterOrDigit)
-        .lowercase()
-
-    private fun String?.ifNullOrBlank(fallback: () -> String): String =
-        if (this.isNullOrBlank()) fallback() else this
 }

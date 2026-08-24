@@ -79,6 +79,13 @@ class TavernPresetCodecTest {
         )
         requireNotNull(preset)
         assertEquals(1, preset.regexScripts.size)
-        assertEquals("bar", TavernRegexEngine.applyOutput("foo", preset.regexScripts, CharacterCard("c", "C", shortIntro = "", systemPrompt = ""), "U"))
+        assertEquals(
+            "bar",
+            TavernRegexEngine.applyOutput(
+                "foo",
+                preset.regexScripts,
+                TavernMacroContext(characterName = "C", userName = "U")
+            )
+        )
     }
 }

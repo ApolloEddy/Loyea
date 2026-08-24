@@ -1988,7 +1988,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             regexCacheCardId = card.id
             regexCacheExtensionsJson = card.extensionsJson
             regexCacheRegistryRevision = tavernResourceRegistry.value.revision
-            val inline = TavernRegexEngine.fromCard(card)
+            val inline = TavernCardRegexAdapter.scriptsFrom(card)
             val presetScripts = resolvePresetForCard(card)?.regexScripts.orEmpty()
             val external = TavernCardResourceBindings.regexCollectionNames(card)
                 .flatMap { binding ->
@@ -2554,8 +2554,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         return TavernRegexEngine.applyToWorldInfoRender(
             render = render,
             scripts = cardRegexScripts(activeCharacterCard.value),
-            card = activeCharacterCard.value,
-            userName = userName.value
+            context = TavernCardRegexAdapter.macroContext(activeCharacterCard.value, userName.value)
         )
     }
 

@@ -19,12 +19,7 @@ object LegacyTavernTurnAdapter {
         worldInfoAtDepth: Map<Int, List<WorldInfoMatcher.WorldInfoInjectionBlock>>,
         generation: GenerationPatch = GenerationPatch()
     ): PreparedPersonaTurn {
-        val frozenCard = card.copy(
-            alternateGreetings = card.alternateGreetings.toList(),
-            groupOnlyGreetings = card.groupOnlyGreetings.toList(),
-            tags = card.tags.toList(),
-            source = card.source.toList()
-        )
+        val frozenMacroContext = TavernCardRegexAdapter.macroContext(card, userName)
         val frozenScripts = regexScripts.map { script ->
             script.copy(
                 trimStrings = script.trimStrings.toList(),
@@ -82,8 +77,7 @@ object LegacyTavernTurnAdapter {
                     text = text,
                     scripts = frozenScripts,
                     placement = TavernRegexPlacement.USER_INPUT,
-                    card = frozenCard,
-                    userName = userName,
+                    context = frozenMacroContext,
                     depth = depth,
                     isMarkdown = isMarkdown,
                     isPrompt = true
@@ -91,8 +85,7 @@ object LegacyTavernTurnAdapter {
                 TextStage.MODEL_OUTPUT -> TavernRegexEngine.applyOutput(
                     text = text,
                     scripts = frozenScripts,
-                    card = frozenCard,
-                    userName = userName,
+                    context = frozenMacroContext,
                     depth = depth,
                     isMarkdown = isMarkdown
                 )
@@ -100,16 +93,14 @@ object LegacyTavernTurnAdapter {
                     text = text,
                     scripts = frozenScripts,
                     placement = TavernRegexPlacement.REASONING,
-                    card = frozenCard,
-                    userName = userName,
+                    context = frozenMacroContext,
                     depth = depth,
                     isMarkdown = isMarkdown
                 )
                 TextStage.GREETING -> TavernRegexEngine.applyOutput(
                     text = text,
                     scripts = frozenScripts,
-                    card = frozenCard,
-                    userName = userName,
+                    context = frozenMacroContext,
                     depth = depth,
                     isMarkdown = isMarkdown
                 )

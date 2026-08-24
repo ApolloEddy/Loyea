@@ -26,7 +26,7 @@ class TavernRegexEngineTest {
                 }
             """.trimIndent()
         )
-        val scripts = TavernRegexEngine.fromCard(card)
+        val scripts = TavernCardRegexAdapter.scriptsFrom(card)
         assertEquals(1, scripts.size)
         assertEquals(
             "**<speech>hello</speech>** and **<speech>bye</speech>**",
@@ -34,7 +34,7 @@ class TavernRegexEngineTest {
                 "<speech>hello</speech> and <speech>bye</speech>",
                 scripts,
                 TavernRegexPlacement.AI_OUTPUT,
-                card
+                TavernCardRegexAdapter.macroContext(card, "User")
             )
         )
     }
@@ -65,10 +65,11 @@ class TavernRegexEngineTest {
             """.trimIndent()
         )
         val card = CharacterCard("id", "A.B", shortIntro = "", systemPrompt = "")
-        assertEquals("A.B", TavernRegexEngine.apply("A.B", scripts, TavernRegexPlacement.AI_OUTPUT, card, depth = 0))
-        assertEquals("[A.B]", TavernRegexEngine.apply("A.B", scripts, TavernRegexPlacement.AI_OUTPUT, card, depth = 1))
-        assertEquals("[secret]", TavernRegexEngine.apply("secret", scripts, TavernRegexPlacement.WORLD_INFO, card))
-        assertTrue(TavernRegexEngine.apply("secret", scripts, TavernRegexPlacement.AI_OUTPUT, card) == "secret")
+        val context = TavernCardRegexAdapter.macroContext(card, "User")
+        assertEquals("A.B", TavernRegexEngine.apply("A.B", scripts, TavernRegexPlacement.AI_OUTPUT, context, depth = 0))
+        assertEquals("[A.B]", TavernRegexEngine.apply("A.B", scripts, TavernRegexPlacement.AI_OUTPUT, context, depth = 1))
+        assertEquals("[secret]", TavernRegexEngine.apply("secret", scripts, TavernRegexPlacement.WORLD_INFO, context))
+        assertTrue(TavernRegexEngine.apply("secret", scripts, TavernRegexPlacement.AI_OUTPUT, context) == "secret")
     }
 
     @Test
@@ -76,12 +77,12 @@ class TavernRegexEngineTest {
         val scripts = TavernRegexEngine.parseScripts(
             """[{"id":"reason","findRegex":"/secret/g","replaceString":"[redacted]","placement":[6]}]"""
         )
-        val card = CharacterCard("id", "A", shortIntro = "", systemPrompt = "")
+        val context = TavernMacroContext(characterName = "A")
         assertEquals("[redacted]", TavernRegexEngine.apply(
-            "secret", scripts, TavernRegexPlacement.REASONING, card
+            "secret", scripts, TavernRegexPlacement.REASONING, context
         ))
         assertEquals("secret", TavernRegexEngine.apply(
-            "secret", scripts, TavernRegexPlacement.AI_OUTPUT, card
+            "secret", scripts, TavernRegexPlacement.AI_OUTPUT, context
         ))
     }
 
@@ -90,14 +91,13 @@ class TavernRegexEngineTest {
         val scripts = TavernRegexEngine.parseScripts(
             """[{"id":"world","findRegex":"/secret/g","replaceString":"[redacted]","placement":[5]}]"""
         )
-        val card = CharacterCard("id", "A", shortIntro = "", systemPrompt = "")
         assertEquals(
             "[redacted]",
             TavernRegexEngine.apply(
                 "secret",
                 scripts,
                 TavernRegexPlacement.WORLD_INFO,
-                card,
+                TavernMacroContext(characterName = "A"),
                 isPrompt = true
             )
         )
