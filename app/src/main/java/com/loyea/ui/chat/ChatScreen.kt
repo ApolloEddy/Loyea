@@ -11,6 +11,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -376,6 +378,9 @@ fun ChatScreen(
                             }
                         },
                         onRegenerate = { viewModel?.regenerateLastReply() },
+                        onSwipe = { viewModel?.swipeLastReply() },
+                        onContinue = { viewModel?.continueLastReply() },
+                        canContinue = message.id == messages.lastOrNull()?.id && message.sender == Sender.AI,
                         onSwitchVersion = { delta -> viewModel?.switchMessageVersion(message.id, delta) }
                     )
                 }
@@ -1263,6 +1268,9 @@ fun MessageItem(
     onImageClick: (String) -> Unit,
     onTranscribe: (Message) -> Unit,
     onRegenerate: () -> Unit = {},
+    onSwipe: () -> Unit = {},
+    onContinue: () -> Unit = {},
+    canContinue: Boolean = false,
     onSwitchVersion: (Int) -> Unit = {}
 ) {
     val isUser = message.sender == Sender.USER
@@ -1910,7 +1918,9 @@ fun MessageItem(
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(start = 2.dp)
+                        modifier = Modifier
+                            .padding(start = 2.dp)
+                            .horizontalScroll(rememberScrollState())
                     ) {
                         val iconColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
 
@@ -1991,6 +2001,24 @@ fun MessageItem(
                                 tint = iconColor,
                                 modifier = Modifier.size(16.dp)
                             )
+                        }
+                        if (canContinue) {
+                            IconButton(onClick = onContinue, modifier = Modifier.size(28.dp)) {
+                                Icon(
+                                    imageVector = Icons.Default.PlayArrow,
+                                    contentDescription = if (appLanguage == "en") "Continue" else "继续生成",
+                                    tint = iconColor,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            IconButton(onClick = onSwipe, modifier = Modifier.size(28.dp)) {
+                                Icon(
+                                    imageVector = Icons.Default.SwapHoriz,
+                                    contentDescription = if (appLanguage == "en") "Swipe" else "切换回复",
+                                    tint = iconColor,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
                         }
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(

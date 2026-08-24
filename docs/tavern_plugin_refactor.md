@@ -20,7 +20,7 @@
 
 本阶段以 [SillyTavern World Info](https://docs.sillytavern.app/usage/core-concepts/worldinfo/)、[SillyTavern Macros](https://docs.sillytavern.app/usage/core-concepts/macros/)、[SillyTavern Group Chats](https://docs.sillytavern.app/usage/core-concepts/groupchats/)、[Tavo Chat](https://docs.tavoai.dev/en/guides/chat/) 和 [Tavo Group Chat](https://docs.tavoai.dev/en/guides/chat/group-chat/) 的当前公开语义为对照基线；每个后续兼容任务都必须绑定输入 fixture、请求快照和持久化回读断言。
 
-生成类型已经从普通发送、重新生成和后台 quiet 入口贯通到插件输入与暂存回合；准备阶段会拒绝 spec 与 input 类型不一致的请求。继续、代发、swipe 等 UI/请求入口尚未存在，必须在对应入口落地后再宣称完整支持。
+生成类型已经从普通发送、重新生成、Continue、Swipe 和后台 quiet 入口贯通到插件输入与暂存回合；准备阶段会拒绝 spec 与 input 类型不一致的请求。Continue 会追加到当前 AI 消息，Swipe 会生成并保存新的回复版本。impersonate（代发）入口尚未存在，必须在独立的用户角色/发送语义落地后再宣称完整支持。
 
 World Info 的 Include Names 已同时影响扫描缓冲和聊天消息前缀，preset 可覆盖默认策略；命名 outlet 通过 `{{outlet::Name}}` 按引用展开。Author’s Note 已支持会话级独立文本、`After Scenario`/`In-chat`、深度和频率，按用户输入回合计数并在请求启动时冻结；默认空文本不注入，频率为 `0` 时禁用，不能用 CharacterBook 的 `an_top/an_bottom` 条目冒充。
 

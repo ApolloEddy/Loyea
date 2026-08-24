@@ -981,6 +981,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      * 失败/中断时由 applyRegenerateVersions 恢复旧回复，保证用户不丢失已有答案。
      */
     fun regenerateLastReply() {
+        regenerateLastReplyWithType("regenerate")
+    }
+
+    /** SillyTavern swipe: generate an alternative for the current last AI reply. */
+    fun swipeLastReply() {
+        regenerateLastReplyWithType("swipe")
+    }
+
+    private fun regenerateLastReplyWithType(generationType: String) {
         if (responseJob?.isActive == true) {
             android.widget.Toast.makeText(context, "AI 正在回复中，请稍候或点击停止", android.widget.Toast.LENGTH_SHORT).show()
             return
@@ -1025,7 +1034,54 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             requestBinding = binding,
             initialRuntimeLease = runtimeLease,
             regenerateOf = lastAi,
-            generationType = "regenerate"
+            generationType = generationType
+        )
+    }
+
+    /**
+     * SillyTavern/Tavo Continue: keep the current AI message as context and append a new
+     * streamed continuation to that same message instead of creating a second bubble.
+     */
+    fun continueLastReply() {
+        if (responseJob?.isActive == true) {
+            android.widget.Toast.makeText(context, "AI 正在回复中，请稍候或点击停止", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        val current = messages.value
+        val lastAi = current.lastOrNull()
+        if (lastAi == null || lastAi.sender != Sender.AI) return
+        if (lastAi.isStillThinking || (lastAi.content.isBlank() && lastAi.contentSegments.isEmpty())) return
+
+        val sessionId = currentSessionId.value
+        val activePersona = boundPersona.value ?: run {
+            showPersonaUnavailableMessage()
+            return
+        }
+        val binding = activeSession.value?.let(PersonaBindingSnapshot::capture)
+            ?.takeIf { it.sessionId == sessionId && it.ref == activePersona.ref }
+            ?: run {
+                showPersonaUnavailableMessage()
+                return
+            }
+        val runtimeLease = if (activePersona.ref.isNative) {
+            null
+        } else {
+            getApplication<LoyeaApplication>().acquirePersonaRuntime(activePersona.ref.ownerId)
+        }
+        if (!activePersona.ref.isNative && runtimeLease == null) {
+            showPersonaUnavailableMessage()
+            return
+        }
+        isThinking.value = true
+        startAiResponseStream(
+            sessionId = sessionId,
+            history = current,
+            characterCard = activePersona.card,
+            personaRef = activePersona.ref,
+            requestBinding = binding,
+            initialRuntimeLease = runtimeLease,
+            continuationOf = lastAi,
+            generationType = "continue"
         )
     }
 
@@ -1308,13 +1364,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         requestBinding: PersonaBindingSnapshot,
         initialRuntimeLease: PersonaRuntimeLease?,
         regenerateOf: Message? = null,
+        continuationOf: Message? = null,
         generationType: String = "normal"
     ) {
         responseJob = viewModelScope.launch {
             isThinking.value = true
             isMcpRunning.value = false
             
-            val aiMessageId = newMessageId()
+            val requestId = newMessageId()
+            val aiMessageId = continuationOf?.id ?: requestId
             val startTime = System.currentTimeMillis()
 
             // 1. 折叠历史中的思考
@@ -1327,7 +1385,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             // 2. 插入 AI 的占位气泡
-            val placeholderAiMsg = Message(
+            val placeholderAiMsg = continuationOf?.copy(
+                isStillThinking = true,
+                isError = false,
+                isThoughtsExpanded = true,
+                isAudioSynthesizing = false
+            ) ?: Message(
                 id = aiMessageId,
                 content = "",
                 sender = Sender.AI,
@@ -1337,11 +1400,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 isStillThinking = true,
                 characterId = characterCard.id
             )
-            messages.value = collapsedHistoryList + placeholderAiMsg
+            messages.value = if (continuationOf == null) {
+                collapsedHistoryList + placeholderAiMsg
+            } else {
+                collapsedHistoryList.map { message ->
+                    if (message.id == aiMessageId) placeholderAiMsg else message
+                }
+            }
 
             var currentList = messages.value
-            var accumulatedContent = ""
-            var accumulatedThoughts = ""
+            val continuationBaseContent = continuationOf?.content.orEmpty()
+            val continuationBaseThoughts = continuationOf?.thoughts.orEmpty()
+            var accumulatedContent = continuationBaseContent
+            var accumulatedThoughts = continuationBaseThoughts
             var calculatedDuration: Int? = null
 
             // —— Token 用量累计（跨 Agent 多轮，直到整条回复结束才统一落库）——
@@ -1371,8 +1442,30 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             // —— Agent 式多轮分段构建（仅新消息）——
             // segments：已提交的文本段 + 工具段；segmentCut：accumulatedContent 中当前文本段的起点。
             // 工具段在工具执行期间显式写入（此时无 Content 事件），文本段在 ToolCalls/收尾时提交。
-            val segments = mutableListOf<MessageContentSegment>()
-            var segmentCut = 0
+            val segments = mutableListOf<MessageContentSegment>().apply {
+                if (continuationOf != null) {
+                    if (continuationOf.contentSegments.isNotEmpty()) {
+                        addAll(continuationOf.contentSegments)
+                    } else if (continuationOf.content.isNotBlank()) {
+                        add(MessageContentSegment("text", text = continuationOf.content))
+                    }
+                }
+            }
+            var segmentCut = continuationBaseContent.length
+
+            fun resetAccumulatedToContinuationBase() {
+                accumulatedContent = continuationBaseContent
+                accumulatedThoughts = continuationBaseThoughts
+                segments.clear()
+                if (continuationOf != null) {
+                    if (continuationOf.contentSegments.isNotEmpty()) {
+                        segments.addAll(continuationOf.contentSegments)
+                    } else if (continuationOf.content.isNotBlank()) {
+                        segments.add(MessageContentSegment("text", text = continuationOf.content))
+                    }
+                }
+                segmentCut = continuationBaseContent.length
+            }
 
             fun tailText(): String {
                 // 镜像 Content 事件的半截 [haptic: 过滤，再收敛换行、去段首残留（思考块剥离）空行
@@ -1559,7 +1652,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     lease = checkNotNull(tavernRuntimeLease),
                     ref = personaRef,
                     sessionId = sessionId,
-                    requestId = aiMessageId,
+                    requestId = requestId,
                     history = history,
                     spec = tavernTurnSpec,
                     generationType = generationType
@@ -1746,10 +1839,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                         } else msg
                                     }
                                     messages.value = currentList
-                                    accumulatedContent = ""
-                                    accumulatedThoughts = ""
-                                    segments.clear()
-                                    segmentCut = 0
+                                    resetAccumulatedToContinuationBase()
                                 } else {
                                     // 流中断/出错时保留已生成的半截内容（附错误提示），不整体覆盖丢失，并落盘保存
                                     val partialContent = cleanFinalContent(accumulatedContent, preparedTurn)
@@ -2118,7 +2208,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     estimateTokens(conversation.joinToString("\n") { it.content ?: "" })
                 }
-                val completionTokens = if (hasRealUsage) accumulatedCompletionTokens else estimateTokens(accumulatedContent)
+                val completionText = if (continuationOf == null) {
+                    accumulatedContent
+                } else {
+                    accumulatedContent.removePrefix(continuationBaseContent)
+                }
+                val completionTokens = if (hasRealUsage) accumulatedCompletionTokens else estimateTokens(completionText)
                 persistSessionTokens(
                     sessionId,
                     promptTokens,
