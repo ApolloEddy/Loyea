@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -63,6 +64,9 @@ import androidx.compose.ui.layout.ContentScale
 import com.loyea.ui.chat.PromptAssembler
 import com.loyea.ui.chat.WorldInfoScope
 import com.loyea.plugins.tavern.core.TavernAuthorNote
+import com.loyea.plugins.tavern.core.TavernGroupChat
+import com.loyea.plugins.tavern.core.TavernGroupMember
+import com.loyea.plugins.tavern.core.TavernGroupReplyMode
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -112,6 +116,7 @@ fun ChatScreen(
     val listState = rememberLazyListState()
 
     val isEn = appLanguage == "en"
+    val activeGroupChat = viewModel?.activeSession?.value?.tavernGroupChat()
     val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     
     val coroutineScope = rememberCoroutineScope()
@@ -124,6 +129,7 @@ fun ChatScreen(
     var showPersonaSelector by remember { mutableStateOf(false) }
     var showWorldInfoEditor by remember { mutableStateOf(false) }
     var showAuthorNoteEditor by remember { mutableStateOf(false) }
+    var showGroupEditor by remember { mutableStateOf(false) }
     var pendingTavernExport by remember { mutableStateOf<String?>(null) }
     // 世界书编辑器覆盖层打开时，系统返回键关闭编辑器（顶栏返回箭头在 WorldInfoSettingsLayout 内）
     BackHandler(enabled = showWorldInfoEditor) { showWorldInfoEditor = false }
@@ -331,6 +337,18 @@ fun ChatScreen(
                                 imageVector = Icons.Default.FileOpen,
                                 contentDescription = if (isEn) "Import Tavern chat" else "导入 Tavern 聊天",
                                 tint = MaterialTheme.colorScheme.onBackground,
+                                modifier = Modifier.size(25.dp)
+                            )
+                        }
+                        IconButton(onClick = { showGroupEditor = true }) {
+                            Icon(
+                                imageVector = Icons.Default.Groups,
+                                contentDescription = if (isEn) "Group chat" else "群聊设置",
+                                tint = if (activeGroupChat != null) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onBackground
+                                },
                                 modifier = Modifier.size(25.dp)
                             )
                         }
@@ -875,6 +893,24 @@ fun ChatScreen(
                 }
             )
         }
+
+        if (showGroupEditor && viewModel != null) {
+            TavernGroupEditorDialog(
+                sessionId = currentSessionId,
+                currentGroup = activeGroupChat,
+                characterCards = characterCardList,
+                appLanguage = appLanguage,
+                onDismiss = { showGroupEditor = false },
+                onDisable = {
+                    viewModel.setSessionGroupChat(null)
+                    showGroupEditor = false
+                },
+                onSave = { group ->
+                    viewModel.setSessionGroupChat(group)
+                    showGroupEditor = false
+                }
+            )
+        }
     } // 闭合 Scaffold
     
     if (viewModel?.isRecording?.value == true) {
@@ -1004,6 +1040,272 @@ private fun AuthorNoteEditorDialog(
         dismissButton = {
             TextButton(enabled = !saving, onClick = onDismiss) {
                 Text(if (isEn) "Cancel" else "取消")
+            }
+        }
+    )
+}
+
+/**
+ * Small, session-scoped Tavern/Tavo roster editor.
+ *
+ * This intentionally edits only the frozen group configuration. The actual multi-speaker
+ * generation queue is a separate host concern, so saving here never starts a request by itself.
+ */
+@Composable
+private fun TavernGroupEditorDialog(
+    sessionId: String,
+    currentGroup: TavernGroupChat?,
+    characterCards: List<CharacterCard>,
+    appLanguage: String,
+    onDismiss: () -> Unit,
+    onDisable: () -> Unit,
+    onSave: (TavernGroupChat) -> Unit
+) {
+    val isEn = appLanguage == "en"
+    val cardKeys = remember(characterCards) { characterCards.map { it.id to it.name } }
+    val initialMembers = remember(sessionId, currentGroup?.id, currentGroup?.members, cardKeys) {
+        val existing = currentGroup?.members.orEmpty()
+        val existingIds = existing.map { it.id.lowercase() }.toSet()
+        val additions = characterCards.mapNotNull { card ->
+            val id = card.id.trim()
+            val name = card.name.trim()
+            if (id.isBlank() || name.isBlank() || id.lowercase() in existingIds) {
+                null
+            } else {
+                TavernGroupMember(id = id, name = name, personaId = id)
+            }
+        }
+        (existing + additions).distinctBy { it.id.lowercase() }
+    }
+    var groupName by remember(sessionId, currentGroup?.id) {
+        mutableStateOf(currentGroup?.name ?: if (isEn) "Group Chat" else "群聊")
+    }
+    var members by remember(sessionId, currentGroup?.id, initialMembers) {
+        mutableStateOf(initialMembers)
+    }
+    var mode by remember(sessionId, currentGroup?.id) {
+        mutableStateOf(currentGroup?.replyMode ?: TavernGroupReplyMode.NATURAL_CHAT)
+    }
+    var designatedSpeakerId by remember(sessionId, currentGroup?.id) {
+        mutableStateOf(currentGroup?.designatedSpeakerId)
+    }
+    var maxRepliesInput by remember(sessionId, currentGroup?.id) {
+        mutableStateOf((currentGroup?.maxReplies ?: 1).toString())
+    }
+    var contextualPrompt by remember(sessionId, currentGroup?.id) {
+        mutableStateOf(
+            currentGroup?.contextualSpeakerPrompt
+                ?: TavernGroupChat.DEFAULT_CONTEXTUAL_SPEAKER_PROMPT
+        )
+    }
+    var modeExpanded by remember { mutableStateOf(false) }
+    var designatedExpanded by remember { mutableStateOf(false) }
+
+    val enabledMembers = members.filter { it.enabled }
+    val selectedDesignated = enabledMembers.firstOrNull { it.id == designatedSpeakerId }
+    val maxReplies = maxRepliesInput.toIntOrNull()?.coerceIn(1, 20)
+    val canSave = groupName.isNotBlank() && enabledMembers.isNotEmpty() &&
+        maxReplies != null &&
+        (mode != TavernGroupReplyMode.DESIGNATED_SPEAKER || selectedDesignated != null)
+    val modeLabel: (TavernGroupReplyMode) -> String = { value ->
+        when (value) {
+            TavernGroupReplyMode.NATURAL_CHAT -> if (isEn) "Natural chat" else "自然聊天"
+            TavernGroupReplyMode.ALL_MEMBERS -> if (isEn) "All members reply" else "全员回复"
+            TavernGroupReplyMode.DESIGNATED_SPEAKER -> if (isEn) "Designated speaker" else "指定发言者"
+            TavernGroupReplyMode.CONTEXTUAL_SPEAKER -> if (isEn) "Contextual speaker" else "上下文选角"
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (isEn) "Group chat" else "群聊设置") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 560.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = if (isEn) {
+                        "Roster changes apply to this session. Muted members remain in {{group}} but do not receive automatic replies."
+                    } else {
+                        "成员配置只作用于当前会话。静音成员仍会出现在 {{group}}，但不会被自动选为回复者。"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = groupName,
+                    onValueChange = { groupName = it.take(120) },
+                    label = { Text(if (isEn) "Group name" else "群聊名称") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Box {
+                    OutlinedTextField(
+                        value = modeLabel(mode),
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text(if (isEn) "Reply mode" else "回复模式") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { modeExpanded = true }
+                    )
+                    DropdownMenu(
+                        expanded = modeExpanded,
+                        onDismissRequest = { modeExpanded = false }
+                    ) {
+                        TavernGroupReplyMode.values().forEach { candidate ->
+                            DropdownMenuItem(
+                                text = { Text(modeLabel(candidate)) },
+                                onClick = {
+                                    mode = candidate
+                                    modeExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+                if (mode == TavernGroupReplyMode.DESIGNATED_SPEAKER) {
+                    Box {
+                        OutlinedTextField(
+                            value = selectedDesignated?.name
+                                ?: if (isEn) "Choose a speaker" else "选择发言者",
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text(if (isEn) "Speaker" else "发言者") },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { designatedExpanded = true }
+                        )
+                        DropdownMenu(
+                            expanded = designatedExpanded,
+                            onDismissRequest = { designatedExpanded = false }
+                        ) {
+                            enabledMembers.forEach { candidate ->
+                                DropdownMenuItem(
+                                    text = { Text(candidate.name) },
+                                    onClick = {
+                                        designatedSpeakerId = candidate.id
+                                        designatedExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    value = maxRepliesInput,
+                    onValueChange = { maxRepliesInput = it.filter(Char::isDigit).take(2) },
+                    label = { Text(if (isEn) "Max replies per turn" else "每轮最多回复数") },
+                    supportingText = {
+                        Text(if (isEn) "1–20" else "范围：1–20")
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (mode == TavernGroupReplyMode.CONTEXTUAL_SPEAKER) {
+                    OutlinedTextField(
+                        value = contextualPrompt,
+                        onValueChange = { contextualPrompt = it.take(4_000) },
+                        label = { Text(if (isEn) "Speaker selection prompt" else "选角提示词") },
+                        minLines = 3,
+                        maxLines = 6,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                Text(
+                    text = if (isEn) "Members" else "成员",
+                    style = MaterialTheme.typography.titleSmall
+                )
+                if (members.isEmpty()) {
+                    Text(
+                        text = if (isEn) "No character cards are installed yet." else "尚未安装角色卡。",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    members.forEach { member ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = member.enabled,
+                                onCheckedChange = { checked ->
+                                    members = members.map {
+                                        if (it.id == member.id) it.copy(enabled = checked) else it
+                                    }
+                                    if (!checked && designatedSpeakerId == member.id) {
+                                        designatedSpeakerId = null
+                                    }
+                                }
+                            )
+                            Text(
+                                text = member.name,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 2
+                            )
+                            Switch(
+                                checked = member.muted,
+                                onCheckedChange = { muted ->
+                                    members = members.map {
+                                        if (it.id == member.id) it.copy(muted = muted) else it
+                                    }
+                                },
+                                enabled = member.enabled
+                            )
+                        }
+                    }
+                }
+                if (enabledMembers.isEmpty()) {
+                    Text(
+                        text = if (isEn) "Enable at least one member to save." else "至少启用一名成员后才能保存。",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                if (mode == TavernGroupReplyMode.DESIGNATED_SPEAKER && selectedDesignated == null) {
+                    Text(
+                        text = if (isEn) "Choose an enabled designated speaker." else "请选择一名已启用的指定发言者。",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = canSave,
+                onClick = {
+                    onSave(
+                        TavernGroupChat(
+                            id = currentGroup?.id ?: "group-${sessionId.ifBlank { "default" }}",
+                            name = groupName.trim(),
+                            members = members,
+                            replyMode = mode,
+                            designatedSpeakerId = designatedSpeakerId,
+                            contextualSpeakerPrompt = contextualPrompt.trim().ifBlank {
+                                TavernGroupChat.DEFAULT_CONTEXTUAL_SPEAKER_PROMPT
+                            },
+                            maxReplies = maxReplies ?: 1
+                        )
+                    )
+                }
+            ) { Text(if (isEn) "Save" else "保存") }
+        },
+        dismissButton = {
+            Row {
+                if (currentGroup != null) {
+                    TextButton(onClick = onDisable) {
+                        Text(if (isEn) "Disable" else "停用")
+                    }
+                }
+                TextButton(onClick = onDismiss) {
+                    Text(if (isEn) "Cancel" else "取消")
+                }
             }
         }
     )
