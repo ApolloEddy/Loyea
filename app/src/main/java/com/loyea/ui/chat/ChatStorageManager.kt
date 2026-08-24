@@ -65,7 +65,9 @@ data class ChatSession(
     val authorNoteDepth: Int = 4,
     val authorNoteFrequency: Int = 1,
     /** Optional serialized Tavo/SillyTavern group roster for this chat session. */
-    val groupChatJson: String? = null
+    val groupChatJson: String? = null,
+    /** Original one-line ST ChatHeader, retained so a JSONL re-export keeps chat metadata. */
+    val tavernChatHeaderJson: String? = null
 )
 
 fun ChatSession.tavernGroupChat(): TavernGroupChat? = groupChatJson
@@ -196,7 +198,8 @@ class ChatStorageManager internal constructor(
                     authorNotePosition = raw.authorNotePosition ?: "in_chat",
                     authorNoteDepth = raw.authorNoteDepth ?: 4,
                     authorNoteFrequency = raw.authorNoteFrequency ?: 1,
-                    groupChatJson = raw.groupChatJson?.takeIf(String::isNotBlank)
+                    groupChatJson = raw.groupChatJson?.takeIf(String::isNotBlank),
+                    tavernChatHeaderJson = raw.tavernChatHeaderJson?.takeIf(String::isNotBlank)
                 )
             }
             if (personaMigrationNeeded) {

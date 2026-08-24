@@ -34,6 +34,7 @@ All notable changes to this project will be documented in this file.
 - **当前 SillyTavern 只读宏补齐**：冻结请求上下文新增 `allChatRange`、最近用户消息时间、swipe 索引、扩展名和移动端状态；宏引擎补齐 `idleDuration`、`timeDiff`、UTC 偏移、`random/pick/roll`、`trim`、`hasExtension` 等安全子集。随机与掷骰使用请求级种子，保证一次请求内 Prompt/Regex 重算不会漂移；`setvar/addvar/inc/dec` 等写入宏仍保持字面量，不执行宿主副作用。
 - **群聊成员与回复策略核心**：新增纯 JVM 的群聊 roster/静音/启用状态、自然聊天、全员回复、指定发言者和上下文选角规划器；`{{group}}`/`{{groupNotMuted}}` 与输出 Regex 共用冻结成员快照，Tavo 群聊 JSON 可读写并拒绝未知/静音成员成为发言者。
 - **群聊会话快照接入**：会话元数据现在持久化 Tavo/SillyTavern roster；请求启动时一次解析并冻结成员、`{{group}}`/`{{groupNotMuted}}`/`{{notChar}}` 与群聊系统块，避免生成中途修改群成员造成提示词漂移。Android 成员面板和逐成员多请求循环仍未伪装成已完成。
+- **聊天 JSONL Android 桥接**：新增会话级导入/导出入口和 SAF 文件选择器；ST/Tavo header、角色名匹配、system 消息、swipes、`extra`、未知字段与时间戳进入本地会话，损坏行会阻止部分导入而不静默丢数据。未匹配角色会回退当前卡片并给出可见警告。
 - **SillyTavern/Tavo 聊天 JSONL 与分支核心**：新增当前 `ChatHeader`/`ChatMessage` JSONL 的容错解析与标准导出，保留 swipes、`extra`、时间字段和未识别直字段；损坏行返回带行号诊断。新增 Branch/Checkpoint 纯核心规划器，按消息截断复制并写入 `main_chat`，同时维护 `extra.branches`/`extra.bookmark_link`，支持选择指定 swipe。
 - **Continue/Swipe 生成入口**：新增最后一条 AI 回复的 Continue 与 Swipe 操作。Continue 保留原 AI 消息 ID、把原文放回 provider 上下文并将新流式文本追加到同一气泡；Swipe 使用独立的 `swipe` 生成类型并复用版本归并，继续让 World Info 的生成类型过滤看到真实请求。插件暂不把 impersonate 伪装成普通回复。
 - **Impersonate 代发草稿**：新增最后一条 AI 回复的代发入口，使用 `impersonate` 生成类型和一次性提示约束，让模型按用户身份生成文本并回填输入框；结果只有用户点击发送后才写入聊天，代发期间不执行 MCP 工具、自动 TTS 或标题副作用，失败不会留下伪造用户消息。

@@ -37,6 +37,15 @@ data class Message(
     val sender: Sender,
     val timestamp: Long = System.currentTimeMillis(),
 
+    // SillyTavern/Tavo chat-file provenance. These fields are UI-transparent but allow
+    // JSONL import/export to preserve author names, system roles, extra metadata and unknown
+    // source fields without changing the native message schema.
+    val tavernName: String? = null,
+    val tavernIsSystem: Boolean = false,
+    val tavernExtraJson: String? = null,
+    val tavernSwipeInfoJson: String? = null,
+    val tavernRawJson: String? = null,
+
     // AI 思考与 MCP 调用信息，提供默认值以向后兼容
     val thoughts: String? = null,
     val isThoughtsExpanded: Boolean = false,

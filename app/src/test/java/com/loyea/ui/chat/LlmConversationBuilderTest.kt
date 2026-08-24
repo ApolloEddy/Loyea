@@ -317,4 +317,26 @@ class LlmConversationBuilderTest {
         assertFalse(built.any { it.content?.contains("old old") == true })
         assertTrue(built.any { it.content == "latest" })
     }
+
+    @Test
+    fun importedTavernSystemMessageKeepsSystemProviderRoleAndName() {
+        val built = LlmConversationBuilder.build(
+            systemPrompt = null,
+            history = listOf(
+                Message(
+                    id = "system",
+                    content = "Follow the imported policy.",
+                    sender = Sender.AI,
+                    tavernName = "System",
+                    tavernIsSystem = true
+                )
+            ),
+            includeNames = true,
+            characterName = "Alice"
+        )
+
+        assertEquals(1, built.size)
+        assertEquals("system", built.single().role)
+        assertEquals("System: Follow the imported policy.", built.single().content)
+    }
 }

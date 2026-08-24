@@ -124,6 +124,7 @@ fun ChatScreen(
     var showPersonaSelector by remember { mutableStateOf(false) }
     var showWorldInfoEditor by remember { mutableStateOf(false) }
     var showAuthorNoteEditor by remember { mutableStateOf(false) }
+    var pendingTavernExport by remember { mutableStateOf<String?>(null) }
     // 世界书编辑器覆盖层打开时，系统返回键关闭编辑器（顶栏返回箭头在 WorldInfoSettingsLayout 内）
     BackHandler(enabled = showWorldInfoEditor) { showWorldInfoEditor = false }
     var lastSessionId by remember { mutableStateOf(currentSessionId) }
@@ -167,6 +168,72 @@ fun ChatScreen(
             inputText = TextFieldValue(generatedDraft)
             if (currentSessionId.isNotEmpty()) saveDraft(currentSessionId, generatedDraft)
             viewModel?.clearImpersonatedDraft()
+        }
+    }
+
+    val exportTavernChatLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/x-ndjson")
+    ) { uri ->
+        val payload = pendingTavernExport
+        pendingTavernExport = null
+        if (uri != null && payload != null) {
+            runCatching {
+                context.contentResolver.openOutputStream(uri)?.use { output ->
+                    output.write(payload.toByteArray(Charsets.UTF_8))
+                } ?: error("Unable to open export destination")
+            }.onSuccess {
+                Toast.makeText(
+                    context,
+                    if (isEn) "Chat exported" else "聊天已导出",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }.onFailure { failure ->
+                Toast.makeText(
+                    context,
+                    (if (isEn) "Export failed: " else "导出失败：") +
+                        (failure.localizedMessage ?: failure.javaClass.simpleName),
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
+    val importTavernChatLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null && viewModel != null) {
+            val payload = runCatching {
+                context.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+                    ?: error("Unable to open chat file")
+            }.getOrElse { failure ->
+                Toast.makeText(
+                    context,
+                    (if (isEn) "Import failed: " else "导入失败：") +
+                        (failure.localizedMessage ?: failure.javaClass.simpleName),
+                    Toast.LENGTH_LONG
+                ).show()
+                null
+            }
+            if (payload != null) {
+                viewModel.importTavernChatJsonl(payload) { result ->
+                    val fatal = result.issues.filter { it.fatal }
+                    val warningCount = result.issues.count { !it.fatal }
+                    val message = when {
+                        fatal.isNotEmpty() -> if (isEn) {
+                            "Import rejected: ${fatal.first().reason}"
+                        } else {
+                            "导入已拒绝：${fatal.first().reason}"
+                        }
+                        warningCount > 0 -> if (isEn) {
+                            "Chat imported with $warningCount warning(s)"
+                        } else {
+                            "聊天已导入，但有 $warningCount 条提示"
+                        }
+                        else -> if (isEn) "Chat imported" else "聊天已导入"
+                    }
+                    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                }
+            }
         }
     }
 
@@ -243,6 +310,31 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    if (viewModel != null) {
+                        IconButton(onClick = {
+                            pendingTavernExport = viewModel.exportCurrentSessionTavernChat()
+                            exportTavernChatLauncher.launch("loyea_chat_${currentSessionId.ifBlank { "export" }}.jsonl")
+                        }) {
+                            Icon(
+                                imageVector = Icons.Default.Save,
+                                contentDescription = if (isEn) "Export Tavern chat" else "导出 Tavern 聊天",
+                                tint = MaterialTheme.colorScheme.onBackground,
+                                modifier = Modifier.size(25.dp)
+                            )
+                        }
+                        IconButton(onClick = {
+                            importTavernChatLauncher.launch(
+                                arrayOf("application/json", "application/x-ndjson", "text/plain", "*/*")
+                            )
+                        }) {
+                            Icon(
+                                imageVector = Icons.Default.FileOpen,
+                                contentDescription = if (isEn) "Import Tavern chat" else "导入 Tavern 聊天",
+                                tint = MaterialTheme.colorScheme.onBackground,
+                                modifier = Modifier.size(25.dp)
+                            )
+                        }
+                    }
                     // 本会话世界书入口（每会话独立配置；未配置回退全局书）
                     IconButton(onClick = { showWorldInfoEditor = true }) {
                         Icon(

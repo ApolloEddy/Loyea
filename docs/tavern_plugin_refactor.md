@@ -28,7 +28,7 @@ Prompt Manager 与宏运行时现在共享请求启动时冻结的 `TavernMacroC
 
 群聊核心已按 Tavo 当前公开语义提供 roster 与回合规划：自然聊天按 `@name` 优先、无提及时对未静音成员做稳定选择；全员回复返回全部未静音成员；指定发言者按显式角色、配置的 designated speaker 或提及角色解析；上下文选角返回带 `{{group}}` 的冻结选择提示，并只接受模型返回的已知成员。成员 JSON 支持启用/静音、权重、指定发言者和策略别名。当前 Android 宿主已将 roster 写入会话元数据，并在每次请求启动时解析一次，统一供 `{{group}}`（包含静音成员）、`{{groupNotMuted}}`、`{{notChar}}`、群聊系统块和插件回合工厂消费；同一请求内后续编辑不会改变快照。Android 成员面板、角色卡选择和逐成员多请求循环尚未接入，真实多角色 UI 验收仍是后续门禁。
 
-聊天文件核心现在按 SillyTavern 当前 `ChatHeader`/`ChatMessage` JSONL 形状读写：首行 `chat_metadata`、消息 `mes/is_user/is_system/send_date/swipes/swipe_id/extra` 和未知字段均可往返，Tavo/旧客户端常见别名也会归一化；坏行不会静默丢失，而是通过行号诊断返回。Branch 会复制到目标消息并切换到新文件，Checkpoint 会复制但留在当前文件，父文件分别回写 `extra.branches` 或 `extra.bookmark_link`，并通过 `main_chat` 建立返回父聊天的链接。Android 文件选择器、会话持久化和导入后的角色名匹配尚未接入，当前只闭合纯核心格式/分支契约。
+聊天文件核心现在按 SillyTavern 当前 `ChatHeader`/`ChatMessage` JSONL 形状读写：首行 `chat_metadata`、消息 `mes/is_user/is_system/send_date/swipes/swipe_id/extra` 和未知字段均可往返，Tavo/旧客户端常见别名也会归一化；坏行不会静默丢失，而是通过行号诊断返回。Branch 会复制到目标消息并切换到新文件，Checkpoint 会复制但留在当前文件，父文件分别回写 `extra.branches` 或 `extra.bookmark_link`，并通过 `main_chat` 建立返回父聊天的链接。Android 宿主现已提供 SAF 导入/导出：system 角色以透明 provenance 字段保留并在 provider 序列化时使用 `system` role，swipes 映射为本地回复版本，原始 ChatHeader 写回会话元数据；导入会按 header 角色名精确匹配本地卡片，找不到时回退当前卡片并显示警告。Branch/Checkpoint 文件级操作、群聊历史 UI 和导入后的跨设备资源重绑定仍是后续门禁。
 
 ## 当前模块与依赖方向
 

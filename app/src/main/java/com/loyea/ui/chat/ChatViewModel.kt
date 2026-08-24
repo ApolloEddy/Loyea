@@ -769,6 +769,81 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Exports the foreground session through the loss-aware Tavern JSONL adapter. */
+    fun exportCurrentSessionTavernChat(): String {
+        val persona = boundPersona.value ?: BoundCharacterPersona(
+            PersonaRef.native(CharacterPersonaOwnership.defaultNativeCard().id),
+            CharacterPersonaOwnership.defaultNativeCard()
+        )
+        return TavernChatSessionCodec.exportJsonl(
+            messages = messages.value,
+            userName = userName.value,
+            characterName = persona.card.name,
+            headerRawJson = activeSession.value?.tavernChatHeaderJson
+        )
+    }
+
+    /**
+     * Imports a Tavern/SillyTavern JSONL chat as a new native session.
+     *
+     * Fatal parser diagnostics never commit partial data. If the header character name does not
+     * match an installed card, the chat still imports against the current persona and returns a
+     * non-fatal diagnostic so the UI can ask the user to select/restore the intended card.
+     */
+    fun importTavernChatJsonl(
+        jsonl: String,
+        onComplete: (TavernChatSessionImport) -> Unit = {}
+    ): kotlinx.coroutines.Job = viewModelScope.launch(Dispatchers.IO) {
+        val parsed = TavernChatSessionCodec.importJsonl(jsonl)
+        if (!parsed.isClean || parsed.messages.isEmpty()) {
+            withContext(Dispatchers.Main) { onComplete(parsed) }
+            return@launch
+        }
+
+        val headerName = parsed.header.characterName?.trim().orEmpty()
+        val matchedCard = characterCardList.value.firstOrNull { card ->
+            card.name.equals(headerName, ignoreCase = true) ||
+                card.nickname?.equals(headerName, ignoreCase = true) == true
+        }
+        val fallbackCard = boundPersona.value?.card ?: CharacterPersonaOwnership.defaultNativeCard()
+        val selectedCard = matchedCard ?: fallbackCard
+        val nameIssue = if (headerName.isNotBlank() && matchedCard == null) {
+            TavernChatSessionIssue(
+                reason = "character '$headerName' was not found; imported chat is bound to '${selectedCard.name}'",
+                fatal = false
+            )
+        } else {
+            null
+        }
+        val result = parsed.copy(
+            issues = parsed.issues + listOfNotNull(nameIssue)
+        )
+        val selectedRef = CharacterPersonaOwnership.refFor(selectedCard)
+        val sessionId = "tavern-${System.currentTimeMillis()}-${kotlin.math.abs(jsonl.hashCode())}"
+        val newSession = ChatSession(
+            id = sessionId,
+            title = headerName.takeIf(String::isNotBlank)?.let { "Imported · $it" }
+                ?: if (appLanguage.value == "en") "Imported Chat" else "导入会话",
+            lastActiveTime = System.currentTimeMillis(),
+            characterId = selectedRef.personaId,
+            personaOwnerId = selectedRef.ownerId.value,
+            tavernChatHeaderJson = parsed.header.rawJson
+        )
+        val updatedSessions = (listOf(newSession) + sessions.value)
+            .distinctBy { it.id }
+            .sortedByDescending { it.lastActiveTime }
+        val importedMessages = result.messages.map { message ->
+            message.copy(characterId = selectedCard.id)
+        }
+        storageManager.saveSessionList(updatedSessions)
+        storageManager.saveSessionMessages(sessionId, importedMessages)
+        withContext(Dispatchers.Main) {
+            sessions.value = updatedSessions
+            selectSession(sessionId)
+            onComplete(result)
+        }
+    }
+
     fun deleteSession(deleteId: String) {
         // 删除当前会话时立即停止其正在进行的流式回复，防止流继续写回已删除会话文件
         stopResponse()

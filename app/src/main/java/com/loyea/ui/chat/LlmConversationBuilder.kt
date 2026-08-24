@@ -108,15 +108,28 @@ object LlmConversationBuilder {
                     }
                 }
                 if (includeNames) {
-                    val fallback = if (message.sender == Sender.USER) "User" else "Character"
-                    append((if (message.sender == Sender.USER) userName else characterName).ifBlank { fallback })
+                    val fallback = when {
+                        message.tavernIsSystem -> "System"
+                        message.sender == Sender.USER -> "User"
+                        else -> "Character"
+                    }
+                    val displayName = when {
+                        !message.tavernName.isNullOrBlank() -> message.tavernName.orEmpty()
+                        message.sender == Sender.USER -> userName
+                        else -> characterName
+                    }
+                    append(displayName.ifBlank { fallback })
                     append(": ")
                 }
                 append(textContent)
             }
 
             LlmChatMessage(
-                role = if (message.sender == Sender.USER) "user" else "assistant",
+                role = when {
+                    message.tavernIsSystem -> "system"
+                    message.sender == Sender.USER -> "user"
+                    else -> "assistant"
+                },
                 content = providerContent,
                 imageUrl = effectiveImage,
                 audioUrl = effectiveAudio

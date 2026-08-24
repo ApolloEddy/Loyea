@@ -122,6 +122,16 @@ class ChatStorageManagerTest {
     }
 
     @Test
+    fun `Tavern chat header metadata survives session normalization`() = runBlocking {
+        val header = "{\"user_name\":\"Eddy\",\"character_name\":\"Alice\",\"chat_metadata\":{\"main_chat\":\"root\"}}"
+        storageManager.saveSessionList(
+            listOf(ChatSession("jsonl", "JSONL", tavernChatHeaderJson = header))
+        )
+
+        assertEquals(header, storageManager.loadSessionList().single().tavernChatHeaderJson)
+    }
+
+    @Test
     fun `legacy session persona owners migrate once and persist`() = runBlocking {
         val sessionsFile = File(tempFolder.root, "files/sessions_metadata.json")
         val legacyJson = """
