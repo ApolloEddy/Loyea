@@ -24,6 +24,8 @@
 
 World Info 的 Include Names 已同时影响扫描缓冲和聊天消息前缀，preset 可覆盖默认策略；命名 outlet 通过 `{{outlet::Name}}` 按引用展开。Author’s Note 已支持会话级独立文本、`After Scenario`/`In-chat`、深度和频率，按用户输入回合计数并在请求启动时冻结；默认空文本不注入，频率为 `0` 时禁用，不能用 CharacterBook 的 `an_top/an_bottom` 条目冒充。
 
+Prompt Manager 与宏运行时现在共享请求启动时冻结的 `TavernMacroContext`：角色卡字段、历史最后消息、当前输入、生成类型、请求时间、命名 outlet 和只读变量会同时用于系统提示、preset slot、World Info Regex 和输出 Regex。Preset slot 会按 generation trigger 过滤，并保留 relative / in-chat + depth 的消息位置；Continue 请求会消费 `continue_nudge_prompt`、`continue_prefill` 和 `continue_postfix`，Prefill 以最终 assistant 消息前缀发送。宏引擎支持嵌套读取、条件块、时间/历史宏和 legacy `<USER>/<CHAR>` 标记；`setvar`、脚本执行、扩展副作用仍未开放，避免把第三方卡片当作宿主代码执行。
+
 ## 当前模块与依赖方向
 
 ```text
@@ -85,6 +87,7 @@ World Info 的 Include Names 已同时影响扫描缓冲和聊天消息前缀，
 - 未知字段、Character Book、资产、扩展字段和第三方字段 round-trip。
 - World Info selective 逻辑、正则、递归、分组、概率、sticky/cooldown/delay、深度 role 注入和 token 预算。
 - Preset prompt order、生成参数覆盖、角色卡资源绑定与 Regex 输入/输出链。
+- Prompt Manager generation trigger、in-chat/depth slot、Continue Nudge/Prefill/Postfix，以及请求级宏和只读变量读取。
 - 流式回复、MCP 多轮、后台主动问候、长会话压缩、生图和记忆整理的插件租约接入。
 
 ## 尚未完成的物理拆分

@@ -19,7 +19,10 @@ object LegacyTavernTurnAdapter {
         prompt: PromptPatch = PromptPatch(stablePersonaText = ""),
         generationType: String = "normal",
         authorNote: TavernAuthorNote? = null,
-        userTurnIndex: Long = 0L
+        userTurnIndex: Long = 0L,
+        macroContext: TavernMacroContext? = null,
+        continueNudge: String? = null,
+        continuePrefill: Boolean = false
     ): PreparedPersonaTurn = TavernPreparedTurnFactory.prepare(
         spec(
             card = card,
@@ -31,7 +34,10 @@ object LegacyTavernTurnAdapter {
             prompt = prompt,
             generationType = generationType,
             authorNote = authorNote,
-            userTurnIndex = userTurnIndex
+            userTurnIndex = userTurnIndex,
+            macroContext = macroContext,
+            continueNudge = continueNudge,
+            continuePrefill = continuePrefill
         )
     )
 
@@ -45,16 +51,21 @@ object LegacyTavernTurnAdapter {
         prompt: PromptPatch = PromptPatch(stablePersonaText = ""),
         generationType: String = "normal",
         authorNote: TavernAuthorNote? = null,
-        userTurnIndex: Long = 0L
+        userTurnIndex: Long = 0L,
+        macroContext: TavernMacroContext? = null,
+        continueNudge: String? = null,
+        continuePrefill: Boolean = false
     ): TavernTurnSpec = TavernTurnSpec(
             prompt = prompt,
             presetMessages = presetMessages,
             worldInfoAtDepth = worldInfoAtDepth,
             generation = generation,
             regexScripts = regexScripts,
-            macroContext = TavernCardRegexAdapter.macroContext(card, userName),
+            macroContext = macroContext ?: TavernCardRegexAdapter.macroContext(card, userName),
             generationType = generationType,
             authorNote = authorNote,
-            userTurnIndex = userTurnIndex
+            userTurnIndex = userTurnIndex,
+            continueNudge = continueNudge,
+            continuePrefill = continuePrefill
         )
 }

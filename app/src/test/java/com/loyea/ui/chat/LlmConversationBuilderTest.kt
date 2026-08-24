@@ -195,6 +195,29 @@ class LlmConversationBuilderTest {
     }
 
     @Test
+    fun continuePrefillIsTheFinalAssistantPrefixAfterPostHistory() {
+        val preparedTurn = TavernPreparedTurnFactory.prepare(
+            TavernTurnSpec(
+                generationType = "continue",
+                continueNudge = "continue without repeating",
+                continuePrefill = true
+            )
+        )
+        val built = LlmConversationBuilder.build(
+            systemPrompt = "stable",
+            history = listOf(
+                Message("u", "hello", Sender.USER),
+                Message("a", "partial reply", Sender.AI)
+            ),
+            postHistoryInstructions = "stay in character",
+            preparedTurn = preparedTurn
+        )
+
+        assertEquals(listOf("stable", "hello", "partial reply", "[POST-HISTORY INSTRUCTIONS / 历史消息后指令]\nstay in character", "[CONTINUE NUDGE / 继续提示]\ncontinue without repeating"), built.map { it.content })
+        assertEquals("assistant", built.last().role)
+    }
+
+    @Test
     fun worldInfoAtDepthUsesMessageBoundaryAndRole() {
         val preparedTurn = LegacyTavernTurnAdapter.prepare(
             card = CharacterCard("card", "Card", shortIntro = "", systemPrompt = ""),

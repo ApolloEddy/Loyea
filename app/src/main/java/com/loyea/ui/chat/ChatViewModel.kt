@@ -1089,7 +1089,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             requestBinding = binding,
             initialRuntimeLease = runtimeLease,
             continuationOf = lastAi,
-            generationType = "continue"
+            generationType = "continue",
+            continuationPrefix = resolvePresetForCard(activePersona.card)
+                ?.continuePostfix
+                ?.take(4_000)
+                .orEmpty()
         )
     }
 
@@ -1424,7 +1428,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         continuationOf: Message? = null,
         impersonationPrompt: String = "",
         impersonate: Boolean = false,
-        generationType: String = "normal"
+        generationType: String = "normal",
+        continuationPrefix: String = ""
     ) {
         responseJob = viewModelScope.launch {
             isThinking.value = true
@@ -1470,7 +1475,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             var currentList = messages.value
             val continuationBaseContent = continuationOf?.content.orEmpty()
             val continuationBaseThoughts = continuationOf?.thoughts.orEmpty()
-            var accumulatedContent = continuationBaseContent
+            val frozenContinuationPrefix = if (continuationOf != null &&
+                generationType.trim().removePrefix(":").equals("continue", ignoreCase = true)
+            ) continuationPrefix else ""
+            var accumulatedContent = continuationBaseContent + frozenContinuationPrefix
             var accumulatedThoughts = continuationBaseThoughts
             var calculatedDuration: Int? = null
 
@@ -1513,7 +1521,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             var segmentCut = continuationBaseContent.length
 
             fun resetAccumulatedToContinuationBase() {
-                accumulatedContent = continuationBaseContent
+                accumulatedContent = continuationBaseContent + frozenContinuationPrefix
                 accumulatedThoughts = continuationBaseThoughts
                 segments.clear()
                 if (continuationOf != null) {
@@ -1660,12 +1668,54 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             // bottom 世界书固化进回合快照；显式 top 模式保留原有前置语义，因此每次仍需重建。
             val worldInfoPosition = if (worldInfoConfig.value.position == "top") "top" else "bottom"
+            val userTurnIndex = history.count { it.sender == Sender.USER }.toLong()
+            val frozenAuthorNote = activeTavernAuthorNote(characterCard, userTurnIndex)
+            val macroContext = TavernMacroContext(
+                characterName = characterCard.nickname?.takeIf { it.isNotBlank() } ?: characterCard.name,
+                description = characterCard.description.ifBlank { characterCard.shortIntro },
+                userName = userName.value,
+                personality = characterCard.personality,
+                scenario = characterCard.scenario,
+                personaDescription = "",
+                charPrompt = characterCard.systemPrompt,
+                charInstruction = characterCard.postHistoryInstructions,
+                charCreatorNotes = characterCard.creatorNotes,
+                charVersion = characterCard.characterVersion,
+                charFirstMessage = characterCard.firstMessage,
+                messageExamples = characterCard.chatExamples,
+                original = characterCard.systemPrompt,
+                lastMessage = history.lastOrNull()?.content.orEmpty(),
+                lastUserMessage = history.lastOrNull { it.sender == Sender.USER }?.content.orEmpty(),
+                lastCharMessage = history.lastOrNull { it.sender == Sender.AI }?.content.orEmpty(),
+                input = history.lastOrNull { it.sender == Sender.USER }?.content.orEmpty(),
+                generationType = generationType,
+                authorNote = frozenAuthorNote?.text.orEmpty(),
+                timestampMillis = snapshotTime,
+                alternateGreetings = characterCard.alternateGreetings,
+                lastMessageId = history.lastOrNull()?.id.orEmpty(),
+                firstIncludedMessageId = history.firstOrNull()?.id.orEmpty(),
+                firstDisplayedMessageId = history.firstOrNull()?.id.orEmpty(),
+                summary = activeSession.value?.compressedSummary.orEmpty(),
+                model = apiConfig.modelName,
+                maxContextTokens = boundPreset?.maxContext?.toString().orEmpty(),
+                maxResponseTokens = boundPreset?.maxTokens?.toString().orEmpty()
+            )
             val worldInfoRender = if (needsTurnSnapshot || worldInfoPosition == "top") {
-                buildWorldInfoRender(history, characterCard, generationType)
+                buildWorldInfoRender(history, characterCard, generationType, macroContext)
             } else {
                 null
             }
             val worldInfo = worldInfoRender?.all
+            val requestMacroContext = macroContext.copy(
+                outlets = worldInfoRender?.outlets.orEmpty()
+            )
+            val continueNudge = if (generationType.trim().removePrefix(":").equals("continue", ignoreCase = true)) {
+                boundPreset?.continueNudge
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { TavernMacroEngine.expand(it, requestMacroContext).take(16_000) }
+            } else {
+                null
+            }
 
             val promptParts = PromptAssembler.assemblePromptParts(
                 card = characterCard,
@@ -1684,7 +1734,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 enableVoice = hasTtsCapability(),
                 enableAdultContent = enableAdultContent.value,
                 trustedCard = personaRef.isNative,
-                snapshotTimeMillis = snapshotTime
+                snapshotTimeMillis = snapshotTime,
+                generationType = generationType,
+                macroContext = requestMacroContext
             )
             val impersonationInstruction = if (impersonate) {
                 buildString {
@@ -1706,7 +1758,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     .filter(String::isNotBlank)
                     .joinToString("\n\n")
             )
-            val userTurnIndex = history.count { it.sender == Sender.USER }.toLong()
             val tavernTurnSpec = LegacyTavernTurnAdapter.spec(
                 card = characterCard,
                 userName = userName.value,
@@ -1716,8 +1767,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 generation = presetGeneration ?: GenerationPatch(),
                 prompt = requestedPrompt,
                 generationType = generationType,
-                authorNote = activeTavernAuthorNote(characterCard, userTurnIndex),
-                userTurnIndex = userTurnIndex
+                authorNote = frozenAuthorNote,
+                userTurnIndex = userTurnIndex,
+                macroContext = requestMacroContext,
+                continueNudge = continueNudge,
+                continuePrefill = boundPreset?.continuePrefill == true
             )
             preparedTurn = if (personaRef.isNative) {
                 TavernPreparedTurnFactory.prepare(tavernTurnSpec)
@@ -3052,7 +3106,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private fun buildWorldInfoRender(
         history: List<Message>,
         card: CharacterCard,
-        generationType: String = "normal"
+        generationType: String = "normal",
+        macroContext: TavernMacroContext? = null
     ): WorldInfoMatcher.WorldInfoRenderResult? {
         val seedKey = (activeSession.value?.id ?: "") + "|" +
             history.lastOrNull { it.sender == Sender.USER }?.content.orEmpty()
@@ -3108,7 +3163,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         return TavernRegexEngine.applyToWorldInfoRender(
             render = render,
             scripts = cardRegexScripts(card),
-            context = TavernCardRegexAdapter.macroContext(card, userName.value)
+            context = macroContext ?: TavernCardRegexAdapter.macroContext(card, userName.value)
         )
     }
 

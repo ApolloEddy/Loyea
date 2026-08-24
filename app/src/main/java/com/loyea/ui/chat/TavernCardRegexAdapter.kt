@@ -34,7 +34,17 @@ object TavernCardRegexAdapter {
     fun macroContext(card: CharacterCard, userName: String): TavernMacroContext = TavernMacroContext(
         characterName = card.nickname?.takeIf { it.isNotBlank() } ?: card.name,
         description = card.description.takeIf { it.isNotBlank() } ?: card.shortIntro,
-        userName = userName
+        userName = userName,
+        personality = card.personality,
+        scenario = card.scenario,
+        charPrompt = card.systemPrompt,
+        charInstruction = card.postHistoryInstructions,
+        charCreatorNotes = card.creatorNotes,
+        charVersion = card.characterVersion,
+        charFirstMessage = card.firstMessage,
+        messageExamples = card.chatExamples,
+        original = card.systemPrompt,
+        alternateGreetings = card.alternateGreetings
     )
 
     private fun parseObject(json: String): JsonElement? = runCatching {

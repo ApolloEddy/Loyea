@@ -66,14 +66,21 @@ class TavernTurnSpec(
     val opaqueSnapshot: String? = null,
     val generationType: String = "normal",
     val authorNote: TavernAuthorNote? = null,
-    val userTurnIndex: Long = 0L
+    val userTurnIndex: Long = 0L,
+    /** Prompt Manager Continue Nudge, already macro-expanded for this request. */
+    val continueNudge: String? = null,
+    val continuePrefill: Boolean = false
 ) {
     init {
         require(generationType.isNotBlank()) { "Tavern generation type must not be blank" }
         require(userTurnIndex >= 0L) { "Tavern user turn index must not be negative" }
     }
 
-    val presetMessages: List<TavernPresetPrompt> = presetMessages.map { it.copy() }
+    val presetMessages: List<TavernPresetPrompt> = presetMessages.map {
+        it.copy(
+            triggers = it.triggers.toList()
+        )
+    }
     val worldInfoAtDepth: Map<Int, List<WorldInfoMatcher.WorldInfoInjectionBlock>> =
         worldInfoAtDepth.entries.associate { (depth, blocks) ->
             depth to blocks.map { block -> block.copy() }
@@ -102,16 +109,23 @@ object TavernPreparedTurnFactory {
             opaqueSnapshot = spec.opaqueSnapshot,
             generationType = spec.generationType,
             authorNote = spec.authorNote?.copy(),
-            userTurnIndex = spec.userTurnIndex
+            userTurnIndex = spec.userTurnIndex,
+            continueNudge = spec.continueNudge,
+            continuePrefill = spec.continuePrefill
         )
         val insertions = buildList {
             frozenSpec.presetMessages.forEachIndexed { index, prompt ->
                 if (prompt.content.isNotBlank()) {
                     add(
                         ConversationInsertion(
-                            anchor = InsertionAnchor.AFTER_SYSTEM_BEFORE_SUMMARY,
+                            anchor = if (prompt.isInChat()) {
+                                InsertionAnchor.AT_DEPTH_FROM_LATEST
+                            } else {
+                                InsertionAnchor.AFTER_SYSTEM_BEFORE_SUMMARY
+                            },
                             role = prompt.role.toChatRole(),
                             content = "[PRESET SLOT / ${prompt.identifier}]\n${prompt.content.trim()}",
+                            depthFromLatest = prompt.injectionDepth,
                             order = index
                         )
                     )
@@ -163,6 +177,21 @@ object TavernPreparedTurnFactory {
                         )
                     )
                 }
+            if (frozenSpec.generationType.trim().removePrefix(":").equals("continue", ignoreCase = true)) {
+                frozenSpec.continueNudge
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { nudge ->
+                        add(
+                            ConversationInsertion(
+                                anchor = InsertionAnchor.AFTER_HISTORY,
+                                role = if (frozenSpec.continuePrefill) ChatRole.ASSISTANT else ChatRole.SYSTEM,
+                                content = "[CONTINUE NUDGE / 继续提示]\n$nudge",
+                                order = order++
+                            )
+                        )
+                    }
+            }
         }
         val plan = PluginTurnPlan(
             prompt = frozenSpec.prompt,

@@ -22,7 +22,13 @@ class TavernCardRegexAdapterTest {
 
         assertEquals("r", TavernCardRegexAdapter.scriptsFrom(card).single().id)
         assertEquals(
-            TavernMacroContext("Loyea", "short", "Eddy"),
+            TavernMacroContext(
+                characterName = "Loyea",
+                description = "short",
+                userName = "Eddy",
+                charPrompt = "system",
+                original = "system"
+            ),
             TavernCardRegexAdapter.macroContext(card, "Eddy")
         )
     }

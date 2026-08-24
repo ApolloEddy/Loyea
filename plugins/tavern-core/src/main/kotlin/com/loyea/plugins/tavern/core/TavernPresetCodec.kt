@@ -13,8 +13,31 @@ data class TavernPresetPrompt(
     val systemPrompt: Boolean = true,
     val marker: Boolean = false,
     val enabled: Boolean = true,
-    val rawJson: String? = null
-)
+    val rawJson: String? = null,
+    /** Prompt Manager generation triggers; empty means every generation type. */
+    val triggers: List<String> = emptyList(),
+    /** ST injection_position: 0 is relative, 1 is in-chat. */
+    val injectionPosition: Int = 0,
+    /** ST injection_depth used when [injectionPosition] is in-chat. */
+    val injectionDepth: Int = 0
+) {
+    fun matchesGenerationType(generationType: String): Boolean {
+        if (triggers.isEmpty()) return true
+        val normalized = normalizeGenerationType(generationType)
+        return triggers.any { trigger ->
+            val value = normalizeGenerationType(trigger)
+            value == "all" || value == normalized
+        }
+    }
+
+    fun isInChat(): Boolean = injectionPosition > 0
+
+    private fun normalizeGenerationType(value: String): String = value
+        .trim()
+        .lowercase()
+        .removePrefix(":")
+        .ifBlank { "normal" }
+}
 
 data class TavernPresetPromptOrder(
     val identifier: String,
@@ -49,7 +72,10 @@ data class TavernPromptPreset(
     val prompts: List<TavernPresetPrompt> = emptyList(),
     val promptOrder: List<TavernPresetPromptOrder> = emptyList(),
     val regexScripts: List<TavernRegexScript> = emptyList(),
-    val rawJson: String? = null
+    val rawJson: String? = null,
+    val continueNudge: String? = null,
+    val continuePostfix: String? = null,
+    val continuePrefill: Boolean = false
 ) {
     /** 按 prompt_order 排序并应用启用状态；没有 order 时保留 preset 原始顺序。 */
     fun orderedPrompts(): List<TavernPresetPrompt> {
@@ -63,6 +89,9 @@ data class TavernPromptPreset(
         return ordered + prompts.filter { it.enabled && it.identifier !in orderedIds }
     }
 
+    fun orderedPrompts(generationType: String): List<TavernPresetPrompt> =
+        orderedPrompts().filter { it.matchesGenerationType(generationType) }
+
     fun auxiliaryPrompts(): List<TavernPresetPrompt> = orderedPrompts().filterNot {
         it.identifier.equals("main", ignoreCase = true) || isPostHistory(it)
     }
@@ -73,10 +102,20 @@ data class TavernPromptPreset(
 
     fun postHistoryPrompts(): List<TavernPresetPrompt> = orderedPrompts().filter(::isPostHistory)
 
+    fun postHistoryPrompts(generationType: String): List<TavernPresetPrompt> =
+        orderedPrompts(generationType).filter(::isPostHistory)
+
     fun explicitPostHistoryInstructions(): String = listOfNotNull(
         readStringFromRaw("post_history_instructions"),
         readStringFromRaw("postHistoryInstructions"),
         postHistoryPrompts().joinToString("\n\n") { it.content.trim() }.takeIf { it.isNotBlank() }
+    ).filter { it.isNotBlank() }.joinToString("\n\n")
+
+    fun explicitPostHistoryInstructions(generationType: String): String = listOfNotNull(
+        readStringFromRaw("post_history_instructions"),
+        readStringFromRaw("postHistoryInstructions"),
+        postHistoryPrompts(generationType).joinToString("\n\n") { it.content.trim() }
+            .takeIf { it.isNotBlank() }
     ).filter { it.isNotBlank() }.joinToString("\n\n")
 
     fun generationOverrides(): GenerationPatch = GenerationPatch(
@@ -119,6 +158,11 @@ object TavernPresetCodec {
             ?.asString
             ?.takeIf { it.isNotBlank() }
 
+        fun stringPreservingWhitespace(vararg keys: String): String? = keys.asSequence()
+            .mapNotNull { obj[it] }
+            .firstOrNull { it.isJsonPrimitive && it.asJsonPrimitive.isString }
+            ?.asString
+
         fun double(vararg keys: String): Double? = keys.asSequence()
             .mapNotNull { obj[it] }
             .firstOrNull { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }
@@ -126,8 +170,11 @@ object TavernPresetCodec {
 
         fun int(vararg keys: String): Int? = keys.asSequence()
             .mapNotNull { obj[it] }
-            .firstOrNull { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }
-            ?.asInt
+            .firstOrNull { it.isJsonPrimitive && (it.asJsonPrimitive.isNumber || it.asJsonPrimitive.isString) }
+            ?.let { value ->
+                value.asJsonPrimitive.takeIf { it.isNumber }?.asInt
+                    ?: value.asString.toIntOrNull()
+            }
 
         fun strings(vararg keys: String): List<String> {
             val value = keys.asSequence().mapNotNull { obj[it] }.firstOrNull() ?: return emptyList()
@@ -170,7 +217,10 @@ object TavernPresetCodec {
                     systemPrompt = prompt.boolean("system_prompt", "systemPrompt") ?: true,
                     marker = prompt.boolean("marker") ?: false,
                     enabled = prompt.boolean("enabled") ?: true,
-                    rawJson = prompt.toString()
+                    rawJson = prompt.toString(),
+                    triggers = prompt.strings("triggers", "trigger"),
+                    injectionPosition = prompt.int("injection_position", "injectionPosition") ?: 0,
+                    injectionDepth = prompt.int("injection_depth", "injectionDepth")?.coerceAtLeast(0) ?: 0
                 )
             }
         }
@@ -200,7 +250,15 @@ object TavernPresetCodec {
             prompts = prompts,
             promptOrder = promptOrder,
             regexScripts = regexScripts,
-            rawJson = obj.toString()
+            rawJson = obj.toString(),
+            continueNudge = string(
+                "continue_nudge_prompt",
+                "continueNudgePrompt",
+                "continue_nudge",
+                "continueNudge"
+            ),
+            continuePostfix = stringPreservingWhitespace("continue_postfix", "continuePostfix"),
+            continuePrefill = obj.boolean("continue_prefill", "continuePrefill") ?: false
         )
     }
 
@@ -244,6 +302,25 @@ object TavernPresetCodec {
         .mapNotNull { this[it] }
         .firstOrNull { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }
         ?.asBoolean
+
+    private fun JsonObject.int(vararg keys: String): Int? = keys.asSequence()
+        .mapNotNull { this[it] }
+        .firstOrNull { it.isJsonPrimitive && (it.asJsonPrimitive.isNumber || it.asJsonPrimitive.isString) }
+        ?.let { value ->
+            value.asJsonPrimitive.takeIf { it.isNumber }?.asInt
+                ?: value.asString.toIntOrNull()
+        }
+
+    private fun JsonObject.strings(vararg keys: String): List<String> {
+        val value = keys.asSequence().mapNotNull { this[it] }.firstOrNull() ?: return emptyList()
+        return when {
+            value.isJsonArray -> value.asJsonArray.mapNotNull { item ->
+                item.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+            }
+            value.isJsonPrimitive && value.asJsonPrimitive.isString -> listOf(value.asString)
+            else -> emptyList()
+        }
+    }
 }
 
 /** ST 的 `{0}` / `{{world_info}}` 等格式占位符统一渲染器。 */

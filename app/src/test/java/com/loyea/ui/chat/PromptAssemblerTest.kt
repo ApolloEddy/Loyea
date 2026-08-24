@@ -1,5 +1,8 @@
 package com.loyea.ui.chat
 
+import com.loyea.plugins.tavern.core.TavernMacroContext
+import com.loyea.plugins.tavern.core.TavernPresetPrompt
+import com.loyea.plugins.tavern.core.TavernPromptPreset
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -152,6 +155,70 @@ class PromptAssemblerTest {
         assertTrue(parts.stableSystemPrompt.contains("secret lore"))
         assertFalse(parts.turnContextSnapshot.contains("WORLD INFO OUTLET"))
         assertFalse(parts.stableSystemPrompt.contains("{{outlet::"))
+    }
+
+    @Test
+    fun presetSlotsUseTheSameFrozenMacroContextAsTheSystemPrompt() {
+        val parts = PromptAssembler.assemblePromptParts(
+            card = card(systemPrompt = "core {{char}}"),
+            userName = "Eddy",
+            preset = TavernPromptPreset(
+                prompts = listOf(
+                    TavernPresetPrompt(
+                        name = "User slot",
+                        identifier = "user_slot",
+                        role = "user",
+                        content = "{{char}}/{{user}}/{{lastGenerationType}}/{{lastUserMessage}}"
+                    )
+                )
+            ),
+            generationType = "continue",
+            macroContext = TavernMacroContext(
+                characterName = "Lya",
+                userName = "Eddy",
+                generationType = "continue",
+                lastUserMessage = "继续刚才的话"
+            ),
+            enableVoice = false,
+            trustedCard = true
+        )
+
+        assertEquals(
+            "Lya/Eddy/continue/继续刚才的话",
+            parts.presetMessages.single().content
+        )
+        assertTrue(parts.stableSystemPrompt.contains("core Lya"))
+    }
+
+    @Test
+    fun presetSlotsCanReadFrozenWorldInfoOutlets() {
+        val parts = PromptAssembler.assemblePromptParts(
+            card = card(systemPrompt = "core"),
+            userName = "Eddy",
+            preset = TavernPromptPreset(
+                prompts = listOf(
+                    TavernPresetPrompt(
+                        name = "Lore slot",
+                        identifier = "lore_slot",
+                        role = "system",
+                        content = "{{outlet::lore}}"
+                    )
+                )
+            ),
+            worldInfoRender = com.loyea.context.core.WorldInfoMatcher.WorldInfoRenderResult(
+                all = "",
+                outlets = mapOf("Lore" to "frozen lore")
+            ),
+            macroContext = TavernMacroContext(
+                characterName = "Lya",
+                userName = "Eddy",
+                outlets = mapOf("Existing" to "existing outlet")
+            ),
+            enableVoice = false,
+            trustedCard = true
+        )
+
+        assertTrue(parts.stableSystemPrompt.contains("frozen lore"))
     }
 
     private fun card(systemPrompt: String) = CharacterCard(

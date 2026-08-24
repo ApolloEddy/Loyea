@@ -153,6 +153,16 @@ object LlmConversationBuilder {
                 if (boundary < boundedHistory.size) result.add(boundedHistory[boundary])
             }
         }
+        if (postHistoryInstructions.isNotBlank()) {
+            result.add(
+                LlmChatMessage(
+                    role = "system",
+                    content = "[POST-HISTORY INSTRUCTIONS / 历史消息后指令]\n$postHistoryInstructions"
+                )
+            )
+        }
+        // Continue prefill/nudge insertions are deliberately last: chat-completion
+        // providers treat a trailing assistant message as the prefix to continue.
         turnInsertions
             .filter { it.anchor == InsertionAnchor.AFTER_HISTORY }
             .sortedBy(ConversationInsertion::order)
@@ -164,14 +174,6 @@ object LlmConversationBuilder {
                     )
                 )
             }
-        if (postHistoryInstructions.isNotBlank()) {
-            result.add(
-                LlmChatMessage(
-                    role = "system",
-                    content = "[POST-HISTORY INSTRUCTIONS / 历史消息后指令]\n$postHistoryInstructions"
-                )
-            )
-        }
         return result
     }
 

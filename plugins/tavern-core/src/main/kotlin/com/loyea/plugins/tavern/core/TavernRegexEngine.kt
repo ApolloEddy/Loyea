@@ -38,8 +38,201 @@ data class TavernRegexScript(
 data class TavernMacroContext(
     val characterName: String = "Char",
     val description: String = "",
-    val userName: String = "User"
+    val userName: String = "User",
+    val personality: String = "",
+    val scenario: String = "",
+    val personaDescription: String = "",
+    val charPrompt: String = "",
+    val charInstruction: String = "",
+    val charDepthPrompt: String = "",
+    val charCreatorNotes: String = "",
+    val charVersion: String = "",
+    val charFirstMessage: String = "",
+    val messageExamples: String = "",
+    val lastMessage: String = "",
+    val lastUserMessage: String = "",
+    val lastCharMessage: String = "",
+    val input: String = "",
+    val original: String = "",
+    val generationType: String = "normal",
+    val authorNote: String = "",
+    val outlets: Map<String, String> = emptyMap(),
+    val localVariables: Map<String, String> = emptyMap(),
+    val globalVariables: Map<String, String> = emptyMap(),
+    val timestampMillis: Long? = null,
+    val alternateGreetings: List<String> = emptyList(),
+    val group: String = "",
+    val groupNotMuted: String = "",
+    val notCharacter: String = "",
+    val lastMessageId: String = "",
+    val firstIncludedMessageId: String = "",
+    val firstDisplayedMessageId: String = "",
+    val lastSwipeId: String = "",
+    val currentSwipeId: String = "",
+    val summary: String = "",
+    val model: String = "",
+    val maxPrompt: String = "",
+    val maxContextTokens: String = "",
+    val maxResponseTokens: String = "",
+    val customMacros: Map<String, String> = emptyMap()
 )
+
+/**
+ * Small, deterministic subset of SillyTavern's macro evaluator used by prompt and Regex
+ * stages. It is deliberately read-only: setvar/addvar/script execution belongs to the future
+ * STscript port and must not mutate a request through an untrusted card.
+ */
+object TavernMacroEngine {
+    private const val MAX_EXPANSION_PASSES = 8
+    private val tokenPattern = Regex("\\{\\{\\s*([A-Za-z.$][A-Za-z0-9_.-]*)\\s*(?:::\\s*([^{}]*?))?\\s*}}")
+    private val singleColonPattern = Regex("\\{\\{\\s*([A-Za-z.$][A-Za-z0-9_.-]*)\\s*:(?!:)\\s*([^{}]*?)\\s*}}")
+    private val spacedTokenPattern = Regex("\\{\\{\\s*([A-Za-z.$][A-Za-z0-9_.-]*)\\s+([^{}]+?)\\s*}}")
+    private val conditionalPattern = Regex(
+        "\\{\\{\\s*if(?:\\s*::\\s*|\\s+)([^{}]*?)\\s*}}([\\s\\S]*?)\\{\\{\\s*/if\\s*}}",
+        RegexOption.IGNORE_CASE
+    )
+    private const val ESCAPED_OPEN = "\\u0001"
+    private const val ESCAPED_CLOSE = "\\u0002"
+
+    fun expand(text: String, context: TavernMacroContext): String {
+        if (text.isBlank()) return text
+        var result = text
+            .replace("<USER>", "{{user}}", ignoreCase = true)
+            .replace("<BOT>", "{{char}}", ignoreCase = true)
+            .replace("<GROUP>", "{{group}}", ignoreCase = true)
+            .replace("<CHARIFNOTGROUP>", "{{charIfNotGroup}}", ignoreCase = true)
+            .replace("<CHAR>", "{{char}}", ignoreCase = true)
+            .replace("\\{{", ESCAPED_OPEN)
+            .replace("\\}}", ESCAPED_CLOSE)
+        repeat(MAX_EXPANSION_PASSES) {
+            val before = result
+            result = singleColonPattern.replace(result) { match ->
+                "{{${match.groupValues[1]}::${match.groupValues[2]}}}"
+            }
+            result = tokenPattern.replace(result) { match ->
+                val name = match.groupValues[1].lowercase()
+                val argument = match.groupValues.getOrNull(2).orEmpty().trim()
+                valueFor(name, argument, context) ?: match.value
+            }
+            result = conditionalPattern.replace(result) { match ->
+                val condition = match.groupValues[1].trim()
+                val body = match.groupValues[2]
+                val branches = body.split(Regex("\\{\\{\\s*else\\s*}}"), limit = 2)
+                val selected = if (isTruthy(resolveCondition(condition, context))) {
+                    branches.firstOrNull().orEmpty()
+                } else {
+                    branches.getOrNull(1).orEmpty()
+                }
+                expand(selected, context)
+            }
+            result = spacedTokenPattern.replace(result) { match ->
+                val name = match.groupValues[1].lowercase()
+                val argument = match.groupValues[2].trim()
+                valueFor(name, argument, context) ?: match.value
+            }
+            if (result == before) return@repeat
+        }
+        return result
+            .replace(ESCAPED_OPEN, "{{")
+            .replace(ESCAPED_CLOSE, "}}")
+    }
+
+    private fun valueFor(name: String, argument: String, context: TavernMacroContext): String? =
+        valueForKnown(name, argument, context)
+
+    private fun valueForKnown(name: String, argument: String, context: TavernMacroContext): String? = when {
+        name.startsWith(".") -> context.localVariables[name.drop(1)].orEmpty()
+        name.startsWith("$") -> context.globalVariables[name.drop(1)].orEmpty()
+        name in context.customMacros -> context.customMacros[name].orEmpty()
+        else -> when (name) {
+        "char", "bot" -> context.characterName.ifBlank { "Char" }
+        "user" -> context.userName.ifBlank { "User" }
+        "group" -> context.group.ifBlank { context.characterName.ifBlank { "Char" } }
+        "groupnotmuted" -> context.groupNotMuted.ifBlank { context.group.ifBlank { context.characterName.ifBlank { "Char" } } }
+        "charifnotgroup" -> if (context.group.isBlank()) context.characterName.ifBlank { "Char" } else ""
+        "notchar" -> context.notCharacter
+        "description" -> context.description
+        "personality" -> context.personality
+        "scenario" -> context.scenario
+        "persona" -> context.personaDescription.ifBlank { context.userName.ifBlank { "User" } }
+        "charprompt" -> context.charPrompt
+        "charinstruction" -> context.charInstruction
+        "chardepthprompt" -> context.charDepthPrompt
+        "charcreatornotes" -> context.charCreatorNotes
+        "charversion" -> context.charVersion
+        "charfirstmessage" -> context.alternateGreetings.getOrNull(argument.toIntOrNull() ?: 0)
+            ?: context.charFirstMessage
+        "mesexamples", "mesexamplesraw" -> context.messageExamples
+        "lastmessage" -> context.lastMessage
+        "lastmessageid" -> context.lastMessageId
+        "lastusermessage" -> context.lastUserMessage
+        "lastcharmessage" -> context.lastCharMessage
+        "firstincludedmessageid" -> context.firstIncludedMessageId
+        "firstdisplayedmessageid" -> context.firstDisplayedMessageId
+        "lastswipeid" -> context.lastSwipeId
+        "currentswipeid" -> context.currentSwipeId
+        "summary" -> context.summary
+        "input" -> context.input
+        "original" -> context.original
+        "lastgenerationtype" -> context.generationType.ifBlank { "normal" }
+        "time" -> formatTime(context.timestampMillis, argument)
+        "date" -> formatDate(context.timestampMillis)
+        "weekday" -> formatWeekday(context.timestampMillis)
+        "isotime" -> formatTimestamp(context.timestampMillis, "HH:mm")
+        "isodate" -> formatTimestamp(context.timestampMillis, "yyyy-MM-dd")
+        "datetimeformat" -> formatTimestamp(context.timestampMillis, argument.ifBlank { "yyyy-MM-dd HH:mm:ss" })
+        "model" -> context.model
+        "maxprompt" -> context.maxPrompt
+        "maxcontexttokens" -> context.maxContextTokens
+        "maxresponsetokens" -> context.maxResponseTokens
+        "authorsnote", "charauthorsnote", "defaultauthorsnote" -> context.authorNote
+        "newline" -> "\n".repeat(argument.toIntOrNull()?.coerceIn(1, 64) ?: 1)
+        "space" -> " ".repeat(argument.toIntOrNull()?.coerceIn(1, 64) ?: 1)
+        "noop" -> ""
+        "trim" -> ""
+        "reverse" -> argument.reversed()
+        "outlet" -> context.outlets.entries
+            .firstOrNull { it.key.equals(argument, ignoreCase = true) }
+            ?.value
+            .orEmpty()
+        "getvar" -> context.localVariables[argument].orEmpty()
+        "getglobalvar" -> context.globalVariables[argument].orEmpty()
+        "hasvar" -> (argument in context.localVariables).toString()
+        "hasglobalvar" -> (argument in context.globalVariables).toString()
+        "ismobile" -> "true"
+        "banned" -> ""
+        else -> null
+        }
+    }
+
+    private fun resolveCondition(condition: String, context: TavernMacroContext): String {
+        val trimmed = condition.trim()
+        if (trimmed.startsWith("!")) {
+            return (!isTruthy(resolveCondition(trimmed.drop(1), context))).toString()
+        }
+        if (trimmed.startsWith("{{") && trimmed.endsWith("}}")) {
+            return expand(trimmed, context)
+        }
+        return valueForKnown(trimmed.lowercase(), "", context) ?: trimmed
+    }
+
+    private fun isTruthy(value: String): Boolean = value.trim().lowercase() !in setOf("", "false", "0", "off", "no", "null")
+
+    private fun formatTimestamp(timestampMillis: Long?, pattern: String): String = runCatching {
+        java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault()).format(
+            java.util.Date(timestampMillis ?: System.currentTimeMillis())
+        )
+    }.getOrDefault("")
+
+    private fun formatTime(timestampMillis: Long?, argument: String): String {
+        val pattern = if (argument.startsWith("UTC", ignoreCase = true)) "HH:mm:ss z" else "HH:mm:ss"
+        return formatTimestamp(timestampMillis, pattern)
+    }
+
+    private fun formatDate(timestampMillis: Long?): String = formatTimestamp(timestampMillis, "yyyy-MM-dd")
+
+    private fun formatWeekday(timestampMillis: Long?): String = formatTimestamp(timestampMillis, "EEEE")
+}
 
 /**
  * 受控的 Regex find/replace 引擎。

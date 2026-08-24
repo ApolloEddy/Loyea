@@ -1,9 +1,69 @@
 package com.loyea.plugins.tavern.core
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TavernRegexCoreTest {
+    @Test
+    fun expandsRequestScopedCardHistoryGenerationAndReadOnlyVariables() {
+        val context = TavernMacroContext(
+            characterName = "Lya",
+            description = "A companion",
+            userName = "Eddy",
+            personality = "warm",
+            scenario = "at home",
+            personaDescription = "patient engineer",
+            charPrompt = "core rules",
+            charInstruction = "stay concise",
+            charCreatorNotes = "creator note",
+            charVersion = "2.1",
+            charFirstMessage = "Hello",
+            messageExamples = "<START>",
+            lastMessage = "last turn",
+            lastUserMessage = "how are you?",
+            lastCharMessage = "I am well.",
+            input = "how are you?",
+            original = "original prompt",
+            generationType = "continue",
+            authorNote = "remember the rain",
+            outlets = mapOf("Lore" to "secret lore"),
+            localVariables = mapOf("mood" to "calm"),
+            globalVariables = mapOf("app" to "Loyea")
+        )
+
+        assertEquals(
+            "Lya|Eddy|A companion|warm|at home|patient engineer|core rules|stay concise|creator note|2.1|Hello|<START>|last turn|how are you?|I am well.|how are you?|original prompt|continue|remember the rain|secret lore|calm|true|Loyea|true",
+            TavernMacroEngine.expand(
+                "{{char}}|{{user}}|{{description}}|{{personality}}|{{scenario}}|" +
+                    "{{persona}}|{{charPrompt}}|{{charInstruction}}|{{charCreatorNotes}}|{{charVersion}}|" +
+                    "{{charFirstMessage}}|{{mesExamples}}|{{lastMessage}}|{{lastUserMessage}}|" +
+                    "{{lastCharMessage}}|{{input}}|{{original}}|{{lastGenerationType}}|{{authorsNote}}|" +
+                    "{{outlet::lore}}|{{getvar::mood}}|{{hasvar::mood}}|{{getglobalvar::app}}|{{hasglobalvar::app}}",
+                context
+            )
+        )
+        assertEquals("{{futureMacro::value}}", TavernMacroEngine.expand("{{futureMacro::value}}", context))
+    }
+
+    @Test
+    fun supportsNestedLegacyConditionalAndFrozenTimeMacros() {
+        val context = TavernMacroContext(
+            characterName = "Lya",
+            userName = "Eddy",
+            description = "",
+            localVariables = mapOf("Lya_mood" to "calm"),
+            alternateGreetings = listOf("first", "second"),
+            timestampMillis = 1_725_000_000_000L
+        )
+
+        assertEquals("calm", TavernMacroEngine.expand("{{getvar::{{char}}_mood}}", context))
+        assertEquals("fallback", TavernMacroEngine.expand("{{if description}}hidden{{else}}fallback{{/if}}", context))
+        assertEquals("second", TavernMacroEngine.expand("{{charFirstMessage::1}}", context))
+        assertEquals("Lya/Eddy", TavernMacroEngine.expand("<CHAR>/<USER>", context))
+        assertTrue(TavernMacroEngine.expand("{{isodate}} {{isotime}}", context).matches(Regex("\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}")))
+    }
+
     @Test
     fun appliesMacrosCaptureGroupsPlacementsAndDepthWithoutHostCard() {
         val scripts = TavernRegexEngine.parseScripts(

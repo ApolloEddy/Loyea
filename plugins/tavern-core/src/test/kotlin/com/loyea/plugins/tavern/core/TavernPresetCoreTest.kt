@@ -50,4 +50,54 @@ class TavernPresetCoreTest {
             )
         )
     }
+
+    @Test
+    fun parsesGenerationTriggersInChatPlacementAndContinueSettings() {
+        val preset = TavernPresetCodec.parse(
+            """
+            {
+              "continue_nudge_prompt": "Continue {{char}}",
+              "continue_postfix": " ",
+              "continue_prefill": true,
+              "prompts": [
+                {
+                  "identifier": "continue_only",
+                  "name": "Continue only",
+                  "role": "assistant",
+                  "content": "{{lastMessage}}",
+                  "triggers": ["continue"],
+                  "injection_position": 1,
+                  "injection_depth": 0
+                }
+              ]
+            }
+            """.trimIndent()
+        )
+        requireNotNull(preset)
+
+        assertEquals("Continue {{char}}", preset.continueNudge)
+        assertEquals(" ", preset.continuePostfix)
+        assertEquals(true, preset.continuePrefill)
+        assertEquals(listOf("continue_only"), preset.orderedPrompts("continue").map { it.identifier })
+        assertEquals(emptyList<String>(), preset.orderedPrompts("normal").map { it.identifier })
+        val prompt = preset.orderedPrompts("continue").single()
+        assertEquals(true, prompt.isInChat())
+        assertEquals(0, prompt.injectionDepth)
+    }
+
+    @Test
+    fun continuePrefillIsFrozenAsTrailingAssistantInsertion() {
+        val prepared = TavernPreparedTurnFactory.prepare(
+            TavernTurnSpec(
+                generationType = "continue",
+                continueNudge = "keep going",
+                continuePrefill = true
+            )
+        )
+
+        val nudge = prepared.plan.insertions.single()
+        assertEquals(com.loyea.plugin.api.InsertionAnchor.AFTER_HISTORY, nudge.anchor)
+        assertEquals(com.loyea.plugin.api.ChatRole.ASSISTANT, nudge.role)
+        assertEquals("[CONTINUE NUDGE / 继续提示]\nkeep going", nudge.content)
+    }
 }

@@ -30,9 +30,10 @@ All notable changes to this project will be documented in this file.
 
 ### Changed (变更)
 - **Include Names、outlet 与 Author’s Note 运行语义**：World Info 默认按 SillyTavern 规则把用户/角色名称加入扫描缓冲；聊天上下文可按 preset 或世界书配置写入名称前缀。`{{outlet::Name}}` 现在只展开被提示词引用的命名 outlet，不再把全部 outlet 作为隐藏上下文追加。会话级 Author’s Note 支持 `After Scenario`/`In-chat`、深度和按用户回合计数的频率（`0` 禁用、`1` 每回合）；请求启动时冻结文本与注入参数，编辑面板限制文本/数值输入并防止重复保存。
+- **请求级宏与 Prompt Manager 运行语义**：系统提示、preset slot、World Info Regex 和输出 Regex 现在共享同一份冻结 `TavernMacroContext`；补齐角色/历史尾部/生成类型/时间/legacy 标记/条件块/只读变量宏，未知或写入类脚本保持安全边界。Preset slot 按 `normal/continue/impersonate/swipe/regenerate/quiet` trigger 过滤，支持 relative 与 in-chat/depth；Continue Nudge、Continue Prefill 和 Continue Postfix 进入真实 provider 消息序列。
 - **Continue/Swipe 生成入口**：新增最后一条 AI 回复的 Continue 与 Swipe 操作。Continue 保留原 AI 消息 ID、把原文放回 provider 上下文并将新流式文本追加到同一气泡；Swipe 使用独立的 `swipe` 生成类型并复用版本归并，继续让 World Info 的生成类型过滤看到真实请求。插件暂不把 impersonate 伪装成普通回复。
 - **Impersonate 代发草稿**：新增最后一条 AI 回复的代发入口，使用 `impersonate` 生成类型和一次性提示约束，让模型按用户身份生成文本并回填输入框；结果只有用户点击发送后才写入聊天，代发期间不执行 MCP 工具、自动 TTS 或标题副作用，失败不会留下伪造用户消息。
-- **World Info 生成类型贯通请求链**：`normal`、`regenerate`、`continue`、`swipe` 与后台 `quiet` 请求现在把生成类型从宿主入口冻结到 Tavern 插件输入/回合暂存，并在准备阶段校验 spec/input 一致；支持大小写与前导冒号的规范化，避免 World Info 触发过滤与实际请求类型漂移。`impersonate` 入口仍列入后续兼容任务，当前不会伪装成已接入。
+- **World Info 生成类型贯通请求链**：`normal`、`regenerate`、`continue`、`swipe`、`impersonate` 与后台 `quiet` 请求现在把生成类型从宿主入口冻结到 Tavern 插件输入/回合暂存，并在准备阶段校验 spec/input 一致；支持大小写与前导冒号的规范化，避免 World Info/Prompt Manager 触发过滤与实际请求类型漂移。
 - **World Info 生成类型语义修正**：`triggers` 现在按 SillyTavern 的 `normal/continue/impersonate/swipe/regenerate/quiet` 过滤生成请求，不再错误地作为额外关键词参与匹配；空列表继续表示所有生成类型。
 - **Tavern 人格投影契约收敛**：移除 `tavern-core` 内重复的 `TavernPersonaRecord`，`TavernPersonaRepository` 直接返回 `plugin-api PersonaProjection`；app 的 `TavernCharacterCardAdapter` 统一提供稳定人格投影与完整 `TavernCardDocument` 两条单向转换路径。
 - **Tavern 存储边界接入宿主**：旧 `tavern_resources.json` 首次访问时迁移到 `files/tavern/registry` 并保留源文件；非内置角色卡原始文档同步到 `files/tavern/cards/<sha256>.json`，会话元数据、消息和会话世界书路径保持不变。
@@ -78,7 +79,7 @@ All notable changes to this project will be documented in this file.
 - `:plugins:tavern-core:test` 新增源码边界门禁：核心文件必须位于插件目录并声明插件 package，且不得导入 Android、AndroidX 或 Loyea UI/Worker/Perception 宿主实现，防止后续改动重新渗回 app。
 - 原先混在同一文件的 `TavernResourceRegistryCodec/TavernWorldBookCodec` 与 `TavernCardResourceBindings` 已物理拆开；纯 codec 测试归属 Tavern 模块，宿主测试只覆盖 `CharacterCard` 外部引用和内嵌世界书发现。
 - `TavernPresetCodec` 不再接收 `CharacterCard`；核心模块独立测试锁定 prompt order、post-history、generation 参数与 preset-scoped Regex，宿主测试锁定第三方卡嵌套字符串 preset 的发现兼容性。
-- `TavernCardRegexAdapter` 成为宿主卡片到插件 Regex 的单向桥接：脚本发现和 `CharacterCard` 字段投影留在 app，请求开始后只冻结角色名、描述与用户名；模块测试同时覆盖纯执行语义和宿主嵌套资源发现。
+- `TavernCardRegexAdapter` 成为宿主卡片到插件 Regex 的单向桥接：脚本发现留在 app，请求开始后冻结角色卡字段、历史尾部、生成类型、时间和只读变量快照；模块测试同时覆盖纯执行语义和宿主嵌套资源发现。
 - 世界书核心源码已不再导入 Android、AndroidX、网络库或 Loyea 宿主模型；matcher 的 token 预算估算也由 Tavern 核心自身冻结，避免运行语义暗中依赖 app 的用量统计兜底函数。
 - 酒馆兼容性开始按“宿主核心只依赖插件契约、Tavern 实现反向实现契约”的方向拆分；`PersonaRef(ownerId, personaId)` 明确阻止插件人格缺失或停用时与 Loyea 原生人格发生 ID 混淆，运行代次为后续请求级 lease 与安全热停用提供边界。
 - 插件停用采用 generation lease：新请求立即拒绝获取已停用插件，已开始请求继续使用启动时冻结的运行代次，最后一个 lease 释放后旧运行时才关闭；重新启用会创建新代次，不会篡改在途请求。
