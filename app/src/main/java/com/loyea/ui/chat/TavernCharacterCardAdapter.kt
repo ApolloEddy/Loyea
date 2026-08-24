@@ -23,7 +23,10 @@ object TavernCharacterCardAdapter {
             alternateGreetings = card.alternateGreetings.ifEmpty { originalData?.alternateGreetings.orEmpty() },
             groupOnlyGreetings = card.groupOnlyGreetings.ifEmpty { originalData?.groupOnlyGreetings.orEmpty() },
             tags = card.tags.ifEmpty { originalData?.tags.orEmpty() },
-            creator = card.creatorName ?: originalData?.creator.orEmpty(),
+            // `creatorName` may be the host-only display fallback "网络导入". Never write that
+            // fallback into an imported document, otherwise a blank source creator changes the
+            // stable card identity during a host -> plugin -> host round trip.
+            creator = originalData?.creator ?: card.creatorName.orEmpty(),
             characterVersion = card.characterVersion.ifBlank { originalData?.characterVersion.orEmpty() },
             nickname = card.nickname ?: originalData?.nickname,
             source = card.source.ifEmpty { originalData?.source.orEmpty() },

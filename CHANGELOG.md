@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased] - 2026-08-24
 
 ### Added (新增)
+- **Tavern 物理拆分边界测试**：新增宿主 `CharacterCard` 与 Tavern 文档之间的迁移特征测试，锁定稳定角色 ID、未知字段往返和原生/Tavern 人格归属隔离，为后续私有存储迁移提供回归门禁。
 - **独立插件 API 基线**：新增纯 Kotlin/JVM `:plugin-api` 模块，定义稳定插件命名空间、原生/插件人格归属、能力声明、API 版本兼容检查与不可变运行代次；该模块不依赖 Android、Compose、Gson、网络库或 Tavern 具体实现。
 - **插件宿主与请求租约**：新增纯 Kotlin/JVM `:plugin-host`，支持插件注册、兼容性隔离、运行失败重试、实时启停及线程安全的在途请求排空；`LoyeaApplication` 提供 UI 与后台任务共用的应用级组合根。
 - **通用人格回合契约**：`plugin-api` 新增 `PersonaProjection`、冻结回合输入、提示词 patch、结构化消息插入、通用生成参数与分阶段文本变换接口，为 Tavern 逻辑退出核心聊天类型签名提供稳定边界。
@@ -46,6 +47,7 @@ All notable changes to this project will be documented in this file.
 - **备用开场白选择**：新会话选择角色时可直接选用 V2/V3 `alternate_greetings`，不再只能使用第一句。
 
 ### Fixed (修复)
+- **导入卡片身份漂移**：修复角色卡原始 `creator` 为空时，宿主界面显示用的“网络导入”被回写进 Tavern 文档、导致稳定角色 ID 在适配往返后改变的问题。
 - 修复流式生成途中切换角色卡或修改 Tavern 资源时，输出/Reasoning Regex 每个片段重新读取当前卡片而混用两套规则的问题；一条请求现在固定使用启动时的卡片、用户名、Regex、preset 与深度插入快照。
 - 修复插件能力类型不符或回合准备抛错时可能遗留宿主 lease 的风险；插件已停用或人格不可用时，新外部角色请求明确失败，不再有静默切回原生默认人格的接线路径。
 - 修复后台主动问候在外部角色卡缺失或插件停用时静默改用默认 Loyea、并可能把旧人格生成结果写进已改变会话的问题；取消 Worker 也会重新抛出协程取消信号并在 `finally` 释放 lease。
