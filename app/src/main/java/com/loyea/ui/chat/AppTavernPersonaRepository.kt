@@ -1,8 +1,11 @@
 package com.loyea.ui.chat
 
 import android.content.Context
+import com.loyea.plugin.api.PersonaRef
 import com.loyea.plugin.api.PluginRuntimeGeneration
 import com.loyea.plugin.api.PluginTurnInput
+import com.loyea.plugin.api.PreparedPersonaTurn
+import com.loyea.plugin.host.PersonaRuntimeLease
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -95,6 +98,27 @@ class AppTavernPersonaRepository(
             synchronized(pendingLock) {
                 if (pendingTurns[key] === entry) removeLocked(key)
             }
+        }
+    }
+
+    suspend fun prepareStagedTurn(
+        lease: PersonaRuntimeLease,
+        ref: PersonaRef,
+        input: PluginTurnInput,
+        spec: TavernTurnSpec
+    ): PreparedPersonaTurn {
+        val staged = stage(
+            sessionId = input.sessionId,
+            personaId = ref.personaId,
+            requestId = input.turnId,
+            generation = lease.generation,
+            spec = spec
+        )
+        return try {
+            lease.preparePersonaTurn(ref, input, restoredSnapshot = null)
+        } finally {
+            // Successful prepare consumes the stage; every failure path discards it here.
+            staged.close()
         }
     }
 

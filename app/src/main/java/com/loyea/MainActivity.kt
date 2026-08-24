@@ -126,15 +126,7 @@ class MainActivity : ComponentActivity() {
         val enableBgGreeting = prefs.getBoolean("enable_background_greeting", true)
         if (enableBgGreeting) {
             val randomDelayMinutes = kotlin.random.Random.nextInt(60, 180).toLong()
-            val workRequest = androidx.work.OneTimeWorkRequestBuilder<com.loyea.worker.GreetingWorker>()
-                .setInitialDelay(randomDelayMinutes, java.util.concurrent.TimeUnit.MINUTES)
-                .addTag("loyea_bg_greeting")
-                .build()
-            androidx.work.WorkManager.getInstance(this).enqueueUniqueWork(
-                "loyea_bg_greeting_work",
-                androidx.work.ExistingWorkPolicy.KEEP, // KEEP 保证已存在的任务不会被重置，保留其原有的倒计时
-                workRequest
-            )
+            com.loyea.worker.GreetingWorker.ensureScheduled(this, randomDelayMinutes)
             Log.d("MainActivity", "Background greeting self-healing check: Active, scheduled initial delay $randomDelayMinutes mins with KEEP policy.")
         }
 

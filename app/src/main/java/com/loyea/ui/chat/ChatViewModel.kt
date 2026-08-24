@@ -30,7 +30,6 @@ import com.loyea.plugin.api.PreparedPersonaTurn
 import com.loyea.plugin.api.PromptPatch
 import com.loyea.plugin.api.TextStage
 import com.loyea.plugin.host.PersonaRuntimeLease
-import com.loyea.plugin.host.acquirePersonaRuntime
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Dispatchers
@@ -155,19 +154,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     // 8.4 当前会话世界书的 timed runtime state（sticky/cooldown），与书内容分离持久化
     private var worldInfoRuntimeState = WorldInfoRuntimeState()
 
-    private val boundCharacterCard = derivedStateOf {
+    private val boundPersona = derivedStateOf {
         val currentSession = sessions.value.find { it.id == currentSessionId.value }
         if (currentSession == null) {
-            CharacterPersonaOwnership.defaultNativeCard()
+            val card = CharacterPersonaOwnership.defaultNativeCard()
+            BoundCharacterPersona(PersonaRef.native(card.id), card)
         } else {
-            CharacterPersonaOwnership.resolveBoundCard(
-                currentSession.characterId,
-                characterCardList.value
-            )
+            CharacterPersonaOwnership.resolveBoundPersona(currentSession, characterCardList.value)
         }
     }
 
-    /** UI compatibility projection only; request paths must use [boundCharacterCard]. */
+    private val boundCharacterCard = derivedStateOf { boundPersona.value?.card }
+
+    /** UI compatibility projection only; request paths must use [boundPersona]. */
     val activeCharacterCard = derivedStateOf {
         boundCharacterCard.value ?: CharacterPersonaOwnership.defaultNativeCard()
     }
@@ -333,7 +332,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     // 长会话压缩参数：消息数超过阈值时，滑窗外的旧消息异步压缩为早期摘要（增量断点 compressedAtCount）
     private val compressTriggerCount = 160
     private val compressTailCount = 20
-    private var isCompressing = false // 防重入：压缩任务进行中禁止并发触发
+    private val compressionInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
 
     // 声学/语气临时情感缓存层，切换会话时会被自动清空
     var currentVoiceEmotion = mutableStateOf<String?>(null)
@@ -341,6 +340,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     // 长程图谱关系记忆列表数据（仅用于 UI 列表展现，每个会话物理隔离）
     var graphMemories = mutableStateOf<List<com.loyea.perception.memory.MemoryTriple>>(emptyList())
+        private set
+
+    internal var tavernPluginControlState = mutableStateOf(
+        getApplication<LoyeaApplication>().pluginState(TavernPluginDefinition.ID)
+    )
+        private set
+    internal var isTavernPluginTransitioning = mutableStateOf(false)
+        private set
+    internal var tavernPluginTransitionError = mutableStateOf<String?>(null)
         private set
 
     private val ttsWriteMutex = kotlinx.coroutines.sync.Mutex()
@@ -557,7 +565,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 id = System.currentTimeMillis().toString(),
                 title = if (appLanguage.value == "en") "Welcome Chat" else "欢迎会话",
                 lastActiveTime = System.currentTimeMillis(),
-                characterId = "char_loyea_default"
+                characterId = "char_loyea_default",
+                personaOwnerId = com.loyea.plugin.api.PluginIds.NATIVE.value
             )
             list = listOf(defaultSession)
             storageManager.saveSessionList(list)
@@ -674,6 +683,46 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    internal fun refreshTavernPluginState() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val state = getApplication<LoyeaApplication>().pluginState(TavernPluginDefinition.ID)
+            withContext(Dispatchers.Main) { tavernPluginControlState.value = state }
+        }
+    }
+
+    /** Serializes rapid Switch taps and reflects both persisted intent and effective runtime state. */
+    internal fun setTavernPluginEnabled(enabled: Boolean) {
+        if (isTavernPluginTransitioning.value) return
+        if (tavernPluginControlState.value.desiredEnabled == enabled) return
+        isTavernPluginTransitioning.value = true
+        tavernPluginTransitionError.value = null
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching {
+                getApplication<LoyeaApplication>().setPluginEnabled(TavernPluginDefinition.ID, enabled)
+            }
+            result.getOrNull()?.let { state ->
+                if (enabled && state.effective.status == com.loyea.plugin.host.PluginStatus.ENABLED &&
+                    prefs.getBoolean("enable_background_greeting", true)
+                ) {
+                    com.loyea.worker.GreetingWorker.rescheduleAfterPluginEnabled(
+                        context,
+                        delayMinutes = 5L
+                    )
+                }
+            }
+            val refreshed = runCatching {
+                getApplication<LoyeaApplication>().pluginState(TavernPluginDefinition.ID)
+            }.getOrElse { tavernPluginControlState.value }
+            withContext(Dispatchers.Main) {
+                tavernPluginControlState.value = refreshed
+                tavernPluginTransitionError.value = result.exceptionOrNull()?.let { failure ->
+                    failure.localizedMessage ?: failure::class.java.simpleName
+                }
+                isTavernPluginTransitioning.value = false
+            }
+        }
+    }
+
     fun toggleThoughtsExpanded(messageId: String) {
         val updated = messages.value.map { msg ->
             if (msg.id == messageId) msg.copy(
@@ -697,13 +746,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // 删除当前会话时立即停止其正在进行的流式回复，防止流继续写回已删除会话文件
         stopResponse()
         clearDraft(deleteId)
-        val targetCharId = sessions.value.find { it.id == deleteId }?.characterId
         viewModelScope.launch(Dispatchers.IO) {
+            val persistedSession = storageManager.loadSessionList().find { it.id == deleteId }
+            val deletedBinding = persistedSession?.let(PersonaBindingSnapshot::capture)
+            deletedBinding?.let { binding ->
+                WorkManager.getInstance(context).cancelUniqueWork(
+                    com.loyea.worker.MemoryConsolidationWorker.uniqueWorkName(binding)
+                )
+            }
             storageManager.deleteSession(deleteId)
             // 同步清理该会话的关系图谱记忆，防止残留数据被后续提炼流程"复活"
-            if (targetCharId != null) {
-                graphMemoryManager.clearMemoriesForSession(targetCharId, deleteId)
-            }
+            deletedBinding?.let { graphMemoryManager.clearMemoriesForBinding(it) }
             val updatedSessions = storageManager.loadSessionList()
             withContext(Dispatchers.Main) {
                 sessions.value = updatedSessions
@@ -719,7 +772,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             id = defaultSessionId,
                             title = if (appLanguage.value == "en") "Welcome Chat" else "欢迎会话",
                             lastActiveTime = System.currentTimeMillis(),
-                            characterId = "char_loyea_default"
+                            characterId = "char_loyea_default",
+                            personaOwnerId = com.loyea.plugin.api.PluginIds.NATIVE.value
                         )
                         val newList = listOf(defaultSession)
                         viewModelScope.launch(Dispatchers.IO) {
@@ -745,39 +799,64 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun createNewChat(selectedChar: CharacterCard, selectedGreeting: String? = null) {
+        val selectedRef = CharacterPersonaOwnership.refFor(selectedChar)
+        val creationLease = if (selectedRef.isNative) {
+            null
+        } else {
+            getApplication<LoyeaApplication>().acquirePersonaRuntime(selectedRef.ownerId)
+        }
+        if (!selectedRef.isNative && creationLease == null) {
+            showPersonaUnavailableMessage()
+            return
+        }
+        val selectedCard = CharacterPersonaOwnership.resolveCard(
+            selectedRef,
+            characterCardList.value + selectedChar
+        ) ?: run {
+            creationLease?.close()
+            showPersonaUnavailableMessage()
+            return
+        }
         val newSessionId = System.currentTimeMillis().toString()
         val newSession = ChatSession(
             id = newSessionId,
             title = if (appLanguage.value == "en") "New Chat" else "新会话",
             lastActiveTime = System.currentTimeMillis(),
-            characterId = selectedChar.id
+            characterId = selectedRef.personaId,
+            personaOwnerId = selectedRef.ownerId.value
         )
         val updatedSessions = (listOf(newSession) + sessions.value).sortedByDescending { it.lastActiveTime }
         sessions.value = updatedSessions
 
-        val welcomeText = selectedGreeting?.takeIf { it.isNotBlank() }
-            ?: selectedChar.firstMessage.ifBlank {
-                selectedChar.alternateGreetings.firstOrNull().orEmpty().ifBlank {
+        val welcomeText = selectedGreeting?.takeIf { selectedChar == selectedCard && it.isNotBlank() }
+            ?: selectedCard.firstMessage.ifBlank {
+                selectedCard.alternateGreetings.firstOrNull().orEmpty().ifBlank {
                     if (appLanguage.value == "en") "Hello! I'm {{char}}. How can I help you today?" else "你好！我是 {{char}}。今天我能帮您做点什么？"
                 }
             }
-        val formattedWelcome = PromptAssembler.formatMessageContent(welcomeText, selectedChar, userName.value)
+        val formattedWelcome = PromptAssembler.formatMessageContent(welcomeText, selectedCard, userName.value)
 
         val initialMsgs = listOf(
             Message(
                 id = System.currentTimeMillis().toString(),
                 content = formattedWelcome,
                 sender = Sender.AI,
-                characterId = selectedChar.id
+                characterId = selectedCard.id
             )
         )
-        viewModelScope.launch(Dispatchers.IO) {
-            storageManager.saveSessionList(updatedSessions)
-            storageManager.saveSessionMessages(newSessionId, initialMsgs)
-            withContext(Dispatchers.Main) {
-                selectSession(newSessionId)
+        val creationJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                storageManager.saveSessionList(updatedSessions)
+                storageManager.saveSessionMessages(newSessionId, initialMsgs)
+                withContext(Dispatchers.Main) {
+                    selectSession(newSessionId)
+                }
+            } finally {
+                creationLease?.close()
+                refreshTavernPluginState()
             }
         }
+        creationJob.invokeOnCompletion { creationLease?.close() }
     }
 
     /**
@@ -803,19 +882,37 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        // 长会话惰性压缩检查（异步、不阻塞）：滑窗外的旧消息增量压成早期摘要
-        maybeCompressSession(currentSessionId.value)
+        val activePersona = boundPersona.value ?: run {
+            showPersonaUnavailableMessage()
+            return
+        }
+        val sessionId = currentSessionId.value
+        val binding = activeSession.value?.let(PersonaBindingSnapshot::capture)
+            ?.takeIf { it.sessionId == sessionId && it.ref == activePersona.ref }
+            ?: run {
+                showPersonaUnavailableMessage()
+                return
+            }
+
+        // 长会话惰性压缩也属于该 Persona 的后台副作用，必须共享同一绑定围栏。
+        maybeCompressSession(sessionId, activePersona.ref)
 
         // 拦截生图指令
         if (enableImageGen.value && inputText.trim().startsWith("/draw ")) {
             val prompt = inputText.trim().substringAfter("/draw ").trim()
             if (prompt.isNotEmpty()) {
-                triggerImageGeneration(prompt)
+                triggerImageGeneration(prompt, activePersona)
                 return
             }
         }
 
-        val activeCard = boundCharacterCard.value ?: run {
+        val activeCard = activePersona.card
+        val runtimeLease = if (activePersona.ref.isNative) {
+            null
+        } else {
+            getApplication<LoyeaApplication>().acquirePersonaRuntime(activePersona.ref.ownerId)
+        }
+        if (!activePersona.ref.isNative && runtimeLease == null) {
             showPersonaUnavailableMessage()
             return
         }
@@ -841,16 +938,37 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         )
         val memoryMsgs = collapsedHistory + userMsg
         
-        val sessionId = currentSessionId.value
-        viewModelScope.launch(Dispatchers.IO) {
-            val finalMsgs = mergeAndSaveMessages(sessionId, memoryMsgs)
-            withContext(Dispatchers.Main) {
-                messages.value = finalMsgs
-                // 更新会话标题
-                updateSessionTitleIfNeeded(sessionId, finalMsgs)
-                // SSE 流式接收
-                startAiResponseStream(sessionId, finalMsgs, activeCard)
+        val leaseHandedToStream = java.util.concurrent.atomic.AtomicBoolean(false)
+        val saveBeforeStreamJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val finalMsgs = mergeAndSaveMessages(binding, memoryMsgs) ?: return@launch
+                withContext(Dispatchers.Main) {
+                    if (!binding.matches(activeSession.value)) return@withContext
+                    messages.value = finalMsgs
+                    // 更新会话标题
+                    updateSessionTitleIfNeeded(sessionId, finalMsgs)
+                    // SSE 流式接收；从点击开始持有的 lease 转交给完整请求生命周期。
+                    startAiResponseStream(
+                        sessionId = sessionId,
+                        history = finalMsgs,
+                        characterCard = activeCard,
+                        personaRef = activePersona.ref,
+                        requestBinding = binding,
+                        initialRuntimeLease = runtimeLease
+                    )
+                    leaseHandedToStream.set(true)
+                }
+            } finally {
+                if (!leaseHandedToStream.get()) {
+                    runtimeLease?.close()
+                    withContext(Dispatchers.Main) {
+                        if (currentSessionId.value == sessionId) isThinking.value = false
+                    }
+                }
             }
+        }
+        saveBeforeStreamJob.invokeOnCompletion {
+            if (!leaseHandedToStream.get()) runtimeLease?.close()
         }
     }
 
@@ -873,14 +991,38 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         val history = current.subList(0, lastAiIndex)
         val sessionId = currentSessionId.value
-        val activeCard = boundCharacterCard.value ?: run {
+        val activePersona = boundPersona.value ?: run {
             showPersonaUnavailableMessage()
             return
         }
+        val binding = activeSession.value?.let(PersonaBindingSnapshot::capture)
+            ?.takeIf { it.sessionId == sessionId && it.ref == activePersona.ref }
+            ?: run {
+                showPersonaUnavailableMessage()
+                return
+            }
+        val runtimeLease = if (activePersona.ref.isNative) {
+            null
+        } else {
+            getApplication<LoyeaApplication>().acquirePersonaRuntime(activePersona.ref.ownerId)
+        }
+        if (!activePersona.ref.isNative && runtimeLease == null) {
+            showPersonaUnavailableMessage()
+            return
+        }
+        val activeCard = activePersona.card
         isThinking.value = true
         // 先移除旧回复气泡，流式会重建占位；旧消息交给 startAiResponseStream 的 regenerateOf 归并
         messages.value = history
-        startAiResponseStream(sessionId, history, activeCard, regenerateOf = lastAi)
+        startAiResponseStream(
+            sessionId = sessionId,
+            history = history,
+            characterCard = activeCard,
+            personaRef = activePersona.ref,
+            requestBinding = binding,
+            initialRuntimeLease = runtimeLease,
+            regenerateOf = lastAi
+        )
     }
 
     /**
@@ -925,9 +1067,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      * - 新回复成功：旧回复 + 新回复作为两个历史版本并入 versions，activeVersionIndex 指向新回复
      * - 新回复失败 / 被中断 / 内容仍为空：恢复旧回复气泡
      */
-    private fun applyRegenerateVersions(oldMessage: Message, newMessageId: String) {
-        val sessionId = currentSessionId.value
-        if (sessionId.isBlank()) return
+    private fun applyRegenerateVersions(
+        oldMessage: Message,
+        newMessageId: String,
+        binding: PersonaBindingSnapshot
+    ) {
+        val sessionId = binding.sessionId
+        if (currentSessionId.value != sessionId || !binding.matches(activeSession.value)) return
         val currentList = messages.value
         val newIdx = currentList.indexOfFirst { it.id == newMessageId }
         if (newIdx < 0) return
@@ -939,7 +1085,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             if (currentSessionId.value == sessionId) {
                 messages.value = restored
             }
-            saveMessagesAsync(sessionId, restored)
+            saveMessagesAsync(sessionId, restored, binding)
             return
         }
 
@@ -965,7 +1111,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         if (currentSessionId.value == sessionId) {
             messages.value = updated
         }
-        saveMessagesAsync(sessionId, updated)
+        saveMessagesAsync(sessionId, updated, binding)
     }
 
     private fun updateSessionTitleIfNeeded(sessionId: String, currentMessages: List<Message>) {
@@ -1154,6 +1300,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         sessionId: String,
         history: List<Message>,
         characterCard: CharacterCard,
+        personaRef: PersonaRef,
+        requestBinding: PersonaBindingSnapshot,
+        initialRuntimeLease: PersonaRuntimeLease?,
         regenerateOf: Message? = null
     ) {
         responseJob = viewModelScope.launch {
@@ -1200,7 +1349,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             var hasRealUsage = false
             var lastStreamUiPublishNanos = 0L
             lateinit var preparedTurn: PreparedPersonaTurn
-            var tavernRuntimeLease: PersonaRuntimeLease? = null
+            var tavernRuntimeLease: PersonaRuntimeLease? = initialRuntimeLease
             var conversation = emptyList<LlmChatMessage>()
 
             fun shouldPublishStreamUi(force: Boolean = false): Boolean {
@@ -1250,11 +1399,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             try {
-            val personaRef = CharacterPersonaOwnership.refFor(characterCard)
             if (!personaRef.isNative) {
-                val application = getApplication<LoyeaApplication>()
-                tavernRuntimeLease = application.pluginManager.acquirePersonaRuntime(personaRef.ownerId)
-                    ?: throw TavernPersonaUnavailableException(personaRef)
+                if (tavernRuntimeLease == null) throw TavernPersonaUnavailableException(personaRef)
             }
             val boundPreset = resolvePresetForCard(characterCard)
             val presetGeneration = boundPreset?.generationOverrides()
@@ -1348,8 +1494,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             val graphMemory = if (needsTurnSnapshot && enableGraphMemory.value) {
                 graphMemoryManager.retrieveRelationalContext(
-                    characterId = characterCard.id,
-                    sessionId = sessionId,
+                    binding = requestBinding,
                     userInput = requestUserMessage?.content ?: ""
                 )
             } else {
@@ -1406,7 +1551,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     ref = personaRef,
                     sessionId = sessionId,
                     requestId = aiMessageId,
-                    characterCard = characterCard,
                     history = history,
                     spec = tavernTurnSpec
                 )
@@ -1432,7 +1576,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 messages.value = currentList
                 persistLlmContextSnapshot(
-                    sessionId = sessionId,
+                    binding = requestBinding,
                     messageId = requestUserMessage.id,
                     expectedTimestamp = requestUserMessage.timestamp,
                     snapshot = turnSnapshot
@@ -1615,7 +1759,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                         } else msg
                                     }
                                     messages.value = currentList
-                                    saveMessagesAsync(sessionId, currentList)
+                                    saveMessagesAsync(sessionId, currentList, requestBinding)
                                     hasError = true
                                 }
                             }
@@ -1652,7 +1796,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                     }
                                 }
                                  messages.value = currentList
-                                saveMessagesAsync(sessionId, currentList)
+                                saveMessagesAsync(sessionId, currentList, requestBinding)
 
                                 // AI 消息生成结束后，若开启了 TTS 且非工具流最终回合，则自动朗读
                                 if (enableTts.value && enableAutoTts.value && streamToolCalls.isEmpty()) {
@@ -1837,7 +1981,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                                 if (currentSessionId.value == sessionId) {
                                                     messages.value = currentList
                                                 }
-                                                saveMessagesAsync(sessionId, currentList)
+                                                saveMessagesAsync(sessionId, currentList, requestBinding)
                                             }
                                         }
                                     }
@@ -1880,7 +2024,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         messages.value = currentList
 
                         // 保存当前更新了 McpCalls 的消息到文件
-                        saveMessagesAsync(sessionId, currentList)
+                        saveMessagesAsync(sessionId, currentList, requestBinding)
 
                         // 更新 conversation 变量以进入下一次 while 循环
                         conversation = nextConversation
@@ -1896,7 +2040,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             } else msg
                         }
                         messages.value = currentList
-                        saveMessagesAsync(sessionId, currentList)
+                        saveMessagesAsync(sessionId, currentList, requestBinding)
                         checkAndTriggerMemorySummaryAsync(sessionId)
                         break
                     }
@@ -1924,7 +2068,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         } else msg
                     }
                     messages.value = currentList
-                    saveMessagesAsync(sessionId, currentList)
+                    saveMessagesAsync(sessionId, currentList, requestBinding)
                 }
             } catch (t: Throwable) {
                 if (t is kotlinx.coroutines.CancellationException) throw t
@@ -1944,12 +2088,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     } else msg
                 }
                 messages.value = currentList
-                saveMessagesAsync(sessionId, currentList)
+                saveMessagesAsync(sessionId, currentList, requestBinding)
             } finally {
                 tavernRuntimeLease?.close()
                 // 重新生成路径：流结束后统一归并版本（成功合并进 versions / 失败恢复旧回复，避免丢失答案）
                 if (regenerateOf != null) {
-                    applyRegenerateVersions(regenerateOf, aiMessageId)
+                    applyRegenerateVersions(regenerateOf, aiMessageId, requestBinding)
                 }
                 isThinking.value = false
                 isMcpRunning.value = false
@@ -1968,10 +2112,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     completionTokens,
                     lastContext = if (hasRealUsage) lastContextPromptTokens else promptTokens,
                     cacheHitTokens = accumulatedCacheHitTokens,
-                    cacheMissTokens = accumulatedCacheMissTokens
+                    cacheMissTokens = accumulatedCacheMissTokens,
+                    binding = requestBinding
                 )
             }
         }
+        // A scope cancelled before the coroutine body starts must still release the pre-acquired lease.
+        responseJob?.invokeOnCompletion { initialRuntimeLease?.close() }
     }
 
     private suspend fun prepareTavernPersonaTurn(
@@ -1979,22 +2126,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         ref: PersonaRef,
         sessionId: String,
         requestId: String,
-        characterCard: CharacterCard,
         history: List<Message>,
         spec: TavernTurnSpec
     ): PreparedPersonaTurn {
         val application = getApplication<LoyeaApplication>()
-        val staged = application.tavernPersonaRepository.stage(
-            sessionId = sessionId,
-            personaId = characterCard.id,
-            requestId = requestId,
-            generation = lease.generation,
-            spec = spec
-        )
-        return try {
-            lease.preparePersonaTurn(
-                ref = ref,
-                input = PluginTurnInput(
+        return application.prepareTavernPersonaTurn(
+            lease = lease,
+            ref = ref,
+            input = PluginTurnInput(
                     sessionId = sessionId,
                     turnId = requestId,
                     turnIndex = history.count { it.sender == Sender.USER }.toLong(),
@@ -2007,12 +2146,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }
                 ),
-                restoredSnapshot = null
-            )
-        } finally {
-            // Successful prepare consumes the stage; every failure path discards it here.
-            staged.close()
-        }
+            spec = spec
+        )
     }
 
     /**
@@ -2026,14 +2161,36 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         completionTokens: Long,
         lastContext: Long? = null,
         cacheHitTokens: Long? = null,
-        cacheMissTokens: Long? = null
+        cacheMissTokens: Long? = null,
+        binding: PersonaBindingSnapshot? = null
     ) {
         if (sessionId.isBlank() || (promptTokens <= 0L && completionTokens <= 0L)) return
         viewModelScope.launch(Dispatchers.IO) {
-            storageManager.updateSessionTokens(sessionId, promptTokens, completionTokens, lastContext, cacheHitTokens, cacheMissTokens)
+            val committed = if (binding == null) {
+                storageManager.updateSessionTokens(
+                    sessionId,
+                    promptTokens,
+                    completionTokens,
+                    lastContext,
+                    cacheHitTokens,
+                    cacheMissTokens
+                )
+                true
+            } else {
+                storageManager.updateSessionIfPersonaBinding(binding) { session ->
+                    session.copy(
+                        promptTokens = session.promptTokens + promptTokens,
+                        completionTokens = session.completionTokens + completionTokens,
+                        lastContextTokens = lastContext ?: session.lastContextTokens,
+                        promptCacheHitTokens = session.promptCacheHitTokens + (cacheHitTokens ?: 0),
+                        promptCacheMissTokens = session.promptCacheMissTokens + (cacheMissTokens ?: 0)
+                    )
+                }
+            }
+            if (!committed) return@launch
             withContext(Dispatchers.Main) {
                 sessions.value = sessions.value.map { s ->
-                    if (s.id == sessionId) {
+                    if (s.id == sessionId && (binding == null || binding.matches(s))) {
                         s.copy(
                             promptTokens = s.promptTokens + promptTokens,
                             completionTokens = s.completionTokens + completionTokens,
@@ -2222,26 +2379,43 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun mergeAndSaveMessages(sessionId: String, memoryMsgs: List<Message>): List<Message> {
         var finalMsgs = emptyList<Message>()
         storageManager.updateSessionMessages(sessionId) { diskMsgs ->
-            val mergedMap = LinkedHashMap<String, Message>()
-            for (msg in diskMsgs) {
-                mergedMap[msg.id] = msg
-            }
-            for (msg in memoryMsgs) {
-                mergedMap[msg.id] = msg
-            }
-            finalMsgs = mergedMap.values.toList()
+            finalMsgs = mergeMessages(diskMsgs, memoryMsgs)
             finalMsgs
         }
         return finalMsgs
     }
 
-    private fun saveMessagesAsync(sessionId: String, currentList: List<Message>) {
+    private suspend fun mergeAndSaveMessages(
+        binding: PersonaBindingSnapshot,
+        memoryMsgs: List<Message>
+    ): List<Message>? = storageManager.updateSessionMessagesIfPersonaBinding(binding) { diskMsgs ->
+        mergeMessages(diskMsgs, memoryMsgs)
+    }
+
+    private fun mergeMessages(diskMsgs: List<Message>, memoryMsgs: List<Message>): List<Message> {
+        val mergedMap = LinkedHashMap<String, Message>()
+        for (msg in diskMsgs) mergedMap[msg.id] = msg
+        for (msg in memoryMsgs) mergedMap[msg.id] = msg
+        return mergedMap.values.toList()
+    }
+
+    private fun saveMessagesAsync(
+        sessionId: String,
+        currentList: List<Message>,
+        binding: PersonaBindingSnapshot? = null
+    ) {
         viewModelScope.launch(Dispatchers.IO) {
-            val finalMsgs = mergeAndSaveMessages(sessionId, currentList)
+            val finalMsgs = if (binding == null) {
+                mergeAndSaveMessages(sessionId, currentList)
+            } else {
+                mergeAndSaveMessages(binding, currentList) ?: return@launch
+            }
             withContext(Dispatchers.Main) {
                 // 会话守卫：磁盘始终写入参数指定的会话；仅当用户仍停留该会话时才回写 UI，
                 // 防止流式保存与切会话的竞态把旧会话消息覆盖到新会话界面
-                if (currentSessionId.value == sessionId) {
+                if (currentSessionId.value == sessionId &&
+                    (binding == null || binding.matches(activeSession.value))
+                ) {
                     messages.value = finalMsgs
                 }
             }
@@ -2250,13 +2424,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 只补写 provider 快照，不把尚未完成的 AI 占位气泡提前持久化。 */
     private fun persistLlmContextSnapshot(
-        sessionId: String,
+        binding: PersonaBindingSnapshot,
         messageId: String,
         expectedTimestamp: Long,
         snapshot: String
     ) {
         viewModelScope.launch(Dispatchers.IO) {
-            storageManager.updateSessionMessages(sessionId) { diskMessages ->
+            storageManager.updateSessionMessagesIfPersonaBinding(binding) { diskMessages ->
                 diskMessages.map { message ->
                     if (
                         message.id == messageId &&
@@ -2382,16 +2556,28 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun enqueueMemoryConsolidation(sessionId: String): Boolean {
         if (sessionId.isBlank()) return false
+        val targetSession = sessions.value.firstOrNull { it.id == sessionId } ?: return false
+        val binding = PersonaBindingSnapshot.capture(targetSession) ?: return false
 
         return try {
             val workRequest = OneTimeWorkRequestBuilder<com.loyea.worker.MemoryConsolidationWorker>()
-                .setInputData(workDataOf("session_id" to sessionId))
+                .setInputData(
+                    workDataOf(
+                        com.loyea.worker.MemoryConsolidationWorker.INPUT_SESSION_ID to sessionId,
+                        com.loyea.worker.MemoryConsolidationWorker.INPUT_PERSONA_OWNER_ID to binding.ref.ownerId.value,
+                        com.loyea.worker.MemoryConsolidationWorker.INPUT_PERSONA_ID to binding.ref.personaId,
+                        com.loyea.worker.MemoryConsolidationWorker.INPUT_SESSION_INCARNATION_ID to
+                            binding.sessionIncarnationId,
+                        com.loyea.worker.MemoryConsolidationWorker.INPUT_PERSONA_BINDING_REVISION to
+                            binding.personaBindingRevision
+                    )
+                )
                 .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
                 .build()
 
             val workManager = WorkManager.getInstance(context)
             workManager.enqueueUniqueWork(
-                "memory_consolidation_$sessionId",
+                com.loyea.worker.MemoryConsolidationWorker.uniqueWorkName(binding),
                 ExistingWorkPolicy.REPLACE,
                 workRequest
             )
@@ -2669,24 +2855,50 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      * - 摘要持久化到 ChatSession.compressedSummary，断点记入 compressedAtCount（增量，避免重复压缩）
      * - 独立协程异步执行，不阻塞发送；防重入；失败静默（断点未推进，下次触发自然重试）
      */
-    private fun maybeCompressSession(sessionId: String) {
+    private fun maybeCompressSession(sessionId: String, personaRef: PersonaRef) {
         if (sessionId.isBlank()) return
-        if (isCompressing) return
-        val activeSession = activeSession.value ?: return
+        if (!compressionInFlight.compareAndSet(false, true)) return
+        val sessionSnapshot = activeSession.value ?: run {
+            compressionInFlight.set(false)
+            return
+        }
+        val binding = PersonaBindingSnapshot.capture(sessionSnapshot)
+            ?.takeIf { it.sessionId == sessionId && it.ref == personaRef }
+        if (binding == null) {
+            compressionInFlight.set(false)
+            return
+        }
         val total = messages.value.size
-        if (total < compressTriggerCount) return
-        if (total - compressTailCount <= activeSession.compressedAtCount) return // 无新增可压缩段
-        isCompressing = true
+        if (total < compressTriggerCount || total - compressTailCount <= sessionSnapshot.compressedAtCount) {
+            compressionInFlight.set(false)
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
+            var runtimeLease: PersonaRuntimeLease? = null
             try {
+                if (!personaRef.isNative) {
+                    runtimeLease = getApplication<LoyeaApplication>()
+                        .acquirePersonaRuntime(personaRef.ownerId)
+                        ?: return@launch
+                }
+                val persistedSession = storageManager.loadSessionList()
+                    .firstOrNull { it.id == sessionId }
+                    ?.takeIf(binding::matches)
+                    ?: return@launch
+                val storedCards = storageManager.loadCharacterCards()
+                if (CharacterPersonaOwnership.resolveBoundPersona(persistedSession, storedCards)
+                        ?.takeIf { it.ref == personaRef } == null
+                ) {
+                    return@launch
+                }
                 // 以磁盘完整消息为准（内存可能只加载了尾部）
                 val fullMessages = storageManager.loadSessionMessages(sessionId)
                 if (fullMessages.size < compressTriggerCount) return@launch
                 val bound = fullMessages.size - compressTailCount
-                val compressStart = activeSession.compressedAtCount
+                val compressStart = persistedSession.compressedAtCount
                 if (bound <= compressStart) return@launch
 
-                val existingSummary = activeSession.compressedSummary
+                val existingSummary = persistedSession.compressedSummary
                 val segment = fullMessages.subList(compressStart, bound)
                 val segmentText = segment.joinToString("\n") {
                     "${if (it.sender == Sender.USER) "用户" else "AI"}: ${it.content.take(500)}"
@@ -2713,31 +2925,41 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     )
                 )
-                // 压缩也计入会话用量（系统调用），但不更新上下文窗口展示值
-                persistSessionTokens(
-                    sessionId,
-                    promptTokens = response.promptTokens ?:
-                        estimateTokens(BackgroundPromptTemplates.CONVERSATION_COMPRESSION_SYSTEM) + estimateTokens(summaryInput),
-                    completionTokens = response.completionTokens ?: estimateTokens(response.content),
-                    lastContext = null
-                )
-                if (!response.isError && response.content.isNotBlank()) {
-                    val newSummary = response.content.trim()
-                    storageManager.updateSessionCompression(sessionId, newSummary, bound)
+                val promptTokenDelta = response.promptTokens ?:
+                    estimateTokens(BackgroundPromptTemplates.CONVERSATION_COMPRESSION_SYSTEM) + estimateTokens(summaryInput)
+                val completionTokenDelta = response.completionTokens ?: estimateTokens(response.content)
+                val newSummary = response.content.trim().takeIf { !response.isError && it.isNotBlank() }
+                val committed = storageManager.updateSessionIfPersonaBinding(binding) { current ->
+                    current.copy(
+                        compressedSummary = newSummary ?: current.compressedSummary,
+                        compressedAtCount = if (newSummary != null) bound else current.compressedAtCount,
+                        promptTokens = current.promptTokens + promptTokenDelta,
+                        completionTokens = current.completionTokens + completionTokenDelta
+                    )
+                }
+                if (committed) {
                     withContext(Dispatchers.Main) {
                         sessions.value = sessions.value.map { s ->
-                            if (s.id == sessionId) {
-                                s.copy(compressedSummary = newSummary, compressedAtCount = bound)
+                            if (binding.matches(s)) {
+                                s.copy(
+                                    compressedSummary = newSummary ?: s.compressedSummary,
+                                    compressedAtCount = if (newSummary != null) bound else s.compressedAtCount,
+                                    promptTokens = s.promptTokens + promptTokenDelta,
+                                    completionTokens = s.completionTokens + completionTokenDelta
+                                )
                             } else {
                                 s
                             }
                         }
                     }
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 e.printStackTrace()
             } finally {
-                isCompressing = false
+                runtimeLease?.close()
+                compressionInFlight.set(false)
             }
         }
     }
@@ -2893,10 +3115,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun loadGraphMemoriesForCurrentSession() {
         val sessionId = currentSessionId.value
-        val characterId = activeSession.value?.characterId ?: return
+        val binding = activeSession.value?.let(PersonaBindingSnapshot::capture) ?: return
         if (sessionId.isBlank()) return
         viewModelScope.launch(Dispatchers.IO) {
-            val filtered = graphMemoryManager.getTriplesForSession(characterId, sessionId)
+            val filtered = graphMemoryManager.getTriplesForSession(binding)
             withContext(Dispatchers.Main) {
                 graphMemories.value = filtered
             }
@@ -2908,11 +3130,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun deleteGraphMemoryTriple(tripleId: Long) {
         val sessionId = currentSessionId.value
-        val characterId = activeSession.value?.characterId ?: return
+        val binding = activeSession.value?.let(PersonaBindingSnapshot::capture) ?: return
         if (sessionId.isBlank()) return
         viewModelScope.launch(Dispatchers.IO) {
-            graphMemoryManager.deleteTriple(tripleId)
-            val filtered = graphMemoryManager.getTriplesForSession(characterId, sessionId)
+            graphMemoryManager.deleteTriple(tripleId, binding)
+            val filtered = graphMemoryManager.getTriplesForSession(binding)
             withContext(Dispatchers.Main) {
                 graphMemories.value = filtered
             }
@@ -2924,10 +3146,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun clearAllGraphMemoriesForCurrentSession() {
         val sessionId = currentSessionId.value
-        val characterId = activeSession.value?.characterId ?: return
+        val binding = activeSession.value?.let(PersonaBindingSnapshot::capture) ?: return
         if (sessionId.isBlank()) return
         viewModelScope.launch(Dispatchers.IO) {
-            graphMemoryManager.clearMemoriesForSession(characterId, sessionId)
+            graphMemoryManager.clearMemoriesForBinding(binding)
             withContext(Dispatchers.Main) {
                 graphMemories.value = emptyList()
             }
@@ -2937,47 +3159,79 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun editMessage(messageId: String, newContent: String) {
         val sessionId = currentSessionId.value
-        if (sessionId.isBlank()) return
-        val activeCard = boundCharacterCard.value ?: run {
+        if (sessionId.isBlank() || newContent.trim().isBlank()) return
+        val activePersona = boundPersona.value ?: run {
             showPersonaUnavailableMessage()
             return
         }
+        val binding = activeSession.value?.let(PersonaBindingSnapshot::capture)
+            ?.takeIf { it.sessionId == sessionId && it.ref == activePersona.ref }
+            ?: run {
+                showPersonaUnavailableMessage()
+                return
+            }
+        val runtimeLease = if (activePersona.ref.isNative) {
+            null
+        } else {
+            getApplication<LoyeaApplication>().acquirePersonaRuntime(activePersona.ref.ownerId)
+        }
+        if (!activePersona.ref.isNative && runtimeLease == null) {
+            showPersonaUnavailableMessage()
+            return
+        }
+        val activeCard = activePersona.card
 
         stopResponse()
 
-        viewModelScope.launch(Dispatchers.IO) {
-            val diskMsgs = storageManager.loadSessionMessages(sessionId)
-            val index = diskMsgs.indexOfFirst { it.id == messageId }
-            if (index == -1) return@launch
+        val leaseHandedToStream = java.util.concurrent.atomic.AtomicBoolean(false)
+        val editJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                var changed = false
+                val truncatedMsgs = storageManager.updateSessionMessagesIfPersonaBinding(binding) { diskMsgs ->
+                    val index = diskMsgs.indexOfFirst { it.id == messageId }
+                    if (index < 0 || diskMsgs[index].content.trim() == newContent.trim()) {
+                        diskMsgs
+                    } else {
+                        changed = true
+                        // 截断 index 之后的消息，只保留当前被编辑消息及之前的消息，并更新当前消息内容
+                        diskMsgs.subList(0, index + 1).mapIndexed { idx, msg ->
+                            if (idx == index) {
+                                msg.copy(
+                                    content = newContent,
+                                    // 编辑后分段序列失效，退回旧路径整段渲染
+                                    contentSegments = emptyList(),
+                                    // 用户正文和发送时刻已改变，旧 provider 上下文快照必须失效并按新回合重建
+                                    llmContextSnapshot = null,
+                                    llmTimeZoneId = java.util.TimeZone.getDefault().id,
+                                    timestamp = System.currentTimeMillis()
+                                )
+                            } else {
+                                msg
+                            }
+                        }
+                    }
+                } ?: return@launch
+                if (!changed) return@launch
 
-            val targetMsg = diskMsgs[index]
-            if (targetMsg.content.trim() == newContent.trim()) return@launch
-
-            // 截断 index 之后的消息，只保留当前被编辑消息及之前的消息，并更新当前消息内容
-            val truncatedMsgs = diskMsgs.subList(0, index + 1).mapIndexed { idx, msg ->
-                if (idx == index) {
-                    msg.copy(
-                        content = newContent,
-                        // 编辑后分段序列失效，退回旧路径整段渲染
-                        contentSegments = emptyList(),
-                        // 用户正文和发送时刻已改变，旧 provider 上下文快照必须失效并按新回合重建
-                        llmContextSnapshot = null,
-                        llmTimeZoneId = java.util.TimeZone.getDefault().id,
-                        timestamp = System.currentTimeMillis()
+                withContext(Dispatchers.Main) {
+                    if (!binding.matches(activeSession.value)) return@withContext
+                    messages.value = truncatedMsgs
+                    startAiResponseStream(
+                        sessionId = sessionId,
+                        history = truncatedMsgs,
+                        characterCard = activeCard,
+                        personaRef = activePersona.ref,
+                        requestBinding = binding,
+                        initialRuntimeLease = runtimeLease
                     )
-                } else {
-                    msg
+                    leaseHandedToStream.set(true)
                 }
+            } finally {
+                if (!leaseHandedToStream.get()) runtimeLease?.close()
             }
-
-            storageManager.updateSessionMessages(sessionId) {
-                truncatedMsgs
-            }
-
-            withContext(Dispatchers.Main) {
-                messages.value = truncatedMsgs
-                startAiResponseStream(sessionId, truncatedMsgs, activeCard)
-            }
+        }
+        editJob.invokeOnCompletion {
+            if (!leaseHandedToStream.get()) runtimeLease?.close()
         }
     }
 
@@ -3832,14 +4086,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun triggerImageGeneration(prompt: String) {
+    private fun triggerImageGeneration(prompt: String, persona: BoundCharacterPersona) {
         val sessionId = currentSessionId.value
         if (sessionId.isBlank()) return
-
-        val activeCard = boundCharacterCard.value ?: run {
+        val binding = activeSession.value?.let(PersonaBindingSnapshot::capture)
+            ?.takeIf { it.sessionId == sessionId && it.ref == persona.ref }
+            ?: run {
+                showPersonaUnavailableMessage()
+                return
+            }
+        val runtimeLease = if (persona.ref.isNative) {
+            null
+        } else {
+            getApplication<LoyeaApplication>().acquirePersonaRuntime(persona.ref.ownerId)
+        }
+        if (!persona.ref.isNative && runtimeLease == null) {
             showPersonaUnavailableMessage()
             return
         }
+        val activeCard = persona.card
         isThinking.value = true
 
         // 1. 发送消息
@@ -3858,88 +4123,116 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             isStillThinking = true,
             characterId = activeCard.id
         )
+        val memorySnapshot = messages.value
 
-        viewModelScope.launch(Dispatchers.IO) {
-            val collapsedHistory = messages.value.map { msg ->
-                if (msg.sender == Sender.AI && msg.isThoughtsExpanded) msg.copy(isThoughtsExpanded = false) else msg
-            }
-            val finalMsgs = mergeAndSaveMessages(sessionId, collapsedHistory + userMsg + aiMsg)
-            withContext(Dispatchers.Main) {
-                messages.value = finalMsgs
-            }
+        val imageGenerationJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val persistedSession = storageManager.loadSessionList()
+                    .firstOrNull { it.id == sessionId }
+                    ?.takeIf(binding::matches)
+                    ?: return@launch
+                val storedCards = storageManager.loadCharacterCards()
+                if (CharacterPersonaOwnership.resolveBoundPersona(persistedSession, storedCards)
+                        ?.takeIf { it.ref == persona.ref } == null
+                ) {
+                    return@launch
+                }
+                val collapsedHistory = memorySnapshot.map { msg ->
+                    if (msg.sender == Sender.AI && msg.isThoughtsExpanded) {
+                        msg.copy(isThoughtsExpanded = false)
+                    } else {
+                        msg
+                    }
+                }
+                val finalMsgs = storageManager.updateSessionMessagesIfPersonaBinding(binding) { diskMsgs ->
+                    val merged = LinkedHashMap<String, Message>()
+                    (diskMsgs + collapsedHistory + userMsg + aiMsg).forEach { merged[it.id] = it }
+                    merged.values.toList()
+                } ?: return@launch
+                withContext(Dispatchers.Main) {
+                    if (currentSessionId.value == sessionId && binding.matches(activeSession.value)) {
+                        messages.value = finalMsgs
+                    }
+                }
 
-            // 3. 调用生图
-            val genCfgId = imageGenConfigId.value
-            val targetGenConfig = if (genCfgId.isNotBlank()) {
-                apiConfigList.value.find { it.id == genCfgId } ?: activeApiConfig.value
-            } else {
-                activeApiConfig.value
-            }
-            val modelName = imageGenModel.value
-            val imageUrl = llmClient.generateImage(targetGenConfig, prompt, modelName)
-
-            withContext(Dispatchers.Main) {
-                isThinking.value = false
+                // 3. 调用生图。外部人格的 runtime lease 覆盖生成、下载和最终消息写回。
+                val genCfgId = imageGenConfigId.value
+                val targetGenConfig = if (genCfgId.isNotBlank()) {
+                    apiConfigList.value.find { it.id == genCfgId } ?: activeApiConfig.value
+                } else {
+                    activeApiConfig.value
+                }
+                val imageUrl = llmClient.generateImage(targetGenConfig, prompt, imageGenModel.value)
                 if (imageUrl != null) {
-                    // 异步下载到本地以便离线查看
-                    viewModelScope.launch(Dispatchers.IO) {
-                        val localImageFile = File(context.filesDir, "images/img_${System.currentTimeMillis()}.png")
-                        localImageFile.parentFile?.mkdirs()
-                        try {
-                            val request = okhttp3.Request.Builder().url(imageUrl).build()
-                            okhttp3.OkHttpClient().newCall(request).execute().use { response ->
-                                if (response.isSuccessful) {
-                                    response.body?.byteStream()?.use { input ->
-                                        localImageFile.outputStream().use { output ->
-                                            input.copyTo(output)
-                                        }
+                    val localImageFile = File(context.filesDir, "images/img_$aiMessageId.png")
+                    val temporaryImageFile = File(localImageFile.parentFile, "${localImageFile.name}.part")
+                    localImageFile.parentFile?.mkdirs()
+                    try {
+                        val request = okhttp3.Request.Builder().url(imageUrl).build()
+                        okhttp3.OkHttpClient().newCall(request).execute().use { response ->
+                            if (response.isSuccessful) {
+                                response.body?.byteStream()?.use { input ->
+                                    temporaryImageFile.outputStream().use { output ->
+                                        input.copyTo(output)
                                     }
                                 }
                             }
-                        } catch (e: java.lang.Exception) {
-                            e.printStackTrace()
                         }
-
-                        // 将最终图片和消息更新（会话守卫：生图期间用户可能已切走，UI 仅在本会话前台时更新）
-                        withContext(Dispatchers.Main) {
-                            val updatedContent = "AI 已为您生成图像，提示词：\"$prompt\""
-                            val currentList = messages.value.map { msg ->
-                                if (msg.id == aiMessageId) {
-                                    msg.copy(
-                                        content = updatedContent,
-                                        isStillThinking = false,
-                                        imageUrl = if (localImageFile.exists()) localImageFile.absolutePath else imageUrl
-                                    )
-                                } else {
-                                    msg
-                                }
+                        if (temporaryImageFile.exists() && !temporaryImageFile.renameTo(localImageFile)) {
+                            temporaryImageFile.delete()
+                        }
+                    } catch (e: Exception) {
+                        temporaryImageFile.delete()
+                        Log.w("ChatViewModel", "Could not cache generated image locally", e)
+                    }
+                    val updatedContent = "AI 已为您生成图像，提示词：\"$prompt\""
+                    val updated = storageManager.updateSessionMessagesIfPersonaBinding(binding) { diskMsgs ->
+                        diskMsgs.map { message ->
+                            if (message.id == aiMessageId) {
+                                message.copy(
+                                    content = updatedContent,
+                                    isStillThinking = false,
+                                    imageUrl = if (localImageFile.exists()) localImageFile.absolutePath else imageUrl
+                                )
+                            } else {
+                                message
                             }
-                            if (currentSessionId.value == sessionId) {
-                                messages.value = currentList
-                            }
-                            saveMessagesAsync(sessionId, currentList)
+                        }
+                    }
+                    if (updated == null && localImageFile.exists()) localImageFile.delete()
+                    withContext(Dispatchers.Main) {
+                        if (updated != null && currentSessionId.value == sessionId && binding.matches(activeSession.value)) {
+                            messages.value = updated
                         }
                     }
                 } else {
-                    // 生图失败（会话守卫同成功分支）
-                    val currentList = messages.value.map { msg ->
-                        if (msg.id == aiMessageId) {
-                            msg.copy(
+                    val updated = storageManager.updateSessionMessagesIfPersonaBinding(binding) { diskMsgs ->
+                        diskMsgs.map { message ->
+                            if (message.id == aiMessageId) message.copy(
                                 content = "图像生成失败，请检查您的生图 API 配置或网络连接。",
                                 isStillThinking = false,
                                 isError = true
-                            )
-                        } else {
-                            msg
+                            ) else message
                         }
                     }
-                    if (currentSessionId.value == sessionId) {
-                        messages.value = currentList
+                    withContext(Dispatchers.Main) {
+                        if (updated != null && currentSessionId.value == sessionId && binding.matches(activeSession.value)) {
+                            messages.value = updated
+                        }
                     }
-                    saveMessagesAsync(sessionId, currentList)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e("ChatViewModel", "Image generation failed", e)
+            } finally {
+                runtimeLease?.close()
+                withContext(Dispatchers.Main) {
+                    if (currentSessionId.value == sessionId) isThinking.value = false
                 }
             }
         }
+        imageGenerationJob.invokeOnCompletion { runtimeLease?.close() }
     }
 
     fun startPerceptionSensors() {

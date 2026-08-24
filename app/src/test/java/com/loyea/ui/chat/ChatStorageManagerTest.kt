@@ -1,10 +1,15 @@
 package com.loyea.ui.chat
 
 import android.content.Context
+import com.loyea.plugin.api.PluginIds
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -51,6 +56,392 @@ class ChatStorageManagerTest {
         val loaded = storageManager.loadSessionList()
         assertEquals(2, loaded.size)
         assertEquals("Updated Session 1", loaded.first { it.id == "1" }.title)
+    }
+
+    @Test
+    fun `legacy session persona owners migrate once and persist`() = runBlocking {
+        val sessionsFile = File(tempFolder.root, "files/sessions_metadata.json")
+        val legacyJson = """
+            [
+              {"id":"native","title":"Native","characterId":"char_loyea_default"},
+              {"id":"external","title":"External","characterId":"imported-card"}
+            ]
+            """.trimIndent()
+        sessionsFile.writeText(legacyJson)
+
+        val loaded = storageManager.loadSessionList().associateBy(ChatSession::id)
+
+        assertEquals(PluginIds.NATIVE.value, loaded.getValue("native").personaOwnerId)
+        assertEquals(TavernPluginDefinition.ID.value, loaded.getValue("external").personaOwnerId)
+        assertTrue(loaded.values.all { it.sessionIncarnationId.isNotBlank() })
+        assertTrue(loaded.values.all { it.personaBindingRevision == 1L })
+        assertTrue(loaded.values.all { it.personaBindingSchemaVersion == CHAT_SESSION_PERSONA_SCHEMA_VERSION })
+        val persisted = sessionsFile.readText()
+        assertTrue(persisted.contains("\"personaOwnerId\":\"${PluginIds.NATIVE.value}\""))
+        assertTrue(persisted.contains("\"personaOwnerId\":\"${TavernPluginDefinition.ID.value}\""))
+        val backup = File(tempFolder.root, "files/sessions_metadata.pre_persona_binding_v1.json")
+        assertEquals(legacyJson, backup.readText())
+
+        storageManager.loadSessionList()
+        assertEquals(legacyJson, backup.readText())
+    }
+
+    @Test
+    fun `blank legacy persona remains unresolved instead of becoming default Loyea`() = runBlocking {
+        File(tempFolder.root, "files/sessions_metadata.json").writeText(
+            """[{"id":"blank","title":"Blank","characterId":""}]"""
+        )
+
+        val loaded = storageManager.loadSessionList().single()
+
+        assertEquals("", loaded.characterId)
+        assertEquals(CharacterPersonaOwnership.UNRESOLVED_PERSONA_OWNER_ID, loaded.personaOwnerId)
+        assertNull(CharacterPersonaOwnership.refFor(loaded))
+    }
+
+    @Test
+    fun `persona migration write failure preserves the original file for retry`() = runBlocking {
+        val sessionsFile = File(tempFolder.root, "files/sessions_metadata.json")
+        val legacyJson = """[{"id":"legacy","title":"Legacy","characterId":"char_loyea_default"}]"""
+        sessionsFile.writeText(legacyJson)
+        val blockedTemporary = File(
+            tempFolder.root,
+            "files/sessions_metadata.pre_persona_binding_v1.json.tmp"
+        )
+        assertTrue(blockedTemporary.mkdir())
+
+        val loaded = storageManager.loadSessionList().single()
+
+        assertEquals(PluginIds.NATIVE.value, loaded.personaOwnerId)
+        assertEquals(legacyJson, sessionsFile.readText())
+        assertFalse(File(tempFolder.root, "files/sessions_metadata.json.corrupt").exists())
+
+        if (blockedTemporary.exists()) assertTrue(blockedTemporary.delete())
+        storageManager.loadSessionList()
+        assertTrue(sessionsFile.readText().contains("\"personaBindingSchemaVersion\":1"))
+    }
+
+    @Test
+    fun `persona binding revision advances and defeats ABA changes`() = runBlocking {
+        val original = ChatSession(
+            id = "aba",
+            title = "ABA",
+            characterId = "external-a",
+            personaOwnerId = TavernPluginDefinition.ID.value
+        )
+        storageManager.saveSessionList(listOf(original))
+        val persistedOriginal = storageManager.loadSessionList().single()
+        val fence = requireNotNull(PersonaBindingSnapshot.capture(persistedOriginal))
+
+        storageManager.updateSessionList { sessions ->
+            sessions.map { it.copy(characterId = "external-b") }
+        }
+        storageManager.updateSessionList { sessions ->
+            sessions.map { it.copy(characterId = "external-a") }
+        }
+        val rebound = storageManager.loadSessionList().single()
+
+        assertEquals(original.characterId, rebound.characterId)
+        assertEquals(persistedOriginal.personaBindingRevision + 2L, rebound.personaBindingRevision)
+        assertFalse(fence.matches(rebound))
+    }
+
+    @Test
+    fun `session incarnation rejects delete and recreate with the same public id`() = runBlocking {
+        val original = ChatSession("same-id", "Original")
+        storageManager.saveSessionList(listOf(original))
+        val persistedOriginal = storageManager.loadSessionList().single()
+        val fence = requireNotNull(PersonaBindingSnapshot.capture(persistedOriginal))
+
+        storageManager.deleteSession(original.id)
+        val recreated = ChatSession("same-id", "Recreated")
+        storageManager.saveSessionList(listOf(recreated))
+        val persistedRecreated = storageManager.loadSessionList().single()
+
+        assertNotEquals(persistedOriginal.sessionIncarnationId, persistedRecreated.sessionIncarnationId)
+        assertFalse(fence.matches(persistedRecreated))
+    }
+
+    @Test
+    fun `explicit persona owner survives storage round trip`() = runBlocking {
+        val session = ChatSession(
+            id = "future",
+            title = "Future plugin",
+            characterId = "persona-1",
+            personaOwnerId = "com.example.future-plugin"
+        )
+
+        storageManager.saveSessionList(listOf(session))
+
+        assertEquals(session, storageManager.loadSessionList().single())
+    }
+
+    @Test
+    fun `background greeting commit is fenced by persisted persona binding`() = runBlocking {
+        val session = ChatSession(
+            id = "greeting",
+            title = "External",
+            characterId = "external-card",
+            personaOwnerId = TavernPluginDefinition.ID.value
+        )
+        storageManager.saveSessionList(listOf(session))
+        storageManager.saveSessionMessages(session.id, emptyList())
+        val fence = requireNotNull(PersonaBindingSnapshot.capture(session))
+        val staleOperationId = "stale-operation"
+        val greeting = Message(
+            ChatStorageManager.backgroundGreetingMessageId(staleOperationId),
+            "hello",
+            Sender.AI,
+            characterId = session.characterId
+        )
+
+        storageManager.updateSessionList { sessions ->
+            sessions.map { it.copy(personaOwnerId = PluginIds.NATIVE.value) }
+        }
+        assertEquals(BackgroundGreetingCommitStatus.STALE, storageManager.commitBackgroundGreeting(
+            staleOperationId,
+            fence,
+            greeting,
+            3,
+            5,
+            lastActiveTime = 123L
+        ).status)
+        assertEquals(emptyList<Message>(), storageManager.loadSessionMessages(session.id))
+        assertEquals(0L, storageManager.loadSessionList().single().promptTokens)
+
+        storageManager.saveSessionList(listOf(session))
+        val rebound = storageManager.loadSessionList().single()
+        val reboundFence = requireNotNull(PersonaBindingSnapshot.capture(rebound))
+        val committedOperationId = "committed-operation"
+        val committedGreeting = greeting.copy(
+            id = ChatStorageManager.backgroundGreetingMessageId(committedOperationId)
+        )
+        assertEquals(BackgroundGreetingCommitStatus.COMMITTED, storageManager.commitBackgroundGreeting(
+            committedOperationId,
+            reboundFence,
+            committedGreeting,
+            3,
+            5,
+            lastActiveTime = 123L
+        ).status)
+        assertEquals(listOf(committedGreeting), storageManager.loadSessionMessages(session.id))
+        val committed = storageManager.loadSessionList().single()
+        assertEquals(3L, committed.promptTokens)
+        assertEquals(5L, committed.completionTokens)
+        assertEquals(123L, committed.lastActiveTime)
+    }
+
+    @Test
+    fun `background greeting retry is idempotent after a successful commit`() = runBlocking {
+        val session = ChatSession("greeting-idempotent", "Greeting")
+        storageManager.saveSessionList(listOf(session))
+        val persisted = storageManager.loadSessionList().single()
+        val binding = requireNotNull(PersonaBindingSnapshot.capture(persisted))
+        val operationId = "same-work-id"
+        val greeting = Message(
+            ChatStorageManager.backgroundGreetingMessageId(operationId),
+            "hello once",
+            Sender.AI,
+            characterId = persisted.characterId
+        )
+
+        val first = storageManager.commitBackgroundGreeting(
+            operationId, binding, greeting, 7, 11, lastActiveTime = 456L
+        )
+        val second = storageManager.commitBackgroundGreeting(
+            operationId, binding, greeting, 7, 11, lastActiveTime = 456L
+        )
+        val resumedWithoutJournal = storageManager.resumeBackgroundGreeting(operationId, binding)
+
+        assertEquals(BackgroundGreetingCommitStatus.COMMITTED, first.status)
+        assertEquals(BackgroundGreetingCommitStatus.ALREADY_COMMITTED, second.status)
+        assertEquals(BackgroundGreetingCommitStatus.ALREADY_COMMITTED, resumedWithoutJournal?.status)
+        assertEquals(listOf(greeting), storageManager.loadSessionMessages(session.id))
+        val finalSession = storageManager.loadSessionList().single()
+        assertEquals(7L, finalSession.promptTokens)
+        assertEquals(11L, finalSession.completionTokens)
+        assertEquals(listOf(operationId), finalSession.appliedBackgroundOperations.map { it.operationId })
+    }
+
+    @Test
+    fun `background receipt cannot cross an ABA binding revision`() = runBlocking {
+        val session = ChatSession(
+            id = "greeting-receipt-aba",
+            title = "Greeting",
+            characterId = "external-a",
+            personaOwnerId = TavernPluginDefinition.ID.value
+        )
+        storageManager.saveSessionList(listOf(session))
+        val original = storageManager.loadSessionList().single()
+        val originalBinding = requireNotNull(PersonaBindingSnapshot.capture(original))
+        val operationId = "receipt-aba-work-id"
+        val greeting = Message(
+            ChatStorageManager.backgroundGreetingMessageId(operationId),
+            "old binding",
+            Sender.AI,
+            characterId = original.characterId
+        )
+        storageManager.commitBackgroundGreeting(
+            operationId, originalBinding, greeting, 1, 1, lastActiveTime = 1L
+        )
+        storageManager.updateSessionList { sessions -> sessions.map { it.copy(characterId = "external-b") } }
+        storageManager.updateSessionList { sessions -> sessions.map { it.copy(characterId = "external-a") } }
+        val rebound = storageManager.loadSessionList().single()
+        val reboundBinding = requireNotNull(PersonaBindingSnapshot.capture(rebound))
+
+        val outcome = storageManager.resumeBackgroundGreeting(operationId, reboundBinding)
+
+        assertEquals(BackgroundGreetingCommitStatus.STALE, outcome?.status)
+        assertEquals(listOf(greeting), storageManager.loadSessionMessages(session.id))
+        assertEquals(1L, rebound.promptTokens)
+    }
+
+    @Test
+    fun `background greeting journal repairs a crash between message and metadata writes`() = runBlocking {
+        val session = ChatSession("greeting-recovery", "Greeting")
+        storageManager.saveSessionList(listOf(session))
+        val persisted = storageManager.loadSessionList().single()
+        val binding = requireNotNull(PersonaBindingSnapshot.capture(persisted))
+        val operationId = "recovery-work-id"
+        val greeting = Message(
+            ChatStorageManager.backgroundGreetingMessageId(operationId),
+            "recover me",
+            Sender.AI,
+            characterId = persisted.characterId
+        )
+        val crashingStorage = ChatStorageManager(context) { stage ->
+            if (stage == BackgroundGreetingCommitStage.AFTER_MESSAGE_WRITE) {
+                throw java.io.IOException("simulated process loss")
+            }
+        }
+
+        assertThrows(java.io.IOException::class.java) {
+            runBlocking {
+                crashingStorage.commitBackgroundGreeting(
+                    operationId, binding, greeting, 13, 17, lastActiveTime = 789L
+                )
+            }
+        }
+        assertEquals(listOf(greeting), storageManager.loadSessionMessages(session.id))
+        assertEquals(0L, storageManager.loadSessionList().single().promptTokens)
+
+        val recovered = storageManager.resumeBackgroundGreeting(operationId, binding)
+
+        assertEquals(BackgroundGreetingCommitStatus.COMMITTED, recovered?.status)
+        assertEquals(listOf(greeting), storageManager.loadSessionMessages(session.id))
+        val finalSession = storageManager.loadSessionList().single()
+        assertEquals(13L, finalSession.promptTokens)
+        assertEquals(17L, finalSession.completionTokens)
+    }
+
+    @Test
+    fun `background greeting recovery cleans a journal left after metadata commit`() = runBlocking {
+        val session = ChatSession("greeting-post-commit-recovery", "Greeting")
+        storageManager.saveSessionList(listOf(session))
+        val persisted = storageManager.loadSessionList().single()
+        val binding = requireNotNull(PersonaBindingSnapshot.capture(persisted))
+        val operationId = "post-commit-recovery-work-id"
+        val greeting = Message(
+            ChatStorageManager.backgroundGreetingMessageId(operationId),
+            "already committed",
+            Sender.AI,
+            characterId = persisted.characterId
+        )
+        val crashingStorage = ChatStorageManager(context) { stage ->
+            if (stage == BackgroundGreetingCommitStage.AFTER_SESSION_WRITE) {
+                throw java.io.IOException("simulated process loss")
+            }
+        }
+
+        assertThrows(java.io.IOException::class.java) {
+            runBlocking {
+                crashingStorage.commitBackgroundGreeting(
+                    operationId, binding, greeting, 19, 23, lastActiveTime = 999L
+                )
+            }
+        }
+        val sessionsDir = File(tempFolder.root, "files/sessions")
+        assertEquals(1, sessionsDir.listFiles { file ->
+            file.name.startsWith("background_greeting_pending_")
+        }.orEmpty().size)
+
+        val recovered = storageManager.resumeBackgroundGreeting(operationId, binding)
+
+        assertEquals(BackgroundGreetingCommitStatus.ALREADY_COMMITTED, recovered?.status)
+        assertEquals(listOf(greeting), storageManager.loadSessionMessages(session.id))
+        val finalSession = storageManager.loadSessionList().single()
+        assertEquals(19L, finalSession.promptTokens)
+        assertEquals(23L, finalSession.completionTokens)
+        assertTrue(sessionsDir.listFiles { file ->
+            file.name.startsWith("background_greeting_pending_")
+        }.orEmpty().isEmpty())
+    }
+
+    @Test
+    fun `stale recovery removes an uncommitted greeting fragment`() = runBlocking {
+        val session = ChatSession(
+            id = "greeting-stale-recovery",
+            title = "Greeting",
+            characterId = "external-a",
+            personaOwnerId = TavernPluginDefinition.ID.value
+        )
+        storageManager.saveSessionList(listOf(session))
+        val persisted = storageManager.loadSessionList().single()
+        val binding = requireNotNull(PersonaBindingSnapshot.capture(persisted))
+        val operationId = "stale-recovery-work-id"
+        val greeting = Message(
+            ChatStorageManager.backgroundGreetingMessageId(operationId),
+            "stale",
+            Sender.AI,
+            characterId = persisted.characterId
+        )
+        val crashingStorage = ChatStorageManager(context) { stage ->
+            if (stage == BackgroundGreetingCommitStage.AFTER_MESSAGE_WRITE) {
+                throw java.io.IOException("simulated process loss")
+            }
+        }
+        assertThrows(java.io.IOException::class.java) {
+            runBlocking {
+                crashingStorage.commitBackgroundGreeting(
+                    operationId, binding, greeting, 2, 3, lastActiveTime = 100L
+                )
+            }
+        }
+
+        storageManager.updateSessionList { sessions ->
+            sessions.map { it.copy(characterId = "external-b") }
+        }
+        val outcome = storageManager.resumeBackgroundGreeting(operationId, binding)
+
+        assertEquals(BackgroundGreetingCommitStatus.STALE, outcome?.status)
+        assertEquals(emptyList<Message>(), storageManager.loadSessionMessages(session.id))
+        assertEquals(0L, storageManager.loadSessionList().single().promptTokens)
+    }
+
+    @Test
+    fun `persona fenced message update rejects a changed binding`() = runBlocking {
+        val session = ChatSession(
+            id = "fenced-messages",
+            title = "Fenced",
+            characterId = "external-a",
+            personaOwnerId = TavernPluginDefinition.ID.value
+        )
+        storageManager.saveSessionList(listOf(session))
+        val persisted = storageManager.loadSessionList().single()
+        val binding = requireNotNull(PersonaBindingSnapshot.capture(persisted))
+        val first = Message("first", "hello", Sender.USER, characterId = persisted.characterId)
+
+        assertEquals(
+            listOf(first),
+            storageManager.updateSessionMessagesIfPersonaBinding(binding) { it + first }
+        )
+        storageManager.updateSessionList { sessions ->
+            sessions.map { it.copy(characterId = "external-b") }
+        }
+        val stale = Message("stale", "must not write", Sender.AI, characterId = persisted.characterId)
+
+        assertNull(storageManager.updateSessionMessagesIfPersonaBinding(binding) { it + stale })
+        assertEquals(listOf(first), storageManager.loadSessionMessages(session.id))
     }
 
     @Test

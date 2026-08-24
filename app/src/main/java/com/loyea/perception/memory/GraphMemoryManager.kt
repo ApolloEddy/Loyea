@@ -3,225 +3,281 @@ package com.loyea.perception.memory
 import android.content.Context
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import com.loyea.ui.chat.PersonaBindingSnapshot
+import java.io.File
+import java.io.FileOutputStream
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.io.File
 
-/**
- * 端侧语义图谱记忆存储管理器，使用本地文件存储 (符合整体项目文件存储哲学)
- */
+/** Persona-namespaced, local graph-memory storage. */
 class GraphMemoryManager(private val context: Context) {
     private val gson = Gson()
     private val memoriesFile = File(context.filesDir, "graph_memories.json")
+    private val personaMigrationBackupFile =
+        File(context.filesDir, "graph_memories.pre_persona_binding_v1.json")
 
     companion object {
         private val fileMutex = Mutex()
-        /** 过期清理节流间隔：24 小时内最多执行一次，避免高频读写下反复全量扫描 */
+        private var lastPurgeTime = 0L
         private const val PURGE_THROTTLE_MS = 24L * 3600 * 1000L
-        /** 记忆过期窗口：90 天未被提及即视为过期遗忘 */
         private const val PURGE_EXPIRE_MS = 90L * 24 * 3600 * 1000L
     }
 
-    private var lastPurgeTime = 0L
-
-    /**
-     * 从本地 JSON 文件加载所有三元组列表，带有损坏自愈（重命名备份而非直接删除，保留恢复可能）
-     */
-    private suspend fun loadTriplesInternal(): List<MemoryTriple> = fileMutex.withLock {
+    private fun loadTriplesLocked(): List<MemoryTriple> {
         if (!memoriesFile.exists()) return emptyList()
         return try {
-            val json = memoriesFile.readText()
             val type = object : TypeToken<List<MemoryTriple>>() {}.type
-            gson.fromJson<List<MemoryTriple>>(json, type) ?: emptyList()
-        } catch (e: Exception) {
-            e.printStackTrace()
-            // 发生反序列化异常时重命名备份自愈，防范死循环闪退的同时不丢失原始数据
-            try { memoriesFile.renameTo(File(memoriesFile.parentFile, "${memoriesFile.name}.corrupt")) } catch (ex: Exception) {}
+            val raw = gson.fromJson<List<MemoryTriple>>(memoriesFile.readText(), type) ?: emptyList()
+            raw.map { triple ->
+                MemoryTriple(
+                    id = triple.id,
+                    characterId = triple.characterId ?: "",
+                    sessionId = triple.sessionId ?: "",
+                    personaOwnerId = triple.personaOwnerId ?: "",
+                    sessionIncarnationId = triple.sessionIncarnationId ?: "",
+                    personaBindingRevision = triple.personaBindingRevision,
+                    subject = triple.subject ?: "",
+                    predicate = triple.predicate ?: "",
+                    `object` = triple.`object` ?: "",
+                    creationTime = triple.creationTime,
+                    lastMentionedTime = triple.lastMentionedTime,
+                    mentionCount = triple.mentionCount.coerceAtLeast(1),
+                    baseWeight = triple.baseWeight.takeIf(Float::isFinite) ?: 1.0f
+                )
+            }
+        } catch (failure: Exception) {
+            failure.printStackTrace()
+            backupCorruptFile(memoriesFile)
             emptyList()
         }
     }
 
-    /**
-     * 保存三元组列表到本地 JSON 文件（原子写：临时文件 + 重命名，防止中途崩溃产生半截 JSON）
-     */
-    private suspend fun saveTriplesInternal(triples: List<MemoryTriple>) = fileMutex.withLock {
-        try {
-            val json = gson.toJson(triples)
-            val tmpFile = File(memoriesFile.parentFile, "${memoriesFile.name}.tmp")
-            tmpFile.writeText(json)
-            if (!tmpFile.renameTo(memoriesFile)) {
-                tmpFile.delete()
-                memoriesFile.writeText(json)
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+    private fun saveTriplesLocked(triples: List<MemoryTriple>) {
+        atomicWrite(memoriesFile, gson.toJson(triples))
     }
 
-    /**
-     * 惰性过期清理（节流）：90 天未被提及的三元组视为过期遗忘并删除。
-     * 每次调用任何记忆入口时兜底执行一次（24h 节流），防止图谱文件无限膨胀。
-     * 注意：loadTriplesInternal 与 saveTriplesInternal 各自持锁，此处顺序调用无重入问题。
-     */
-    suspend fun purgeExpiredIfNeeded() {
-        val now = System.currentTimeMillis()
-        if (now - lastPurgeTime < PURGE_THROTTLE_MS) return
+    private fun purgeExpiredLocked(triples: List<MemoryTriple>, now: Long): List<MemoryTriple> {
+        if (now - lastPurgeTime < PURGE_THROTTLE_MS) return triples
         lastPurgeTime = now
-        val expireTime = now - PURGE_EXPIRE_MS
-        val currentList = loadTriplesInternal()
-        val filtered = currentList.filter { it.lastMentionedTime >= expireTime }
-        if (filtered.size != currentList.size) {
-            saveTriplesInternal(filtered)
-        }
+        val filtered = triples.filter { it.lastMentionedTime >= now - PURGE_EXPIRE_MS }
+        if (filtered.size != triples.size) saveTriplesLocked(filtered)
+        return filtered
     }
 
     /**
-     * 新增或更新一条三元组记录，执行合并与计数强化
+     * Legacy triples had only session + character ids. They are attached only when both match the
+     * currently persisted binding; otherwise they remain quarantined and invisible.
      */
+    private fun migrateLegacyForBindingLocked(
+        triples: List<MemoryTriple>,
+        binding: PersonaBindingSnapshot
+    ): List<MemoryTriple> {
+        var changed = false
+        val migrated = triples.map { triple ->
+            if (triple.isLegacyIdentity() &&
+                triple.sessionId == binding.sessionId &&
+                triple.characterId == binding.ref.personaId
+            ) {
+                changed = true
+                triple.copy(
+                    personaOwnerId = binding.ref.ownerId.value,
+                    sessionIncarnationId = binding.sessionIncarnationId,
+                    personaBindingRevision = binding.personaBindingRevision
+                )
+            } else {
+                triple
+            }
+        }
+        if (changed) {
+            if (!personaMigrationBackupFile.exists() && memoriesFile.exists()) {
+                atomicWrite(personaMigrationBackupFile, memoriesFile.readText())
+            }
+            saveTriplesLocked(migrated)
+        }
+        return migrated
+    }
+
+    suspend fun purgeExpiredIfNeeded() {
+        fileMutex.withLock {
+            purgeExpiredLocked(loadTriplesLocked(), System.currentTimeMillis())
+        }
+    }
+
+    /** Whole-batch read/modify/write under one mutex, avoiding lost updates between triples. */
+    suspend fun upsertTriples(
+        binding: PersonaBindingSnapshot,
+        drafts: List<MemoryTripleDraft>
+    ) {
+        if (drafts.isEmpty()) return
+        fileMutex.withLock {
+            val now = System.currentTimeMillis()
+            val current = migrateLegacyForBindingLocked(
+                purgeExpiredLocked(loadTriplesLocked(), now),
+                binding
+            ).toMutableList()
+            drafts.forEach { draft ->
+                require(draft.subject.isNotBlank() && draft.predicate.isNotBlank() && draft.`object`.isNotBlank()) {
+                    "Graph memory fields must not be blank"
+                }
+                val index = current.indexOfFirst { triple ->
+                    triple.belongsTo(binding) &&
+                        triple.subject.equals(draft.subject, ignoreCase = true) &&
+                        triple.predicate.equals(draft.predicate, ignoreCase = true) &&
+                        triple.`object`.equals(draft.`object`, ignoreCase = true)
+                }
+                if (index >= 0) {
+                    val existing = current[index]
+                    current[index] = existing.copy(
+                        lastMentionedTime = now,
+                        mentionCount = existing.mentionCount + 1
+                    )
+                } else {
+                    val nextId = (current.maxOfOrNull(MemoryTriple::id) ?: 0L) + 1L
+                    current += MemoryTriple(
+                        id = nextId,
+                        characterId = binding.ref.personaId,
+                        sessionId = binding.sessionId,
+                        personaOwnerId = binding.ref.ownerId.value,
+                        sessionIncarnationId = binding.sessionIncarnationId,
+                        personaBindingRevision = binding.personaBindingRevision,
+                        subject = draft.subject,
+                        predicate = draft.predicate,
+                        `object` = draft.`object`,
+                        creationTime = now,
+                        lastMentionedTime = now
+                    )
+                }
+            }
+            saveTriplesLocked(current)
+        }
+    }
+
     suspend fun upsertTriple(
-        characterId: String,
-        sessionId: String,
+        binding: PersonaBindingSnapshot,
         subject: String,
         predicate: String,
         `object`: String
-    ) {
-        purgeExpiredIfNeeded() // 每次写入前兜底执行过期遗忘（24h 节流）
-        val currentList = loadTriplesInternal().toMutableList()
-        val currentTime = System.currentTimeMillis()
-        
-        // 查找是否已存在相同角色的相同语义关系
-        val index = currentList.indexOfFirst {
-            it.characterId == characterId &&
-            it.sessionId == sessionId &&
-            it.subject.equals(subject, ignoreCase = true) &&
-            it.predicate.equals(predicate, ignoreCase = true) &&
-            it.`object`.equals(`object`, ignoreCase = true)
+    ) = upsertTriples(binding, listOf(MemoryTripleDraft(subject, predicate, `object`)))
+
+    suspend fun getTriplesForSession(binding: PersonaBindingSnapshot): List<MemoryTriple> =
+        fileMutex.withLock {
+            migrateLegacyForBindingLocked(loadTriplesLocked(), binding).filter { it.belongsTo(binding) }
         }
 
-        if (index != -1) {
-            val existing = currentList[index]
-            currentList[index] = existing.copy(
-                lastMentionedTime = currentTime,
-                mentionCount = existing.mentionCount + 1
-            )
-        } else {
-            val newId = (currentList.maxOfOrNull { it.id } ?: 0L) + 1L
-            currentList.add(
-                MemoryTriple(
-                    id = newId,
-                    characterId = characterId,
-                    sessionId = sessionId,
-                    subject = subject,
-                    predicate = predicate,
-                    `object` = `object`,
-                    creationTime = currentTime,
-                    lastMentionedTime = currentTime,
-                    mentionCount = 1,
-                    baseWeight = 1.0f
-                )
-            )
-        }
-        saveTriplesInternal(currentList)
+    suspend fun deleteTriple(id: Long, binding: PersonaBindingSnapshot): Boolean = fileMutex.withLock {
+        val current = migrateLegacyForBindingLocked(loadTriplesLocked(), binding)
+        val filtered = current.filterNot { it.id == id && it.belongsTo(binding) }
+        if (filtered.size == current.size) return@withLock false
+        saveTriplesLocked(filtered)
+        true
     }
 
-    /**
-     * 加载当前会话隔离的长程三元组
-     */
-    suspend fun getTriplesForSession(characterId: String, sessionId: String): List<MemoryTriple> {
-        return loadTriplesInternal().filter { it.characterId == characterId && it.sessionId == sessionId }
-    }
-
-    /**
-     * 删除单条三元组记录，确保不破坏其他数据
-     */
-    suspend fun deleteTriple(id: Long) {
-        val currentList = loadTriplesInternal().toMutableList()
-        currentList.removeAll { it.id == id }
-        saveTriplesInternal(currentList)
-    }
-
-    /**
-     * 拓扑检索：双路（1-Hop 与 2-Hop）排序，剪枝最多返回 8 条，防范 Token 膨胀
-     */
     suspend fun retrieveRelationalContext(
-        characterId: String,
-        sessionId: String,
+        binding: PersonaBindingSnapshot,
         userInput: String
-    ): String {
-        purgeExpiredIfNeeded() // 读取路径兜底（节流后几乎零开销）
-        val allTriples = loadTriplesInternal()
-        // 1. 过滤当前角色及会话的图谱数据，完全阻断信息混用
-        val sessionTriples = allTriples.filter { it.characterId == characterId && it.sessionId == sessionId }
-        if (sessionTriples.isEmpty()) return ""
+    ): String = fileMutex.withLock {
+        val now = System.currentTimeMillis()
+        val allTriples = migrateLegacyForBindingLocked(
+            purgeExpiredLocked(loadTriplesLocked(), now),
+            binding
+        )
+        val sessionTriples = allTriples.filter { it.belongsTo(binding) }
+        if (sessionTriples.isEmpty()) return@withLock ""
 
-        val currentTime = System.currentTimeMillis()
-        
-        // 2. 简单的端侧词语/实体包含匹配
         val matchedEntities = mutableSetOf<String>()
-        val entitiesInDatabase = sessionTriples.flatMap { listOf(it.subject, it.`object`) }.distinct()
-        for (entity in entitiesInDatabase) {
+        sessionTriples.flatMap { listOf(it.subject, it.`object`) }.distinct().forEach { entity ->
             if (entity.length >= 2 && userInput.contains(entity, ignoreCase = true)) {
-                matchedEntities.add(entity)
+                matchedEntities += entity
             }
         }
+        if (matchedEntities.isEmpty()) return@withLock ""
 
-        if (matchedEntities.isEmpty()) return ""
-
-        // 3. 计算 1-Hop 和 2-Hop 关联并结合艾宾浩斯曲线乘上衰减因子
-        val candidateTriples = mutableMapOf<MemoryTriple, Float>()
-        for (entity in matchedEntities) {
-            // 1-Hop 直接相关
-            val hop1 = sessionTriples.filter { it.subject == entity || it.`object` == entity }
-            for (triple in hop1) {
-                val score = triple.getCalculatedWeight(currentTime) * 1.0f
-                candidateTriples[triple] = Math.max(candidateTriples[triple] ?: 0f, score)
-                
-                // 2-Hop 拓扑跳转
-                val nextEntity = if (triple.subject == entity) triple.`object` else triple.subject
-                val hop2 = sessionTriples.filter { (it.subject == nextEntity || it.`object` == nextEntity) && it != triple }
-                for (t2 in hop2) {
-                    val score2 = t2.getCalculatedWeight(currentTime) * 0.4f // 2-Hop 降级因子 0.4
-                    candidateTriples[t2] = Math.max(candidateTriples[t2] ?: 0f, score2)
+        val candidates = mutableMapOf<MemoryTriple, Float>()
+        matchedEntities.forEach { entity ->
+            sessionTriples.filter { it.subject == entity || it.`object` == entity }.forEach { firstHop ->
+                candidates[firstHop] = maxOf(candidates[firstHop] ?: 0f, firstHop.getCalculatedWeight(now))
+                val nextEntity = if (firstHop.subject == entity) firstHop.`object` else firstHop.subject
+                sessionTriples.filter {
+                    (it.subject == nextEntity || it.`object` == nextEntity) && it != firstHop
+                }.forEach { secondHop ->
+                    candidates[secondHop] = maxOf(
+                        candidates[secondHop] ?: 0f,
+                        secondHop.getCalculatedWeight(now) * 0.4f
+                    )
                 }
             }
         }
-
-        // 4. 排序并裁剪保留最高权重的 8 条
-        val prunedTriples = candidateTriples.entries
-            .sortedByDescending { it.value }
+        val selected = candidates.entries.sortedByDescending(Map.Entry<MemoryTriple, Float>::value)
             .take(8)
-            .map { it.key }
-
-        if (prunedTriples.isEmpty()) return ""
-
-        // 5. 序列化为适合 AI 理解的 Recall Memory 格式
-        val sb = StringBuilder("[Recall Memory:\n")
-        prunedTriples.forEach {
-            sb.append("- Relationship: ${it.subject} -> ${it.predicate} -> ${it.`object`}\n")
+            .map(Map.Entry<MemoryTriple, Float>::key)
+        if (selected.isEmpty()) return@withLock ""
+        buildString {
+            append("[Recall Memory:\n")
+            selected.forEach { append("- Relationship: ${it.subject} -> ${it.predicate} -> ${it.`object`}\n") }
+            append("]")
         }
-        sb.append("]")
-        return sb.toString()
     }
 
-    /**
-     * 清理过期记忆
-     */
-    suspend fun deleteExpiredMemories(characterId: String, sessionId: String, expireTime: Long) {
-        val currentList = loadTriplesInternal()
-        val filtered = currentList.filter {
-            !(it.characterId == characterId && it.sessionId == sessionId && it.lastMentionedTime < expireTime)
+    suspend fun deleteExpiredMemories(binding: PersonaBindingSnapshot, expireTime: Long) {
+        fileMutex.withLock {
+            val current = migrateLegacyForBindingLocked(loadTriplesLocked(), binding)
+            val filtered = current.filterNot { it.belongsTo(binding) && it.lastMentionedTime < expireTime }
+            if (filtered.size != current.size) saveTriplesLocked(filtered)
         }
-        saveTriplesInternal(filtered)
     }
 
-    /**
-     * 强行清空某个会话的所有记忆 (切换/删除会话时调用，防止缓存泄露)
-     */
-    suspend fun clearMemoriesForSession(characterId: String, sessionId: String) {
-        val currentList = loadTriplesInternal()
-        val filtered = currentList.filter {
-            !(it.characterId == characterId && it.sessionId == sessionId)
+    suspend fun clearMemoriesForBinding(binding: PersonaBindingSnapshot) {
+        fileMutex.withLock {
+            val current = loadTriplesLocked()
+            val filtered = current.filterNot { triple ->
+                triple.belongsTo(binding) ||
+                    (triple.isLegacyIdentity() &&
+                        triple.sessionId == binding.sessionId &&
+                        triple.characterId == binding.ref.personaId)
+            }
+            if (filtered.size != current.size) saveTriplesLocked(filtered)
         }
-        saveTriplesInternal(filtered)
+    }
+
+    private fun MemoryTriple.belongsTo(binding: PersonaBindingSnapshot): Boolean =
+        sessionId == binding.sessionId &&
+            characterId == binding.ref.personaId &&
+            personaOwnerId == binding.ref.ownerId.value &&
+            sessionIncarnationId == binding.sessionIncarnationId &&
+            personaBindingRevision == binding.personaBindingRevision
+
+    private fun MemoryTriple.isLegacyIdentity(): Boolean =
+        personaOwnerId.isBlank() && sessionIncarnationId.isBlank() && personaBindingRevision <= 0L
+
+    private fun atomicWrite(file: File, content: String) {
+        file.parentFile?.mkdirs()
+        val temporary = File(file.parentFile, "${file.name}.tmp")
+        try {
+            FileOutputStream(temporary).use { output ->
+                output.write(content.toByteArray(Charsets.UTF_8))
+                output.fd.sync()
+            }
+            try {
+                Files.move(
+                    temporary.toPath(),
+                    file.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING
+                )
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(temporary.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+        } finally {
+            if (temporary.exists()) temporary.delete()
+        }
+    }
+
+    private fun backupCorruptFile(file: File) {
+        runCatching {
+            if (file.exists()) file.renameTo(File(file.parentFile, "${file.name}.corrupt"))
+        }
     }
 }

@@ -2,7 +2,12 @@ package com.loyea.ui.chat
 
 import com.loyea.plugin.api.PluginTurnInput
 import com.loyea.plugin.api.PluginRuntimeGeneration
+import com.loyea.plugin.api.PluginIds
+import com.loyea.plugin.api.PluginId
+import com.loyea.plugin.api.PersonaRef
 import com.loyea.plugin.api.PromptPatch
+import com.loyea.plugin.host.PluginManager
+import com.loyea.plugin.host.acquirePersonaRuntime
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -11,8 +16,10 @@ import kotlin.coroutines.Continuation
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.startCoroutine
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertThrows
 import org.junit.Test
 
@@ -136,9 +143,116 @@ class AppTavernPersonaRepositoryTest {
         assertEquals(TavernPluginDefinition.ID, CharacterPersonaOwnership.refFor(flaggedExternal).ownerId)
         assertEquals(
             "Loyea",
-            CharacterPersonaOwnership.resolveBoundCard(forgedNative.id, listOf(forgedNative))?.name
+            CharacterPersonaOwnership.resolveCard(
+                PersonaRef.native(forgedNative.id),
+                listOf(forgedNative)
+            )?.name
         )
-        assertNull(CharacterPersonaOwnership.resolveBoundCard("missing-plugin-card", emptyList()))
+        assertNull(
+            CharacterPersonaOwnership.resolveCard(
+                PersonaRef.plugin(TavernPluginDefinition.ID, forgedNative.id),
+                listOf(forgedNative)
+            )
+        )
+        assertNull(
+            CharacterPersonaOwnership.resolveCard(
+                PersonaRef.plugin(TavernPluginDefinition.ID, "missing-plugin-card"),
+                emptyList()
+            )
+        )
+    }
+
+    @Test
+    fun `persisted session owner is authoritative when resolving a persona`() {
+        val imported = card(id = "external-card", builtIn = true)
+        val externalSession = ChatSession(
+            id = "session-external",
+            title = "External",
+            characterId = imported.id,
+            personaOwnerId = TavernPluginDefinition.ID.value
+        )
+        val forgedNativeSession = externalSession.copy(
+            id = "session-forged-native",
+            personaOwnerId = PluginIds.NATIVE.value
+        )
+        val invalidOwnerSession = externalSession.copy(
+            id = "session-invalid",
+            personaOwnerId = "not valid"
+        )
+
+        val resolved = CharacterPersonaOwnership.resolveBoundPersona(externalSession, listOf(imported))
+
+        requireNotNull(resolved)
+        assertEquals(TavernPluginDefinition.ID, resolved.ref.ownerId)
+        assertSame(imported, resolved.card)
+        assertNull(CharacterPersonaOwnership.resolveBoundPersona(forgedNativeSession, listOf(imported)))
+        assertNull(CharacterPersonaOwnership.resolveBoundPersona(invalidOwnerSession, listOf(imported)))
+    }
+
+    @Test
+    fun `persona binding snapshot rejects changed or malformed worker targets`() {
+        val session = ChatSession(
+            id = "session",
+            title = "External",
+            characterId = "external-card",
+            personaOwnerId = TavernPluginDefinition.ID.value
+        )
+        val snapshot = requireNotNull(PersonaBindingSnapshot.capture(session))
+
+        assertTrue(snapshot.matches(session.copy(title = "Renamed")))
+        assertFalse(snapshot.matches(session.copy(characterId = "another-card")))
+        assertFalse(snapshot.matches(session.copy(personaOwnerId = PluginIds.NATIVE.value)))
+        assertFalse(snapshot.matches(session.copy(personaBindingRevision = session.personaBindingRevision + 1L)))
+        assertFalse(snapshot.matches(session.copy(sessionIncarnationId = "another-incarnation")))
+        assertFalse(snapshot.matches(null))
+        assertTrue(snapshot.matchesExpected(
+            TavernPluginDefinition.ID.value,
+            "external-card",
+            session.sessionIncarnationId,
+            session.personaBindingRevision
+        ))
+        assertFalse(snapshot.matchesExpected(
+            PluginIds.NATIVE.value,
+            "external-card",
+            session.sessionIncarnationId,
+            session.personaBindingRevision
+        ))
+        assertFalse(snapshot.matchesExpected(
+            TavernPluginDefinition.ID.value,
+            null,
+            session.sessionIncarnationId,
+            session.personaBindingRevision
+        ))
+        assertNull(PersonaBindingSnapshot.capture(session.copy(personaOwnerId = "invalid owner")))
+    }
+
+    @Test
+    fun `staged prepare helper consumes success and discards failure`() {
+        val repository = AppTavernPersonaRepository(loadCards = { emptyList() })
+        val manager = PluginManager().apply {
+            register(TavernPlugin(repository), enabled = true)
+        }
+        val ref = PersonaRef.plugin(TavernPluginDefinition.ID, "external-card")
+        val successLease = requireNotNull(manager.acquirePersonaRuntime(TavernPluginDefinition.ID))
+        val spec = TavernTurnSpec(prompt = PromptPatch("stable"))
+
+        val prepared = runSuspend {
+            repository.prepareStagedTurn(successLease, ref, input("turn-1"), spec)
+        }
+
+        assertEquals("stable", prepared.plan.prompt.stablePersonaText)
+        assertEquals(0, repository.pendingTurnCountForTest())
+        successLease.close()
+
+        val failureLease = requireNotNull(manager.acquirePersonaRuntime(TavernPluginDefinition.ID))
+        val wrongOwner = PersonaRef.plugin(PluginId.of("com.example.other"), "external-card")
+        assertThrows(TavernPersonaUnavailableException::class.java) {
+            runSuspend {
+                repository.prepareStagedTurn(failureLease, wrongOwner, input("turn-2"), spec)
+            }
+        }
+        assertEquals(0, repository.pendingTurnCountForTest())
+        assertEquals(0, manager.state(TavernPluginDefinition.ID).activeLeases)
     }
 
     private fun input(turnId: String, sessionId: String = "session") = PluginTurnInput(

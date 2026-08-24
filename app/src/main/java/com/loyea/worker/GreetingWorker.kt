@@ -12,20 +12,30 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import com.loyea.LoyeaApplication
 import com.loyea.MainActivity
 import com.loyea.R
 import com.loyea.perception.PhysicalContextManager
+import com.loyea.plugin.api.ChatRole
+import com.loyea.plugin.api.ConversationText
+import com.loyea.plugin.api.PluginTurnInput
+import com.loyea.plugin.api.PromptPatch
+import com.loyea.plugin.host.PersonaRuntimeLease
 import com.loyea.ui.chat.PromptAssembler
 import com.loyea.ui.chat.BackgroundPromptTemplates
-import com.loyea.ui.chat.ChatSession
+import com.loyea.ui.chat.BackgroundGreetingCommitStatus
 import com.loyea.ui.chat.ChatStorageManager
+import com.loyea.ui.chat.CharacterPersonaOwnership
+import com.loyea.ui.chat.LegacyTavernTurnAdapter
 import com.loyea.ui.chat.LlmClient
 import com.loyea.ui.chat.Message
+import com.loyea.ui.chat.PersonaBindingSnapshot
 import com.loyea.ui.chat.Sender
 import com.loyea.ui.chat.StreamEvent
-import com.loyea.ui.chat.TavernCardParser
+import com.loyea.ui.chat.TavernPreparedTurnFactory
 import com.loyea.ui.chat.estimateTokens
 import com.loyea.ui.settings.ApiConfig
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -34,7 +44,37 @@ class GreetingWorker(
     workerParams: WorkerParameters
 ) : CoroutineWorker(context, workerParams) {
 
+    companion object {
+        private const val UNIQUE_WORK_NAME = "loyea_bg_greeting_work"
+        private const val WORK_TAG = "loyea_bg_greeting"
+
+        fun ensureScheduled(context: Context, delayMinutes: Long) {
+            enqueueScheduled(context, delayMinutes, androidx.work.ExistingWorkPolicy.KEEP)
+        }
+
+        fun rescheduleAfterPluginEnabled(context: Context, delayMinutes: Long) {
+            enqueueScheduled(context, delayMinutes, androidx.work.ExistingWorkPolicy.REPLACE)
+        }
+
+        private fun enqueueScheduled(
+            context: Context,
+            delayMinutes: Long,
+            policy: androidx.work.ExistingWorkPolicy
+        ) {
+            val workRequest = androidx.work.OneTimeWorkRequestBuilder<GreetingWorker>()
+                .setInitialDelay(delayMinutes.coerceAtLeast(0L), java.util.concurrent.TimeUnit.MINUTES)
+                .addTag(WORK_TAG)
+                .build()
+            androidx.work.WorkManager.getInstance(context).enqueueUniqueWork(
+                UNIQUE_WORK_NAME,
+                policy,
+                workRequest
+            )
+        }
+    }
+
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        val operationId = id.toString()
         try {
             val prefs = context.getSharedPreferences("loyea_prefs", Context.MODE_PRIVATE)
             
@@ -81,116 +121,193 @@ class GreetingWorker(
             }
             
             val currentSession = sessions.find { it.id == sessionId } ?: return@withContext Result.failure()
-            
-            val charId = currentSession.characterId
-            val allCards = storageManager.loadCharacterCards()
-            val activeCard = allCards.find { it.id == charId } 
-                ?: allCards.firstOrNull { it.id == "char_loyea_default" } 
-                ?: TavernCardParser.getBuiltInCards().first()
-
-            val userName = prefs.getString("user_name", "Loyea Developer") ?: "Loyea Developer"
-
-            // 3. Prepare Physical Context
-            // 尊重会话级物理感知开关：关闭时不构建/不发送任何物理上下文（隐私优先），
-            // 避免后台问候绕过用户开关把 GPS/健康/蓝牙等敏感数据外发
-            val sessionUsesSystemTime = currentSession.useSystemTime ?: false
-            val physicalContext = if (sessionUsesSystemTime) {
-                val perceptionManager = PhysicalContextManager(context)
-                perceptionManager.buildPhysicalContextString()
-            } else {
-                null
-            }
-
-            val eventTime = System.currentTimeMillis()
-            val promptParts = PromptAssembler.assemblePromptParts(
-                card = activeCard,
-                userName = userName,
-                useSystemTime = sessionUsesSystemTime,
-                physicalContext = physicalContext,
-                trustedCard = activeCard.isBuiltIn,
-                snapshotTimeMillis = eventTime
-            )
-
-            // 4. Prepare Prompt
-            val history = storageManager.loadSessionMessages(sessionId).takeLast(10)
-            val systemPrompt = BackgroundPromptTemplates.greetingSystem(
-                promptParts.stableSystemPrompt,
-                userName
-            )
-            val eventInput = BackgroundPromptTemplates.greetingEventInput(promptParts.turnContextSnapshot)
-            val requestHistory = history + Message(
-                id = "background-greeting-event",
-                content = eventInput,
-                sender = Sender.USER,
-                timestamp = eventTime
-            )
-
-            var generatedText = ""
-            // 问候计费累计器：服务端返回 usage 时用真实值，否则估算兜底
-            var accumulatedPrompt = 0L
-            var accumulatedCompletion = 0L
-            var hasRealUsage = false
-            try {
-                llmClient.sendChatCompletionStream(
-                    config = activeConfig.copy(enableReasoning = false), // Disable reasoning for quick greeting
-                    systemPrompt = systemPrompt,
-                    history = requestHistory
-                ).collect { event ->
-                    when (event) {
-                        is StreamEvent.Content -> generatedText += event.text
-                        is StreamEvent.Usage -> {
-                            accumulatedPrompt += event.promptTokens
-                            accumulatedCompletion += event.completionTokens
-                            hasRealUsage = true
-                        }
-                        is StreamEvent.Error -> throw Exception(event.message)
-                        else -> {}
-                    }
+            val binding = PersonaBindingSnapshot.capture(currentSession)
+                ?: run {
+                    scheduleAfterSkippedGreeting("The persisted persona identity is unresolved.")
+                    return@withContext Result.success()
                 }
-            } catch (e: Exception) {
-                e.printStackTrace()
-                return@withContext Result.retry()
+            val loyeaApplication = context.applicationContext as? LoyeaApplication
+            var personaLease: PersonaRuntimeLease? = null
+            if (!binding.ref.isNative) {
+                personaLease = loyeaApplication
+                    ?.acquirePersonaRuntime(binding.ref.ownerId)
+                    ?: run {
+                        storageManager.discardPendingBackgroundGreeting(operationId)
+                        scheduleAfterSkippedGreeting("The persona plugin is disabled or unavailable.")
+                        return@withContext Result.success()
+                    }
             }
 
-            if (generatedText.isBlank()) return@withContext Result.retry()
+            try {
+                val allCards = storageManager.loadCharacterCards()
+                val boundPersona = CharacterPersonaOwnership.resolveBoundPersona(currentSession, allCards)
+                    ?.takeIf { it.ref == binding.ref }
+                    ?: run {
+                        storageManager.discardPendingBackgroundGreeting(operationId)
+                        scheduleAfterSkippedGreeting("The bound persona card is unavailable.")
+                        return@withContext Result.success()
+                    }
+                val activeCard = boundPersona.card
+                val userName = prefs.getString("user_name", "Loyea Developer") ?: "Loyea Developer"
 
-            // 后台主动问候计入解析出的那个会话用量（系统调用）；lastContext 仅主聊天流写，这里保持 null
-            val historyText = requestHistory.joinToString("\n") { it.content }
-            storageManager.updateSessionTokens(
-                sessionId,
-                promptTokens = if (hasRealUsage) accumulatedPrompt else estimateTokens(systemPrompt) + estimateTokens(historyText),
-                completionTokens = if (hasRealUsage) accumulatedCompletion else estimateTokens(generatedText),
-                lastContextTokens = null
-            )
+                // A process may have stopped after journaling or after only one target file write.
+                // Finish that exact Work operation locally before considering another model request.
+                storageManager.resumeBackgroundGreeting(operationId, binding)?.let { recovered ->
+                    if (recovered.status != BackgroundGreetingCommitStatus.STALE) {
+                        recovered.message?.let { message ->
+                            sendNotification(operationId, activeCard.name, message.content)
+                        }
+                    }
+                    scheduleAfterSkippedGreeting("Recovered a previous background greeting transaction.")
+                    return@withContext Result.success()
+                }
 
-            // 4. Save to chat
-            val newMsg = Message(
-                id = "${System.currentTimeMillis()}_greeting",
-                content = generatedText.trim(),
-                sender = Sender.AI,
-                characterId = activeCard.id
-            )
-            // 4. Save to chat atomically
-            storageManager.updateSessionMessages(sessionId) { currentMsgs ->
-                currentMsgs + newMsg
+                // 3. Prepare Physical Context
+                // 尊重会话级物理感知开关：关闭时不构建/不发送任何物理上下文（隐私优先），
+                // 避免后台问候绕过用户开关把 GPS/健康/蓝牙等敏感数据外发
+                val sessionUsesSystemTime = currentSession.useSystemTime ?: false
+                val physicalContext = if (sessionUsesSystemTime) {
+                    val perceptionManager = PhysicalContextManager(context)
+                    perceptionManager.buildPhysicalContextString()
+                } else {
+                    null
+                }
+
+                val eventTime = System.currentTimeMillis()
+                val history = storageManager.loadSessionMessages(sessionId).takeLast(10)
+                val promptParts = PromptAssembler.assemblePromptParts(
+                    card = activeCard,
+                    userName = userName,
+                    useSystemTime = sessionUsesSystemTime,
+                    physicalContext = physicalContext,
+                    trustedCard = binding.ref.isNative,
+                    snapshotTimeMillis = eventTime
+                )
+                val turnSpec = LegacyTavernTurnAdapter.spec(
+                    card = activeCard,
+                    userName = userName,
+                    regexScripts = emptyList(),
+                    presetMessages = emptyList(),
+                    worldInfoAtDepth = emptyMap(),
+                    prompt = PromptPatch(
+                        stablePersonaText = promptParts.stableSystemPrompt,
+                        turnContextText = promptParts.turnContextSnapshot,
+                        postHistoryText = promptParts.postHistoryInstructions
+                    )
+                )
+                val preparedTurn = if (binding.ref.isNative) {
+                    TavernPreparedTurnFactory.prepare(turnSpec)
+                } else {
+                    checkNotNull(loyeaApplication).prepareTavernPersonaTurn(
+                        lease = checkNotNull(personaLease),
+                        ref = binding.ref,
+                        input = PluginTurnInput(
+                            sessionId = sessionId,
+                            turnId = "background-greeting-$id",
+                            turnIndex = history.count { it.sender == Sender.USER }.toLong(),
+                            userName = userName,
+                            history = history.mapIndexed { index, message ->
+                                ConversationText(
+                                    id = message.id.ifBlank { "history-$index" },
+                                    role = if (message.sender == Sender.USER) ChatRole.USER else ChatRole.ASSISTANT,
+                                    content = message.content
+                                )
+                            }
+                        ),
+                        spec = turnSpec
+                    )
+                }
+
+                // 4. Prepare Prompt
+                val systemPrompt = BackgroundPromptTemplates.greetingSystem(
+                    preparedTurn.plan.prompt.stablePersonaText,
+                    userName
+                )
+                val eventInput = BackgroundPromptTemplates.greetingEventInput(
+                    preparedTurn.plan.prompt.turnContextText
+                )
+                val requestHistory = history + Message(
+                    id = "background-greeting-event",
+                    content = eventInput,
+                    sender = Sender.USER,
+                    timestamp = eventTime
+                )
+
+                var generatedText = ""
+                // 问候计费累计器：服务端返回 usage 时用真实值，否则估算兜底
+                var accumulatedPrompt = 0L
+                var accumulatedCompletion = 0L
+                var hasRealUsage = false
+                try {
+                    llmClient.sendChatCompletionStream(
+                        config = activeConfig.copy(enableReasoning = false), // Disable reasoning for quick greeting
+                        systemPrompt = systemPrompt,
+                        history = requestHistory,
+                        generation = preparedTurn.plan.generation
+                    ).collect { event ->
+                        when (event) {
+                            is StreamEvent.Content -> generatedText += event.text
+                            is StreamEvent.Usage -> {
+                                accumulatedPrompt += event.promptTokens
+                                accumulatedCompletion += event.completionTokens
+                                hasRealUsage = true
+                            }
+                            is StreamEvent.Error -> throw Exception(event.message)
+                            else -> {}
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    return@withContext Result.retry()
+                }
+
+                if (generatedText.isBlank()) return@withContext Result.retry()
+                val finalText = generatedText.trim()
+                val historyText = requestHistory.joinToString("\n") { it.content }
+                val newMsg = Message(
+                    id = ChatStorageManager.backgroundGreetingMessageId(operationId),
+                    content = finalText,
+                    sender = Sender.AI,
+                    characterId = activeCard.id
+                )
+                val committed = try {
+                    storageManager.commitBackgroundGreeting(
+                        operationId = operationId,
+                        binding = binding,
+                        message = newMsg,
+                        promptTokens = if (hasRealUsage) accumulatedPrompt
+                        else estimateTokens(systemPrompt) + estimateTokens(historyText),
+                        completionTokens = if (hasRealUsage) accumulatedCompletion else estimateTokens(generatedText),
+                        lastActiveTime = System.currentTimeMillis()
+                    )
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w("GreetingWorker", "Greeting commit interrupted; the journal will be resumed.", e)
+                    return@withContext Result.retry()
+                }
+                if (committed.status == BackgroundGreetingCommitStatus.STALE) {
+                    Log.d("GreetingWorker", "Discarded greeting because the session persona changed.")
+                    scheduleAfterSkippedGreeting("The session persona changed during generation.")
+                    return@withContext Result.success()
+                }
+
+                // 5. Send Notification
+                sendNotification(operationId, activeCard.name, committed.message?.content ?: finalText)
+
+                // 6. 链式预定下一次随机延迟的主动问候（2 到 8 小时随机）
+                val randomDelayMinutes = kotlin.random.Random.nextInt(120, 480).toLong()
+                scheduleNextGreeting(randomDelayMinutes)
+                Log.d("GreetingWorker", "Proactive greeting sent successfully. Next greeting scheduled in $randomDelayMinutes mins.")
+
+                Result.success()
+            } finally {
+                personaLease?.close()
             }
-
-            // Update session lastActiveTime atomically
-            storageManager.updateSessionList { currentSessions ->
-                currentSessions.map {
-                    if (it.id == sessionId) it.copy(lastActiveTime = System.currentTimeMillis()) else it
-                }.sortedByDescending { it.lastActiveTime }
-            }
-
-            // 5. Send Notification
-            sendNotification(activeCard.name, generatedText.trim())
-
-            // 6. 链式预定下一次随机延迟的主动问候（2 到 8 小时随机）
-            val randomDelayMinutes = kotlin.random.Random.nextInt(120, 480).toLong()
-            scheduleNextGreeting(randomDelayMinutes)
-            Log.d("GreetingWorker", "Proactive greeting sent successfully. Next greeting scheduled in $randomDelayMinutes mins.")
-
-            Result.success()
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             e.printStackTrace()
             Result.failure()
@@ -198,18 +315,16 @@ class GreetingWorker(
     }
 
     private fun scheduleNextGreeting(delayMinutes: Long) {
-        val workRequest = androidx.work.OneTimeWorkRequestBuilder<GreetingWorker>()
-            .setInitialDelay(delayMinutes, java.util.concurrent.TimeUnit.MINUTES)
-            .addTag("loyea_bg_greeting")
-            .build()
-        androidx.work.WorkManager.getInstance(context).enqueueUniqueWork(
-            "loyea_bg_greeting_work",
-            androidx.work.ExistingWorkPolicy.REPLACE, // REPLACE 替换原有，保证队列唯一性
-            workRequest
-        )
+        enqueueScheduled(context, delayMinutes, androidx.work.ExistingWorkPolicy.REPLACE)
     }
 
-    private fun sendNotification(title: String, content: String) {
+    private fun scheduleAfterSkippedGreeting(reason: String) {
+        val delayMinutes = kotlin.random.Random.nextInt(120, 480).toLong()
+        scheduleNextGreeting(delayMinutes)
+        Log.d("GreetingWorker", "$reason Next eligibility check is scheduled in $delayMinutes mins.")
+    }
+
+    private fun sendNotification(operationId: String, title: String, content: String) {
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val channelId = "loyea_greetings"
 
@@ -242,6 +357,6 @@ class GreetingWorker(
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .build()
 
-        notificationManager.notify(System.currentTimeMillis().toInt(), notification)
+        notificationManager.notify(operationId.hashCode(), notification)
     }
 }

@@ -62,7 +62,8 @@ enum class ThemeMode {
 
 // 二级页面枚举
 enum class SettingsSubPage {
-    MAIN, API_CONFIG, THEME_SETTINGS, MCP_CONFIG, PHYSICAL_SENSOR, MEMORY_SETTINGS, TOOL_AUTHORIZATION, MULTIMODAL_SETTINGS, WORLD_INFO_SETTINGS
+    MAIN, API_CONFIG, THEME_SETTINGS, MCP_CONFIG, PLUGIN_SETTINGS, PHYSICAL_SENSOR, MEMORY_SETTINGS,
+    TOOL_AUTHORIZATION, MULTIMODAL_SETTINGS, WORLD_INFO_SETTINGS
 }
 
 // API 配置数据模型
@@ -165,6 +166,7 @@ fun SettingsScreen(
                         onNavigateToApi = { subPage = SettingsSubPage.API_CONFIG },
                         onNavigateToTheme = { subPage = SettingsSubPage.THEME_SETTINGS },
                         onNavigateToMcp = { subPage = SettingsSubPage.MCP_CONFIG },
+                        onNavigateToPlugins = { subPage = SettingsSubPage.PLUGIN_SETTINGS },
                         onNavigateToSensor = { subPage = SettingsSubPage.PHYSICAL_SENSOR },
                         onNavigateToMemory = { subPage = SettingsSubPage.MEMORY_SETTINGS },
                         onNavigateToToolAuth = { subPage = SettingsSubPage.TOOL_AUTHORIZATION },
@@ -211,6 +213,13 @@ fun SettingsScreen(
                         mcpStates = mcpStates,
                         onMcpConfigsSave = onMcpConfigsSave,
                         getMcpToolsForServer = getMcpToolsForServer,
+                        appLanguage = appLanguage,
+                        onBackClick = { subPage = SettingsSubPage.MAIN }
+                    )
+                }
+                SettingsSubPage.PLUGIN_SETTINGS -> {
+                    PluginSettingsLayout(
+                        viewModel = viewModel,
                         appLanguage = appLanguage,
                         onBackClick = { subPage = SettingsSubPage.MAIN }
                     )
@@ -275,6 +284,7 @@ fun SettingsMainLayout(
     onNavigateToApi: () -> Unit,
     onNavigateToTheme: () -> Unit,
     onNavigateToMcp: () -> Unit,
+    onNavigateToPlugins: () -> Unit,
     onNavigateToSensor: () -> Unit,
     onNavigateToMemory: () -> Unit,
     onNavigateToToolAuth: () -> Unit,
@@ -459,6 +469,52 @@ fun SettingsMainLayout(
                             val connectedCount = mcpConfigs.count { mcpStates[it.id] == McpServerStatus.CONNECTED }
                             Text(
                                 text = if (isEn) "Active: $connectedCount / ${mcpConfigs.size}" else "已连接：$connectedCount / ${mcpConfigs.size}",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                            )
+                        }
+                    }
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onNavigateToPlugins() }
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PowerSettingsNew,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = if (isEn) "Runtime Plugins" else "即时插件管理",
+                                fontSize = 15.sp,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Text(
+                                text = if (isEn) {
+                                    "Hot-enable or drain compatibility runtimes"
+                                } else {
+                                    "实时启停并排空兼容层运行时"
+                                },
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
                             )
@@ -757,6 +813,168 @@ fun SettingsMainLayout(
                         }
                     }
                 )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PluginSettingsLayout(
+    viewModel: com.loyea.ui.chat.ChatViewModel?,
+    appLanguage: String,
+    onBackClick: () -> Unit
+) {
+    val isEn = appLanguage == "en"
+    val controlState = viewModel?.tavernPluginControlState?.value
+    val transitioning = viewModel?.isTavernPluginTransitioning?.value == true
+    val transitionError = viewModel?.tavernPluginTransitionError?.value
+    val effective = controlState?.effective
+
+    LaunchedEffect(viewModel) { viewModel?.refreshTavernPluginState() }
+    LaunchedEffect(viewModel, effective?.activeLeases) {
+        val model = viewModel ?: return@LaunchedEffect
+        while (model.tavernPluginControlState.value.effective.activeLeases > 0) {
+            kotlinx.coroutines.delay(500L)
+            model.refreshTavernPluginState()
+        }
+    }
+
+    val statusText = when (effective?.status) {
+        com.loyea.plugin.host.PluginStatus.ENABLED -> if (isEn) "Running" else "运行中"
+        com.loyea.plugin.host.PluginStatus.DISABLED -> if (isEn) "Stopped" else "已停用"
+        com.loyea.plugin.host.PluginStatus.FAILED -> if (isEn) "Start failed" else "启动失败"
+        com.loyea.plugin.host.PluginStatus.INCOMPATIBLE -> if (isEn) "Incompatible" else "版本不兼容"
+        com.loyea.plugin.host.PluginStatus.MISSING -> if (isEn) "Missing" else "插件缺失"
+        com.loyea.plugin.host.PluginStatus.HOST_CLOSED -> if (isEn) "Host closed" else "宿主已关闭"
+        null -> if (isEn) "Loading" else "正在读取"
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(if (isEn) "Runtime Plugins" else "即时插件管理") },
+                navigationIcon = {
+                    IconButton(onClick = onBackClick) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
+            )
+        },
+        containerColor = MaterialTheme.colorScheme.background
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(paddingValues)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Text(
+                text = if (isEn) "COMPATIBILITY RUNTIMES" else "兼容层运行时",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+            )
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Extension,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = if (isEn) "SillyTavern Compatibility" else "酒馆兼容插件",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = statusText,
+                            fontSize = 12.sp,
+                            color = when (effective?.status) {
+                                com.loyea.plugin.host.PluginStatus.ENABLED -> MaterialTheme.colorScheme.primary
+                                com.loyea.plugin.host.PluginStatus.FAILED,
+                                com.loyea.plugin.host.PluginStatus.INCOMPATIBLE,
+                                com.loyea.plugin.host.PluginStatus.MISSING -> MaterialTheme.colorScheme.error
+                                else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                            }
+                        )
+                    }
+                    if (transitioning) {
+                        CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(12.dp))
+                    }
+                    Switch(
+                        checked = controlState?.desiredEnabled == true,
+                        onCheckedChange = { enabled -> viewModel?.setTavernPluginEnabled(enabled) },
+                        enabled = viewModel != null && controlState != null && !transitioning
+                    )
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f))
+
+                Text(
+                    text = if (isEn) {
+                        "Turning it off immediately rejects new external-persona work. Requests already in progress keep their frozen runtime until they finish. Imported cards and resources stay on disk so the change is reversible."
+                    } else {
+                        "关闭后会立即拒绝新的外部人格任务；已经开始的请求继续使用冻结运行时代次，完成后自动排空。已导入的角色卡与资源仍保留在本地，因此可随时恢复。"
+                    },
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)
+                )
+
+                if ((effective?.activeLeases ?: 0) > 0) {
+                    val isDraining = controlState?.desiredEnabled == false ||
+                        effective?.status == com.loyea.plugin.host.PluginStatus.DISABLED
+                    Text(
+                        text = when {
+                            isEn && isDraining -> "Draining ${effective?.activeLeases} in-flight request(s)"
+                            isEn -> "${effective?.activeLeases} request(s) in flight"
+                            isDraining -> "正在排空 ${effective?.activeLeases} 个在途请求"
+                            else -> "${effective?.activeLeases} 个请求正在运行"
+                        },
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.tertiary
+                    )
+                }
+
+                if (controlState?.desiredEnabled == true &&
+                    effective?.status != null &&
+                    effective.status != com.loyea.plugin.host.PluginStatus.ENABLED
+                ) {
+                    Text(
+                        text = if (isEn) {
+                            "Enabled is persisted, but the runtime is not available. ${effective.failureType.orEmpty()}"
+                        } else {
+                            "启用意图已保存，但运行时当前不可用。${effective.failureType.orEmpty()}"
+                        },
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+
+                transitionError?.let { error ->
+                    Text(
+                        text = if (isEn) "Could not change plugin state: $error" else "无法切换插件状态：$error",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
             }
         }
     }

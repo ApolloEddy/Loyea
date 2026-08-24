@@ -7,6 +7,9 @@ data class MemoryTriple(
     val id: Long = 0L,            // 唯一 ID（用于 UI 和删除标识）
     val characterId: String,      // 伴侣角色卡 ID (隔离主键)
     val sessionId: String,        // 会话 ID (隔离主键)
+    val personaOwnerId: String = "", // 插件 owner；空值仅用于尚未安全迁移的旧记录
+    val sessionIncarnationId: String = "", // 删除重建同 ID 时仍保持隔离
+    val personaBindingRevision: Long = 0L, // A→B→A 仍视为不同记忆命名空间
     val subject: String,          // 主语 (如: "主人")
     val predicate: String,        // 谓语 (如: "喜欢")
     val `object`: String,         // 宾语 (如: "抹茶燕麦拿铁")
@@ -25,3 +28,9 @@ data class MemoryTriple(
         return baseWeight * Math.max(0.1f, decay) // 设定最低底限 0.1f 记忆深度
     }
 }
+
+data class MemoryTripleDraft(
+    val subject: String,
+    val predicate: String,
+    val `object`: String
+)

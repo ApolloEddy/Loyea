@@ -10,6 +10,9 @@ All notable changes to this project will be documented in this file.
 - **通用人格回合契约**：`plugin-api` 新增 `PersonaProjection`、冻结回合输入、提示词 patch、结构化消息插入、通用生成参数与分阶段文本变换接口，为 Tavern 逻辑退出核心聊天类型签名提供稳定边界。
 - **Tavern 人格插件运行时**：`tavern-core` 实现稳定插件描述、人格查询仓库端口和请求级冻结回合工厂；Preset、深度世界书、生成参数及 Regex 输出链现在可完整投影到 `PersonaPluginRuntime`，并拒绝错误 owner 或已关闭运行代次。
 - **应用级 Tavern 插件注册**：`LoyeaApplication` 默认注册内置 Tavern 插件与无 UI/ViewModel 引用的 Android 仓库适配器；待处理回合按会话、人格、唯一 AI 请求 ID 与 runtime generation 隔离并原子单次消费，同时受条数、UTF-8 字节预算和 TTL 约束，在获取、准备、代次关闭或应用清理时释放。
+- **插件启用状态与人格归属持久化**：内置插件的期望启用状态在 live host 变更前同步提交到独立偏好存储；会话新增稳定 `personaOwnerId`、incarnation 与 binding revision，旧会话按精确内置 ID 一次性迁移为 `loyea.native` 或 Tavern owner，迁移前保留原始备份并原子写回，空白/未知/损坏 owner 不再回退默认人格。
+- **即时插件控制面**：设置页新增“即时插件管理”，可实时启停酒馆兼容运行时并分别显示持久化意图、实际状态、启动失败和在途 lease 排空数量；状态切换期间禁用重复点击，重启后保持用户选择，停用不会删除已导入数据。
+- **后台副作用恢复协议**：主动问候新增以 Work ID 为键的持久化 journal 与有界身份收据，可在消息或元数据单边写入后幂等恢复且不会重复计费；记忆任务唯一名覆盖 owner、persona、session incarnation 与 binding revision。
 - **Tavern 纯核心模块**：新增 `:plugins:tavern-core`，首批迁入角色卡 JSON/PNG/CHARX 安全 codec 与规范化文档模型，并在模块内增加不依赖 Android/宿主模型的隔离测试。
 - **SillyTavern/Tavern 角色卡兼容层**：新增 V1/V2/V3 JSON、PNG `chara`/`ccv3` 与 V3 CHARX（受限读取根目录 `card.json`）解析、CRC/大小边界校验、原始未知字段保留、CharacterBook 全字段投影与稳定角色 ID；导出改为基于标准 codec，绑定世界书、扩展字段和第三方字段不会因 Loyea UI 未展示而丢失。
 - **角色卡绑定功能运行时**：内嵌 CharacterBook 会与当前会话/全局世界书合并，支持 `selective`、`constant`、`useRegex`、`position`、`insertion_order`、递归、分组、`groupOverride`/关键词评分/`groupWeight`、概率、sticky/cooldown/delay、全局扫描字段和深度 role 注入；CharacterBook 的 ST `extensions` 字段也会被读取并镜像导出。
@@ -32,6 +35,8 @@ All notable changes to this project will be documented in this file.
 - **世界书编辑器与标准导出**：设置页补充正则、大小写、整词、注入位置和深度编辑；标准 SillyTavern World Info 导出使用数字 `position`，同时保留 `positionType`/扩展字段以兼容新版 Tavern。
 - **会话请求构建**：用户输入 placement、角色卡 Regex、preset post-history 和 CharacterBook 深度注入贯通 `PromptAssembler → LlmConversationBuilder → LlmClient`，不改变旧卡/旧会话 JSON 的读取方式。
 - **外部角色主聊天接入插件租约**：插件人格请求会在解析 preset、推进世界书 timed 状态或组装提示词之前，从 `PluginManager` 获取并校验 `PersonaPluginRuntime` generation lease；租约覆盖提示词序列化、流式输出和全部 MCP 多轮，并在成功、错误或取消的统一 `finally` 中释放。`PromptPatch` 与 `GenerationPatch` 成为该请求的实际消费源，现有 preset 模型覆盖与视觉路由先后顺序保持不变。
+- **主请求与后台任务 Persona 围栏**：普通发送、重新生成、编辑重生成、压缩与生图在任何人格相关消息或网络副作用前取得 generation lease；消息、provider 快照和 token 写回使用 session incarnation + binding revision 围栏。主动问候按持久化 owner 获取同一 lease 并通过 Tavern 冻结回合后才请求模型；记忆整理任务把完整绑定写入输入，在每个网络/图记忆阶段重复校验，旧版本遗留的无身份任务安全跳过。
+- **图记忆命名空间**：三元组存储新增 owner、persona、session incarnation 与 binding revision 四维隔离，批量 upsert 在同一文件锁内完成；旧记录仅在 session/persona 精确匹配时迁移并保留原始备份，删除、重绑与 A→B→A 不再让旧图记忆重新可见。
 - **流式 UI 合帧**：高频 SSE 内容与思考片段按约 16ms 合并一次 UI 状态更新；`ToolCalls` 与 `Done` 强制刷新终态，保持工具分段、思考块、落盘和 TTS 的完整性。
 - **流式回复轻量渲染**：流式阶段使用 Compose `Text` 快速呈现，回复完成后自动恢复原 Markdown 解析与排版，减少 DS 4 Flash 高速输出时的重复解析。
 - **流式滚动策略**：生成期间改为即时追踪最新布局，结束后保留平滑滚动，避免高频片段反复取消滚动动画造成显示滞后。
@@ -42,6 +47,10 @@ All notable changes to this project will be documented in this file.
 ### Fixed (修复)
 - 修复流式生成途中切换角色卡或修改 Tavern 资源时，输出/Reasoning Regex 每个片段重新读取当前卡片而混用两套规则的问题；一条请求现在固定使用启动时的卡片、用户名、Regex、preset 与深度插入快照。
 - 修复插件能力类型不符或回合准备抛错时可能遗留宿主 lease 的风险；插件已停用或人格不可用时，新外部角色请求明确失败，不再有静默切回原生默认人格的接线路径。
+- 修复后台主动问候在外部角色卡缺失或插件停用时静默改用默认 Loyea、并可能把旧人格生成结果写进已改变会话的问题；取消 Worker 也会重新抛出协程取消信号并在 `finally` 释放 lease。
+- 修复普通发送在插件租约取得前先保存用户消息、以及编辑重生成先截断历史的竞态；插件停用后新外部人格请求现在不会留下半启动的本地副作用，删除重建或重绑期间的旧流式写回也会被身份围栏拒绝。
+- 修复主动问候崩溃重试可能重复生成、重复计费或只改写一个文件的问题；恢复过程会校验 operation receipt 所属的 incarnation/revision，旧绑定 journal 会删除孤立消息而不能跨 ABA 复用。
+- 修复图记忆按 session/character 两字段隔离导致不同 owner、删除重建会话或 ABA 重绑可能串读和复活的问题；过期 Worker 写入在提交后再次校验并执行补偿清理。
 - 修复会话绑定的外部角色卡缺失时 `activeCharacterCard` 静默切成默认 Loyea 并以错误身份继续发送的问题；发送、重新生成、编辑后重生成和生图入口现在明确阻断，内置人格归属与信任也改由精确的原生 ID 目录判定，不再相信可持久化的 `isBuiltIn` 布尔值。
 - 修复插件准备失败产生的错误气泡只留在内存、重启后消失的问题；主流式异常终态现在与普通回复一样异步落盘。
 - 修复 CharacterBook 或世界书 `token_budget/budget_cap=0` 时所有条目被错误裁剪为空；现在按 SillyTavern 语义视为不额外限制，并让 `ignoreBudget` 条目不计入预算。

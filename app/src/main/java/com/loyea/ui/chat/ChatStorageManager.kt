@@ -4,10 +4,33 @@ import android.content.Context
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.reflect.TypeToken
+import com.loyea.plugin.api.PluginIds
 import java.io.File
+import java.io.FileOutputStream
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
+import java.util.UUID
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.runBlocking
+
+const val CHAT_SESSION_PERSONA_SCHEMA_VERSION = 1
+
+data class BackgroundOperationReceipt(
+    val operationId: String,
+    val sessionIncarnationId: String,
+    val personaBindingRevision: Long,
+    val personaOwnerId: String,
+    val personaId: String
+) {
+    fun matches(binding: PersonaBindingSnapshot): Boolean =
+        sessionIncarnationId == binding.sessionIncarnationId &&
+            personaBindingRevision == binding.personaBindingRevision &&
+            personaOwnerId == binding.ref.ownerId.value &&
+            personaId == binding.ref.personaId
+}
 
 /**
  * 会话元数据实体
@@ -17,6 +40,11 @@ data class ChatSession(
     val title: String,               // 会话标题
     val lastActiveTime: Long = System.currentTimeMillis(), // 最后活动时间，用于排序
     val characterId: String = "char_loyea_default", // 新增角色人格绑定
+    val personaOwnerId: String = PluginIds.NATIVE.value, // 持久化 PersonaRef owner，禁止按卡片字段猜测归属
+    val sessionIncarnationId: String = UUID.randomUUID().toString(), // 防止删除后复用 session id 绕过后台围栏
+    val personaBindingRevision: Long = 1L, // 同一会话内每次人格绑定变化都递增，阻断 A→B→A
+    val personaBindingSchemaVersion: Int = CHAT_SESSION_PERSONA_SCHEMA_VERSION,
+    val appliedBackgroundOperations: List<BackgroundOperationReceipt> = emptyList(), // 有界幂等收据
     val useSystemTime: Boolean? = false, // 是否在此会话中使用真实系统时间
     val coreMemories: List<String> = emptyList(), // 会话核心记忆列表
     val isTitleSummarized: Boolean? = false, // 是否已由AI总结了标题
@@ -29,12 +57,59 @@ data class ChatSession(
     val promptCacheMissTokens: Long = 0 // 本会话累计 DeepSeek 前缀缓存未命中 token
 )
 
+enum class BackgroundGreetingCommitStatus {
+    COMMITTED,
+    ALREADY_COMMITTED,
+    STALE
+}
+
+data class BackgroundGreetingCommitOutcome(
+    val status: BackgroundGreetingCommitStatus,
+    val message: Message? = null
+)
+
+internal enum class BackgroundGreetingCommitStage {
+    AFTER_JOURNAL_WRITE,
+    AFTER_MESSAGE_WRITE,
+    AFTER_SESSION_WRITE
+}
+
+private data class BackgroundGreetingJournal(
+    val operationId: String,
+    val sessionId: String,
+    val sessionIncarnationId: String,
+    val personaBindingRevision: Long,
+    val personaOwnerId: String,
+    val personaId: String,
+    val message: Message,
+    val promptTokens: Long,
+    val completionTokens: Long,
+    val lastActiveTime: Long
+) {
+    fun binding(): PersonaBindingSnapshot? = runCatching {
+        PersonaBindingSnapshot(
+            sessionId = sessionId,
+            sessionIncarnationId = sessionIncarnationId,
+            personaBindingRevision = personaBindingRevision,
+            ref = com.loyea.plugin.api.PersonaRef(
+                ownerId = com.loyea.plugin.api.PluginId.of(personaOwnerId),
+                personaId = personaId
+            )
+        )
+    }.getOrNull()
+}
+
 /**
  * 本地聊天会话及消息文件存储管理器
  */
-class ChatStorageManager(private val context: Context) {
+class ChatStorageManager internal constructor(
+    private val context: Context,
+    private val backgroundGreetingFailureHook: ((BackgroundGreetingCommitStage) -> Unit)? = null
+) {
     private val gson = Gson()
     private val sessionsFile = File(context.filesDir, "sessions_metadata.json")
+    private val personaMigrationBackupFile =
+        File(context.filesDir, "sessions_metadata.pre_persona_binding_v1.json")
     private val sessionsDir = File(context.filesDir, "sessions").apply {
         if (!exists()) mkdirs()
     }
@@ -45,29 +120,53 @@ class ChatStorageManager(private val context: Context) {
         private val cardsMutex = Mutex()
         private val worldInfoMutex = Mutex()
         private val tavernResourcesMutex = Mutex()
+        private const val BACKGROUND_GREETING_JOURNAL_PREFIX = "background_greeting_pending_"
+        private const val MAX_BACKGROUND_OPERATION_IDS = 512
+
+        fun backgroundGreetingMessageId(operationId: String): String =
+            "background-greeting-$operationId"
     }
 
-    private fun saveSessionListInternal(sessions: List<ChatSession>) {
-        try {
-            val json = gson.toJson(sessions)
-            atomicWrite(sessionsFile, json)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
+    private fun saveSessionListInternal(sessions: List<ChatSession>) =
+        atomicWrite(sessionsFile, gson.toJson(sessions))
 
     private fun loadSessionListInternal(): List<ChatSession> {
         if (!sessionsFile.exists()) return emptyList()
+        val json = try {
+            sessionsFile.readText()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            backupCorruptFile(sessionsFile)
+            return emptyList()
+        }
         return try {
-            val json = sessionsFile.readText()
             val type = object : TypeToken<List<ChatSession>>() {}.type
             val rawList = gson.fromJson<List<ChatSession>>(json, type) ?: emptyList()
-            rawList.map { raw ->
+            var personaMigrationNeeded = false
+            val normalized = rawList.map { raw ->
+                val characterId = raw.characterId ?: ""
+                val persistedOwnerId = raw.personaOwnerId ?: ""
+                val personaOwnerId = persistedOwnerId.takeIf(String::isNotBlank)
+                    ?: CharacterPersonaOwnership.legacyOwnerId(characterId).also {
+                        personaMigrationNeeded = true
+                    }
+                val incarnationId = raw.sessionIncarnationId?.takeIf(String::isNotBlank)
+                    ?: UUID.randomUUID().toString().also { personaMigrationNeeded = true }
+                val bindingRevision = raw.personaBindingRevision.takeIf { it > 0L }
+                    ?: 1L.also { personaMigrationNeeded = true }
+                val schemaVersion = raw.personaBindingSchemaVersion
+                    .takeIf { it >= CHAT_SESSION_PERSONA_SCHEMA_VERSION }
+                    ?: CHAT_SESSION_PERSONA_SCHEMA_VERSION.also { personaMigrationNeeded = true }
                 ChatSession(
-                    id = raw.id ?: System.currentTimeMillis().toString(),
+                    id = raw.id?.takeIf(String::isNotBlank) ?: UUID.randomUUID().toString(),
                     title = raw.title ?: "Unnamed Chat",
                     lastActiveTime = raw.lastActiveTime,
-                    characterId = raw.characterId ?: "char_loyea_default",
+                    characterId = characterId,
+                    personaOwnerId = personaOwnerId,
+                    sessionIncarnationId = incarnationId,
+                    personaBindingRevision = bindingRevision,
+                    personaBindingSchemaVersion = schemaVersion,
+                    appliedBackgroundOperations = raw.appliedBackgroundOperations ?: emptyList(),
                     useSystemTime = raw.useSystemTime ?: false,
                     coreMemories = raw.coreMemories ?: emptyList(),
                     isTitleSummarized = raw.isTitleSummarized ?: false,
@@ -80,6 +179,18 @@ class ChatStorageManager(private val context: Context) {
                     promptCacheMissTokens = raw.promptCacheMissTokens ?: 0
                 )
             }
+            if (personaMigrationNeeded) {
+                try {
+                    if (!personaMigrationBackupFile.exists()) {
+                        atomicWrite(personaMigrationBackupFile, json)
+                    }
+                    saveSessionListInternal(normalized)
+                } catch (migrationFailure: Exception) {
+                    // 原文件仍保持有效；下次加载会重试迁移，不能把写入失败误判为源数据损坏。
+                    migrationFailure.printStackTrace()
+                }
+            }
+            normalized
         } catch (e: Exception) {
             e.printStackTrace()
             backupCorruptFile(sessionsFile)
@@ -88,13 +199,15 @@ class ChatStorageManager(private val context: Context) {
     }
 
     private fun saveSessionMessagesInternal(sessionId: String, messages: List<Message>) {
-        try {
-            val file = File(sessionsDir, "session_$sessionId.json")
-            val json = gson.toJson(messages)
-            atomicWrite(file, json)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        val file = File(sessionsDir, "session_$sessionId.json")
+        atomicWrite(file, gson.toJson(messages))
+    }
+
+    private fun loadSessionMessagesStrictInternal(sessionId: String): List<Message> {
+        val file = File(sessionsDir, "session_$sessionId.json")
+        if (!file.exists()) return emptyList()
+        val type = object : TypeToken<List<Message>>() {}.type
+        return normalizeMessages(gson.fromJson<List<Message>>(file.readText(), type) ?: emptyList())
     }
 
     private fun loadSessionMessagesInternal(sessionId: String): List<Message> {
@@ -106,20 +219,22 @@ class ChatStorageManager(private val context: Context) {
             val list = gson.fromJson<List<Message>>(json, type)
             // Gson 对旧 JSON 缺失的非空集合字段会写入运行时 null；必须一次性归一化。
             // 分多次 copy 会把尚未修复的另一个 null 传入 Kotlin 非空参数并触发 NPE。
-            list?.map { msg ->
-                msg.copy(
-                    mcpCalls = msg.mcpCalls ?: emptyList(),
-                    versions = msg.versions ?: emptyList(),
-                    contentSegments = msg.contentSegments ?: emptyList(),
-                    llmTimeZoneId = msg.llmTimeZoneId?.takeIf { it.isNotBlank() }
-                        ?: java.util.TimeZone.getDefault().id
-                )
-            } ?: emptyList()
+            normalizeMessages(list ?: emptyList())
         } catch (e: Exception) {
             e.printStackTrace()
             backupCorruptFile(file)
             emptyList()
         }
+    }
+
+    private fun normalizeMessages(messages: List<Message>): List<Message> = messages.map { msg ->
+        msg.copy(
+            mcpCalls = msg.mcpCalls ?: emptyList(),
+            versions = msg.versions ?: emptyList(),
+            contentSegments = msg.contentSegments ?: emptyList(),
+            llmTimeZoneId = msg.llmTimeZoneId?.takeIf { it.isNotBlank() }
+                ?: java.util.TimeZone.getDefault().id
+        )
     }
 
     private fun saveCharacterCardsInternal(cards: List<CharacterCard>) {
@@ -188,11 +303,25 @@ class ChatStorageManager(private val context: Context) {
      * 原子写入：先写临时文件再重命名，避免中途崩溃（断电/进程被杀）产生半截 JSON 覆盖有效数据
      */
     private fun atomicWrite(file: File, content: String) {
+        file.parentFile?.mkdirs()
         val tmpFile = File(file.parentFile, "${file.name}.tmp")
-        tmpFile.writeText(content)
-        if (!tmpFile.renameTo(file)) {
-            tmpFile.delete()
-            file.writeText(content) // rename 失败（罕见）时回退为直接写入
+        try {
+            FileOutputStream(tmpFile).use { output ->
+                output.write(content.toByteArray(Charsets.UTF_8))
+                output.fd.sync()
+            }
+            try {
+                Files.move(
+                    tmpFile.toPath(),
+                    file.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING
+                )
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(tmpFile.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+        } finally {
+            if (tmpFile.exists()) tmpFile.delete()
         }
     }
 
@@ -214,7 +343,8 @@ class ChatStorageManager(private val context: Context) {
      */
     suspend fun saveSessionList(sessions: List<ChatSession>) {
         sessionsMutex.withLock {
-            saveSessionListInternal(sessions)
+            val current = loadSessionListInternal()
+            saveSessionListInternal(reconcilePersonaBindingRevisions(current, sessions))
         }
     }
 
@@ -269,6 +399,7 @@ class ChatStorageManager(private val context: Context) {
                     // 2. 从会话列表中移除并重新保存元数据
                     val currentSessions = loadSessionListInternal().filter { it.id != sessionId }
                     saveSessionListInternal(currentSessions)
+                    deleteGreetingJournalsForSessionInternal(sessionId)
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
@@ -591,15 +722,308 @@ class ChatStorageManager(private val context: Context) {
         }
     }
 
+    /** Updates messages only while the same session incarnation and persona binding still exist. */
+    suspend fun updateSessionMessagesIfPersonaBinding(
+        binding: PersonaBindingSnapshot,
+        updateBlock: (List<Message>) -> List<Message>
+    ): List<Message>? = sessionsMutex.withLock sessionLock@{
+        messagesMutex.withLock messageLock@{
+            val session = loadSessionListInternal().firstOrNull { it.id == binding.sessionId }
+            if (!binding.matches(session)) return@messageLock null
+            val updated = updateBlock(loadSessionMessagesStrictInternal(binding.sessionId))
+            saveSessionMessagesInternal(binding.sessionId, updated)
+            updated
+        }
+    }
+
+    /**
+     * Resumes a previously journaled greeting without another model request. Returns null when
+     * this Work operation has never reached the durable journal stage.
+     */
+    suspend fun resumeBackgroundGreeting(
+        operationId: String,
+        binding: PersonaBindingSnapshot
+    ): BackgroundGreetingCommitOutcome? {
+        validateBackgroundOperationId(operationId)
+        return sessionsMutex.withLock sessionLock@{
+            messagesMutex.withLock messageLock@{
+                val currentSession = loadSessionListInternal().firstOrNull { it.id == binding.sessionId }
+                val existingReceipt = currentSession?.appliedBackgroundOperations
+                    ?.firstOrNull { it.operationId == operationId }
+                if (existingReceipt != null) {
+                    greetingJournalFile(operationId).delete()
+                    val message = loadSessionMessagesStrictInternal(binding.sessionId)
+                        .firstOrNull { it.id == backgroundGreetingMessageId(operationId) }
+                    return@messageLock BackgroundGreetingCommitOutcome(
+                        status = if (existingReceipt.matches(binding)) {
+                            BackgroundGreetingCommitStatus.ALREADY_COMMITTED
+                        } else {
+                            BackgroundGreetingCommitStatus.STALE
+                        },
+                        message = message.takeIf { existingReceipt.matches(binding) }
+                    )
+                }
+                val journal = loadGreetingJournalInternal(operationId) ?: return@messageLock null
+                if (journal.operationId != operationId || journal.binding() != binding) {
+                    discardGreetingJournalInternal(journal)
+                    return@messageLock BackgroundGreetingCommitOutcome(BackgroundGreetingCommitStatus.STALE)
+                }
+                applyGreetingJournalInternal(journal, binding)
+            }
+        }
+    }
+
+    /** Removes an uncommitted greeting fragment when a plugin/card is no longer available. */
+    suspend fun discardPendingBackgroundGreeting(operationId: String) {
+        validateBackgroundOperationId(operationId)
+        sessionsMutex.withLock {
+            messagesMutex.withLock {
+                loadGreetingJournalInternal(operationId)?.let(::discardGreetingJournalInternal)
+            }
+        }
+    }
+
+    /**
+     * Crash-recoverable, idempotent two-file commit. The journal is durable before either target
+     * file changes; retries repair a missing side and never add the same token delta twice.
+     */
+    suspend fun commitBackgroundGreeting(
+        operationId: String,
+        binding: PersonaBindingSnapshot,
+        message: Message,
+        promptTokens: Long,
+        completionTokens: Long,
+        lastActiveTime: Long
+    ): BackgroundGreetingCommitOutcome {
+        validateBackgroundOperationId(operationId)
+        require(message.id == backgroundGreetingMessageId(operationId)) {
+            "Background greeting message id must be derived from its operation id"
+        }
+        require(message.characterId == binding.ref.personaId) {
+            "Background greeting character does not match its persona binding"
+        }
+        require(promptTokens >= 0L && completionTokens >= 0L) {
+            "Background greeting token deltas must not be negative"
+        }
+        val journal = BackgroundGreetingJournal(
+            operationId = operationId,
+            sessionId = binding.sessionId,
+            sessionIncarnationId = binding.sessionIncarnationId,
+            personaBindingRevision = binding.personaBindingRevision,
+            personaOwnerId = binding.ref.ownerId.value,
+            personaId = binding.ref.personaId,
+            message = message,
+            promptTokens = promptTokens,
+            completionTokens = completionTokens,
+            lastActiveTime = lastActiveTime
+        )
+        return sessionsMutex.withLock sessionLock@{
+            messagesMutex.withLock messageLock@{
+                val currentSessions = loadSessionListInternal()
+                val target = currentSessions.firstOrNull { it.id == binding.sessionId }
+                val existingReceipt = target?.appliedBackgroundOperations
+                    ?.firstOrNull { it.operationId == operationId }
+                if (existingReceipt != null) {
+                    greetingJournalFile(operationId).delete()
+                    return@messageLock BackgroundGreetingCommitOutcome(
+                        status = if (existingReceipt.matches(binding)) {
+                            BackgroundGreetingCommitStatus.ALREADY_COMMITTED
+                        } else {
+                            BackgroundGreetingCommitStatus.STALE
+                        },
+                        message = loadSessionMessagesStrictInternal(binding.sessionId)
+                            .firstOrNull { it.id == message.id }
+                            .takeIf { existingReceipt.matches(binding) }
+                    )
+                }
+                if (!binding.matches(target)) {
+                    loadGreetingJournalInternal(operationId)?.let(::discardGreetingJournalInternal)
+                    return@messageLock BackgroundGreetingCommitOutcome(BackgroundGreetingCommitStatus.STALE)
+                }
+                atomicWrite(greetingJournalFile(operationId), gson.toJson(journal))
+                backgroundGreetingFailureHook?.invoke(BackgroundGreetingCommitStage.AFTER_JOURNAL_WRITE)
+                applyGreetingJournalInternal(journal, binding)
+            }
+        }
+    }
+
+    private fun applyGreetingJournalInternal(
+        journal: BackgroundGreetingJournal,
+        binding: PersonaBindingSnapshot
+    ): BackgroundGreetingCommitOutcome {
+        val currentSessions = loadSessionListInternal()
+        val targetIndex = currentSessions.indexOfFirst { it.id == binding.sessionId }
+        val target = currentSessions.getOrNull(targetIndex)
+        val existingReceipt = target?.appliedBackgroundOperations
+            ?.firstOrNull { it.operationId == journal.operationId }
+        if (existingReceipt != null) {
+            if (!existingReceipt.matches(binding)) {
+                greetingJournalFile(journal.operationId).delete()
+                return BackgroundGreetingCommitOutcome(BackgroundGreetingCommitStatus.STALE)
+            }
+            val messages = loadSessionMessagesStrictInternal(binding.sessionId)
+            if (messages.none { it.id == journal.message.id }) {
+                saveSessionMessagesInternal(binding.sessionId, messages + journal.message)
+            }
+            greetingJournalFile(journal.operationId).delete()
+            return BackgroundGreetingCommitOutcome(
+                BackgroundGreetingCommitStatus.ALREADY_COMMITTED,
+                journal.message
+            )
+        }
+        if (!binding.matches(target) || journal.binding() != binding) {
+            discardGreetingJournalInternal(journal)
+            return BackgroundGreetingCommitOutcome(BackgroundGreetingCommitStatus.STALE)
+        }
+        val boundTarget = requireNotNull(target)
+
+        val currentMessages = loadSessionMessagesStrictInternal(binding.sessionId)
+        val messageIndex = currentMessages.indexOfFirst { it.id == journal.message.id }
+        val updatedMessages = when {
+            messageIndex < 0 -> currentMessages + journal.message
+            currentMessages[messageIndex] == journal.message -> currentMessages
+            else -> currentMessages.toMutableList().apply { this[messageIndex] = journal.message }
+        }
+        if (updatedMessages !== currentMessages) {
+            saveSessionMessagesInternal(binding.sessionId, updatedMessages)
+        }
+        backgroundGreetingFailureHook?.invoke(BackgroundGreetingCommitStage.AFTER_MESSAGE_WRITE)
+
+        val receipt = BackgroundOperationReceipt(
+            operationId = journal.operationId,
+            sessionIncarnationId = binding.sessionIncarnationId,
+            personaBindingRevision = binding.personaBindingRevision,
+            personaOwnerId = binding.ref.ownerId.value,
+            personaId = binding.ref.personaId
+        )
+        val appliedOperations = (boundTarget.appliedBackgroundOperations + receipt)
+            .distinctBy(BackgroundOperationReceipt::operationId)
+            .takeLast(MAX_BACKGROUND_OPERATION_IDS)
+        val updatedTarget = boundTarget.copy(
+            lastActiveTime = journal.lastActiveTime,
+            promptTokens = boundTarget.promptTokens + journal.promptTokens,
+            completionTokens = boundTarget.completionTokens + journal.completionTokens,
+            appliedBackgroundOperations = appliedOperations
+        )
+        val updatedSessions = currentSessions.toMutableList().apply { this[targetIndex] = updatedTarget }
+            .sortedByDescending(ChatSession::lastActiveTime)
+        saveSessionListInternal(updatedSessions)
+        backgroundGreetingFailureHook?.invoke(BackgroundGreetingCommitStage.AFTER_SESSION_WRITE)
+        greetingJournalFile(journal.operationId).delete()
+        return BackgroundGreetingCommitOutcome(BackgroundGreetingCommitStatus.COMMITTED, journal.message)
+    }
+
+    private fun discardGreetingJournalInternal(journal: BackgroundGreetingJournal) {
+        val sessions = loadSessionListInternal()
+        val target = sessions.firstOrNull { it.id == journal.sessionId }
+        if (target?.appliedBackgroundOperations.orEmpty().none { it.operationId == journal.operationId }) {
+            val messages = loadSessionMessagesStrictInternal(journal.sessionId)
+            val filtered = messages.filterNot { it.id == journal.message.id }
+            if (filtered.size != messages.size) saveSessionMessagesInternal(journal.sessionId, filtered)
+        }
+        greetingJournalFile(journal.operationId).delete()
+    }
+
+    private fun deleteGreetingJournalsForSessionInternal(sessionId: String) {
+        sessionsDir.listFiles { file ->
+            file.name.startsWith(BACKGROUND_GREETING_JOURNAL_PREFIX) && file.name.endsWith(".json")
+        }.orEmpty().forEach { file ->
+            val journal = runCatching {
+                gson.fromJson(file.readText(), BackgroundGreetingJournal::class.java)
+            }.getOrNull()
+            if (journal?.sessionId == sessionId) file.delete()
+        }
+    }
+
+    private fun loadGreetingJournalInternal(operationId: String): BackgroundGreetingJournal? {
+        val file = greetingJournalFile(operationId)
+        if (!file.exists()) return null
+        return try {
+            gson.fromJson(file.readText(), BackgroundGreetingJournal::class.java)
+        } catch (failure: Exception) {
+            backupCorruptFile(file)
+            null
+        }
+    }
+
+    private fun greetingJournalFile(operationId: String): File {
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(operationId.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+        return File(sessionsDir, "$BACKGROUND_GREETING_JOURNAL_PREFIX$digest.json")
+    }
+
+    private fun validateBackgroundOperationId(operationId: String) {
+        require(operationId.isNotBlank() && operationId.length <= 128) {
+            "Background operation id must contain 1..128 characters"
+        }
+        require(operationId.none(Char::isISOControl)) {
+            "Background operation id must not contain control characters"
+        }
+    }
+
     /**
      * 原子化更新会话列表
      */
     suspend fun updateSessionList(updateBlock: (List<ChatSession>) -> List<ChatSession>) {
         sessionsMutex.withLock {
             val current = loadSessionListInternal()
-            val updated = updateBlock(current)
+            val updated = reconcilePersonaBindingRevisions(current, updateBlock(current))
             saveSessionListInternal(updated)
         }
+    }
+
+    private fun reconcilePersonaBindingRevisions(
+        current: List<ChatSession>,
+        proposed: List<ChatSession>
+    ): List<ChatSession> {
+        val currentById = current.associateBy(ChatSession::id)
+        return proposed.map { incoming ->
+            val old = currentById[incoming.id]
+            val incarnation = incoming.sessionIncarnationId.takeIf(String::isNotBlank)
+                ?: UUID.randomUUID().toString()
+            val normalized = incoming.copy(
+                sessionIncarnationId = incarnation,
+                personaBindingRevision = incoming.personaBindingRevision.coerceAtLeast(1L),
+                personaBindingSchemaVersion = CHAT_SESSION_PERSONA_SCHEMA_VERSION,
+                appliedBackgroundOperations = incoming.appliedBackgroundOperations
+            )
+            when {
+                old == null || old.sessionIncarnationId != incarnation -> normalized
+                old.personaOwnerId != normalized.personaOwnerId ||
+                    old.characterId != normalized.characterId -> normalized.copy(
+                    personaBindingRevision = maxOf(
+                        old.personaBindingRevision.coerceAtLeast(1L) + 1L,
+                        normalized.personaBindingRevision
+                    )
+                )
+                else -> normalized.copy(
+                    personaBindingRevision = maxOf(
+                        old.personaBindingRevision.coerceAtLeast(1L),
+                        normalized.personaBindingRevision
+                    )
+                )
+            }
+        }
+    }
+
+    suspend fun isPersonaBindingCurrent(binding: PersonaBindingSnapshot): Boolean =
+        sessionsMutex.withLock {
+            binding.matches(loadSessionListInternal().firstOrNull { it.id == binding.sessionId })
+        }
+
+    /** Applies worker metadata only while the same persisted PersonaRef still owns the session. */
+    suspend fun updateSessionIfPersonaBinding(
+        binding: PersonaBindingSnapshot,
+        updateBlock: (ChatSession) -> ChatSession
+    ): Boolean = sessionsMutex.withLock updateLock@{
+        val current = loadSessionListInternal()
+        val targetIndex = current.indexOfFirst { it.id == binding.sessionId }
+        if (targetIndex < 0 || !binding.matches(current[targetIndex])) return@updateLock false
+        val updatedSession = updateBlock(current[targetIndex])
+        check(binding.matches(updatedSession)) { "Persona-fenced update changed the session binding" }
+        saveSessionListInternal(current.toMutableList().apply { this[targetIndex] = updatedSession })
+        true
     }
 
     /**
