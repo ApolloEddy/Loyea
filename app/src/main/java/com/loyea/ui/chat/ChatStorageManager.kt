@@ -2,6 +2,7 @@ package com.loyea.ui.chat
 
 import com.loyea.context.core.*
 import com.loyea.plugins.tavern.core.*
+import com.loyea.plugins.tavern.storage.*
 
 import android.content.Context
 import com.google.gson.Gson
@@ -244,6 +245,7 @@ class ChatStorageManager internal constructor(
         try {
             val json = gson.toJson(cards)
             atomicWrite(cardsFile, json)
+            syncTavernCardDocumentsInternal(cards)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -260,7 +262,7 @@ class ChatStorageManager internal constructor(
             val type = object : TypeToken<List<CharacterCard>>() {}.type
             val rawList = gson.fromJson<List<CharacterCard>>(json, type) ?: emptyList()
             // 进行自愈式清洗
-            rawList.map { raw ->
+            val normalized = rawList.map { raw ->
                 CharacterCard(
                     id = raw.id ?: System.currentTimeMillis().toString(),
                     name = raw.name ?: "Unknown",
@@ -295,6 +297,8 @@ class ChatStorageManager internal constructor(
                     originalCardJson = raw.originalCardJson
                 )
             }
+            syncTavernCardDocumentsInternal(normalized)
+            normalized
         } catch (e: Exception) {
             e.printStackTrace()
             backupCorruptFile(cardsFile)
@@ -414,7 +418,49 @@ class ChatStorageManager internal constructor(
 
     private val worldInfoFile = File(context.filesDir, "global_world_info.json")
 
-    private val tavernResourcesFile = File(context.filesDir, "tavern_resources.json")
+    private val tavernStorageLayout = TavernStorageLayout(File(context.filesDir, "tavern"))
+    private val tavernResourcesFile = tavernStorageLayout.registryFile
+    private var tavernStorageMigrationDone = false
+
+    /**
+     * Copies the legacy registry into the plugin-private layout once. The legacy file remains
+     * untouched for downgrade/recovery; new writes go only to the plugin-owned target.
+     */
+    private fun ensureTavernStorageMigrationInternal() {
+        if (tavernStorageMigrationDone) return
+        TavernStorageMigrator.migrate(
+            sourceRoot = context.filesDir,
+            layout = tavernStorageLayout,
+            specs = listOf(
+                TavernStorageFileSpec(
+                    sourceRelativePath = "tavern_resources.json",
+                    targetRelativePath = tavernStorageLayout.registryRelativePath,
+                    required = false
+                )
+            )
+        )
+        tavernStorageMigrationDone = true
+    }
+
+    /** Persist imported card documents separately from the host CharacterCard projection. */
+    private fun syncTavernCardDocumentsInternal(cards: List<CharacterCard>) {
+        runCatching { ensureTavernStorageMigrationInternal() }
+            .onFailure { it.printStackTrace(); return }
+        cards.asSequence()
+            .filterNot(CharacterCard::isBuiltIn)
+            .forEach { card ->
+                runCatching {
+                    val rawJson = TavernCardCodec.toJson(TavernCharacterCardAdapter.toDocument(card))
+                    if (rawJson.isNotBlank()) {
+                        TavernStorageMigrator.writeUtf8(
+                            tavernStorageLayout,
+                            tavernStorageLayout.cardDocumentRelativePath(card.id),
+                            rawJson
+                        )
+                    }
+                }.onFailure { it.printStackTrace() }
+            }
+    }
 
     /**
      * 保存全局世界观条目列表
@@ -691,6 +737,7 @@ class ChatStorageManager internal constructor(
     /** 读取外部酒馆资源注册表；文件不存在时返回空注册表。 */
     suspend fun loadTavernResourceRegistry(): TavernResourceRegistry {
         return tavernResourcesMutex.withLock {
+            ensureTavernStorageMigrationInternal()
             if (!tavernResourcesFile.exists()) return@withLock TavernResourceRegistry()
             try {
                 TavernResourceRegistryCodec.parse(tavernResourcesFile.readText())
@@ -707,6 +754,7 @@ class ChatStorageManager internal constructor(
     suspend fun saveTavernResourceRegistry(registry: TavernResourceRegistry) {
         tavernResourcesMutex.withLock {
             try {
+                ensureTavernStorageMigrationInternal()
                 atomicWrite(tavernResourcesFile, TavernResourceRegistryCodec.toJson(registry))
             } catch (e: Exception) {
                 e.printStackTrace()

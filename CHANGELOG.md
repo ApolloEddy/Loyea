@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased] - 2026-08-24
 
 ### Added (新增)
+- **Tavern 私有存储模块**：新增纯 Kotlin/JVM `:plugins:tavern-storage`，提供受根目录约束的 registry/cards/assets 布局、SHA-256 文件指纹、原子复制、冲突保留和可重入迁移标记；不承载会话或消息。
 - **中立知识核心模块**：新增纯 Kotlin/JVM `:knowledge-core`（`com.loyea.context.core`），承载通用 World Info 匹配、预算、递归、深度注入和运行时状态；保留现有 `WorldInfo*` 命名以保证本阶段序列化与 Prompt 兼容。
 - **Tavern 物理拆分边界测试**：新增宿主 `CharacterCard` 与 Tavern 文档之间的迁移特征测试，锁定稳定角色 ID、未知字段往返和原生/Tavern 人格归属隔离，为后续私有存储迁移提供回归门禁。
 - **独立插件 API 基线**：新增纯 Kotlin/JVM `:plugin-api` 模块，定义稳定插件命名空间、原生/插件人格归属、能力声明、API 版本兼容检查与不可变运行代次；该模块不依赖 Android、Compose、Gson、网络库或 Tavern 具体实现。
@@ -27,6 +28,7 @@ All notable changes to this project will be documented in this file.
 - **角色卡高级编辑与导出**：编辑/创建页补齐 description、creator notes、post-history、备用/群聊开场白、标签、来源、昵称、版本、内嵌 CharacterBook 与 extensions JSON；新增 V3 JSON 和 CHARX（含安全资源）导出。
 
 ### Changed (变更)
+- **Tavern 存储边界接入宿主**：旧 `tavern_resources.json` 首次访问时迁移到 `files/tavern/registry` 并保留源文件；非内置角色卡原始文档同步到 `files/tavern/cards/<sha256>.json`，会话元数据、消息和会话世界书路径保持不变。
 - **World Info 依赖方向收紧**：`WorldInfoModels` 与 `WorldInfoMatcher` 从 `:plugins:tavern-core` 移入 `:knowledge-core`；Tavern 通过适配器投影知识上下文，app 不再因 World Info 类型直接依赖 Tavern Core。
 - **Tavern 核心命名空间独立**：`:plugins:tavern-core` 的源码、测试和公开类型由历史 `com.loyea.ui.chat` 迁入 `com.loyea.plugins.tavern.core`；app 仅通过显式插件 import 使用这些类型，物理目录不再伪装成宿主聊天实现。
 - **外部资源 codec 迁出 app**：Tavern 世界书/preset/Regex 资源模型、registry JSON 往返、稳定资源 ID 与世界书导入导出 codec 迁入 `:plugins:tavern-core`；`ChatStorageManager` 仅负责原子文件读写，卡片绑定遍历继续由 app 适配器承担。

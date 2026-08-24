@@ -2,6 +2,7 @@ package com.loyea.ui.chat
 
 import com.loyea.context.core.*
 import com.loyea.plugins.tavern.core.*
+import com.loyea.plugins.tavern.storage.*
 
 import android.content.Context
 import com.loyea.plugin.api.PluginIds
@@ -35,6 +36,43 @@ class ChatStorageManagerTest {
         `when`(context.getSharedPreferences("loyea_prefs", Context.MODE_PRIVATE)).thenReturn(mock())
         `when`(context.filesDir).thenReturn(filesDir)
         storageManager = ChatStorageManager(context)
+    }
+
+    @Test
+    fun `legacy Tavern registry migrates into plugin storage without deleting source`() = runBlocking {
+        val legacy = File(tempFolder.root, "files/tavern_resources.json")
+        legacy.writeText(
+            """{"revision":7,"worldBooks":[],"presets":[],"regexCollections":[]}"""
+        )
+
+        val loaded = storageManager.loadTavernResourceRegistry()
+        val layout = TavernStorageLayout(File(tempFolder.root, "files/tavern"))
+
+        assertEquals(7L, loaded.revision)
+        assertTrue(layout.registryFile.isFile)
+        assertEquals(legacy.readText(), layout.registryFile.readText())
+        assertTrue(legacy.isFile)
+        assertTrue(layout.migrationMarkerFile.isFile)
+    }
+
+    @Test
+    fun `imported card raw document is copied to plugin storage separately from projection`() = runBlocking {
+        val card = requireNotNull(
+            TavernCardParser.parseJsonCard(
+                """{"name":"Stored","description":"raw","creator":"","first_mes":"hello"}"""
+            )
+        )
+
+        storageManager.saveCharacterCards(listOf(card))
+
+        val layout = TavernStorageLayout(File(tempFolder.root, "files/tavern"))
+        val rawFile = layout.resolve(layout.cardDocumentRelativePath(card.id))
+        assertTrue(rawFile.isFile)
+        assertEquals(
+            TavernCardCodec.toJson(TavernCharacterCardAdapter.toDocument(card)),
+            rawFile.readText()
+        )
+        assertTrue(layout.migrationMarkerFile.isFile)
     }
 
     @Test

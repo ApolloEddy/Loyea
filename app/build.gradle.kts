@@ -83,6 +83,7 @@ dependencies {
     implementation(project(":plugin-host"))
     implementation(project(":knowledge-core"))
     implementation(project(":plugins:tavern-core"))
+    implementation(project(":plugins:tavern-storage"))
     implementation("com.google.code.gson:gson:2.10.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
