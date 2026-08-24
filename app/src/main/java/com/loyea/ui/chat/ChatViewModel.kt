@@ -2451,9 +2451,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private fun resolveWorldInfoBook(): WorldInfoBook {
         val base = sessionWorldInfo.value ?: WorldInfoBook(worldInfoEntries.value, worldInfoConfig.value)
         val card = activeCharacterCard.value
-        val inline = card?.let(TavernCharacterBookAdapter::toWorldInfoBook)
-        val inlineResources = card?.let(TavernCardResourceBindings::inlineWorldBooks).orEmpty()
-        val external = card?.let(TavernCardResourceBindings::worldBookNames).orEmpty()
+        val inline = card.characterBookJson
+            ?.let(TavernCardCodec::parseCharacterBook)
+            ?.let { TavernCharacterBookAdapter.toWorldInfoBook(it, "card:${card.id}") }
+        val inlineResources = TavernCardResourceBindings.inlineWorldBooks(card)
+        val external = TavernCardResourceBindings.worldBookNames(card)
             .flatMap { binding ->
                 tavernResourceRegistry.value.worldBooks
                     .filter { it.enabled && resourceMatches(it.id, it.name, binding) }

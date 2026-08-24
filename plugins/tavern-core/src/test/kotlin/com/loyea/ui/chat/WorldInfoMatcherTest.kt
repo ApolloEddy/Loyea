@@ -414,7 +414,7 @@ class WorldInfoMatcherTest {
     fun tokenBudgetTrims() {
         val e1 = entry("b1", keywords = listOf("k"), content = "Alpha lore one", constant = true, order = 1)
         val e2 = entry("b2", keywords = listOf("k"), content = "Beta lore two", constant = true, order = 2)
-        val cfgSmall = cfg.copy(tokenBudget = estimateTokens("Alpha lore one") + 1)
+        val cfgSmall = cfg.copy(tokenBudget = estimateTavernTokens("Alpha lore one") + 1)
         val out = WorldInfoMatcher.worldInfoBlockFor(listOf(e1, e2), listOf("k"), "U", "S", cfgSmall, Random(1))!!
         // ST 的预算优先保留 order 更大的条目，再按输出顺序渲染。
         assertFalse(out.contains("Alpha lore one"))

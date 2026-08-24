@@ -3,6 +3,25 @@ package com.loyea.ui.chat
 import kotlin.random.Random
 
 /**
+ * Tavern world-book budgeting uses a stable approximation owned by the plugin.
+ * It intentionally does not call the host application's fallback usage counter.
+ */
+internal fun estimateTavernTokens(text: String): Long {
+    if (text.isBlank()) return 0L
+    var cjk = 0
+    var other = 0
+    for (character in text) {
+        val codePoint = character.code
+        if (codePoint in 0x4E00..0x9FFF || codePoint in 0x3400..0x4DBF) {
+            cjk++
+        } else {
+            other++
+        }
+    }
+    return (cjk * 0.5 + other * 0.25).toLong().coerceAtLeast(1L)
+}
+
+/**
  * 世界书匹配引擎（纯 Kotlin，无 Android 依赖，可 JVM 单测）。
  *
  * 语义对齐 SillyTavern World Info v2：
@@ -305,7 +324,7 @@ object WorldInfoMatcher {
                 selected.add(candidate)
                 continue
             }
-            val cost = estimateTokens(candidate.content.trim())
+            val cost = estimateTavernTokens(candidate.content.trim())
             if (cost <= 0L || selectedCost + cost > budgetLimit) continue
             selected.add(candidate)
             selectedCost += cost

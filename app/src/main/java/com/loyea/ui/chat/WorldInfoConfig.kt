@@ -5,62 +5,11 @@ import com.google.gson.Gson
 import com.google.gson.JsonObject
 
 /**
- * 世界书全局排序模式（对齐 SillyTavern 全局「默认插入顺序」选项）。
- * ORDER 为默认：按条目的 ST order 升序（保持 v0.5.1 行为）。
- */
-enum class WorldInfoInsertionOrder {
-    ORDER,           // 按 order 升序（保持现状）
-    KEY_LENGTH,      // 按首个主关键词长度降序
-    ALPHABETICAL,    // 按 content 字典序
-    INSERT_AT_TOP,   // 按 order 升序（置顶语义）
-    INSERT_AT_BOTTOM // 按 order 降序（置底语义）
-}
-
-/**
  * 世界书作用域：
  * - GLOBAL = 全局共享书（跨所有会话，v0.5.2 及之前的行为）；
  * - SESSION = 某会话专属书（文件存在时完全替代全局书；不存在时回退全局书）。
  */
 enum class WorldInfoScope { GLOBAL, SESSION }
-
-/**
- * 世界书条目的持久化定时状态。
- *
- * SillyTavern 将 sticky/cooldown 状态放在聊天元数据中，而不是重新从文本猜测。
- * Loyea 用当前回合 key + 单调回合序号保存等价状态，旧会话没有该字段时仍由匹配器
- * 使用兼容回退逻辑。
- */
-data class WorldInfoEntryRuntimeState(
-    val lastActivatedTurn: Long = -1L,
-    val stickyUntilTurn: Long = -1L,
-    val cooldownUntilTurn: Long = -1L
-)
-
-data class WorldInfoRuntimeState(
-    val turnKey: String = "",
-    val turnIndex: Long = 0L,
-    val entries: Map<String, WorldInfoEntryRuntimeState> = emptyMap(),
-    /** 当前生效书的轻量签名；换书/换绑定后不复用旧书的 sticky/cooldown。 */
-    val bookSignature: String = ""
-)
-
-/**
- * 世界书全局配置（与条目文件分开存储，存 SharedPreferences）。
- * 纯 Kotlin 数据类（storage 才有 Android 依赖），便于单测。
- */
-data class WorldInfoConfig(
-    val scanDepth: Int = 10,                          // 条目 depth=0 时的回退扫描窗口（条数）
-    val position: String = "bottom",                  // 块注入位置："bottom" | "top"
-    val insertionOrderMode: WorldInfoInsertionOrder = WorldInfoInsertionOrder.ORDER,
-    val tokenBudget: Long = 2048,                     // 世界书注入 token 预算（estimateTokens 估算后裁剪）
-    val recursionDepthCap: Int = 3,                   // 递归轮次上限
-    val allowRecursion: Boolean = true,               // 全局递归总开关
-    val emitGroupHeaders: Boolean = false,            // 分组前输出 "# <group>" 注释行
-    val caseSensitive: Boolean = false,               // ST 全局关键词大小写设置
-    val matchWholeWords: Boolean = false,             // ST 全局整词匹配设置
-    val useGroupScoring: Boolean = false,              // 是否以 groupWeight 做加权选择
-    val budgetCap: Long = 0                           // 0=不额外限制；保留 ST budget_cap
-)
 
 /**
  * WorldInfoConfig 的 SharedPreferences 读写（key 前缀 world_info_*）。

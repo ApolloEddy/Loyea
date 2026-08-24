@@ -7,11 +7,6 @@ package com.loyea.ui.chat
  * 和 entry rawJson 中，运行时只把当前引擎需要的字段投影出来。
  */
 object TavernCharacterBookAdapter {
-    fun toWorldInfoBook(card: CharacterCard): WorldInfoBook? {
-        val book = card.characterBookJson?.let(TavernCardCodec::parseCharacterBook) ?: return null
-        return toWorldInfoBook(book, "card:${card.id}")
-    }
-
     fun toWorldInfoBook(book: CharacterBookDocument, idPrefix: String): WorldInfoBook {
         val entries = book.entries.mapIndexed { index, source ->
             val positionType = source.position ?: source.positionIndex?.let(::positionName) ?: "after_char"
