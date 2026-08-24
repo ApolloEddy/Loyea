@@ -11,6 +11,8 @@ class TavernPresetCodecTest {
           "temperature": 0.4,
           "top_p": 0.8,
           "openai_max_context": 8192,
+          "openai_max_tokens": 512,
+          "stop": ["STOP", "END"],
           "wi_format": "<world>{{world_info}}</world>",
           "post_history_instructions": "Stay in character.",
           "prompts": [
@@ -41,6 +43,9 @@ class TavernPresetCodecTest {
         requireNotNull(preset)
         assertEquals(0.4, preset.temperature!!, 0.001)
         assertEquals(8192, preset.maxContext)
+        val generation = preset.generationOverrides()
+        assertEquals(512, generation.maxOutputTokens)
+        assertEquals(listOf("STOP", "END"), generation.stopStrings)
         assertEquals(listOf("world_rule", "main", "post_history"), preset.orderedPrompts().map { it.identifier })
         assertEquals("Stay in character.\n\nPOST SLOT", preset.explicitPostHistoryInstructions())
     }

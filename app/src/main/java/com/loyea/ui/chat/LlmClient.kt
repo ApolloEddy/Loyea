@@ -1,5 +1,7 @@
 package com.loyea.ui.chat
 
+import com.loyea.plugin.api.GenerationPatch
+
 import com.google.gson.Gson
 import com.google.gson.JsonArray
 import com.google.gson.JsonElement
@@ -112,31 +114,6 @@ class LlmClient {
         }
     }
 
-    /** 将卡内 preset 的通用采样字段映射到 OpenAI-compatible 请求；空字段不覆盖应用配置。 */
-    private fun applyGenerationOverrides(
-        requestJson: JsonObject,
-        config: com.loyea.ui.settings.ApiConfig,
-        generation: TavernGenerationOverrides?
-    ) {
-        if (generation == null) return
-        generation.temperature?.let { requestJson.addProperty("temperature", it) }
-        generation.topP?.let { requestJson.addProperty("top_p", it) }
-        generation.maxTokens?.takeIf { it > 0 }?.let { requestJson.addProperty("max_tokens", it) }
-        generation.frequencyPenalty?.let { requestJson.addProperty("frequency_penalty", it) }
-        generation.presencePenalty?.let { requestJson.addProperty("presence_penalty", it) }
-        if (generation.stopStrings.isNotEmpty()) {
-            requestJson.add("stop", JsonArray().apply { generation.stopStrings.forEach(::add) })
-        }
-
-        // OpenAI/DeepSeek/Anthropic/MiMo 的兼容网关通常不接受 top_k/repetition_penalty；
-        // 本地/开源网关则可继续使用这两个 ST preset 字段。
-        val strictProvider = config.provider.lowercase() in setOf("openai", "deepseek", "anthropic", "mimo")
-        if (!strictProvider) {
-            generation.topK?.let { requestJson.addProperty("top_k", it) }
-            generation.repetitionPenalty?.let { requestJson.addProperty("repetition_penalty", it) }
-        }
-    }
-
     /**
      * 发送 Chat Completion 流式对话请求 (SSE)
      */
@@ -144,7 +121,7 @@ class LlmClient {
         config: com.loyea.ui.settings.ApiConfig,
         messages: List<LlmChatMessage>,
         tools: List<McpTool> = emptyList(),
-        generation: TavernGenerationOverrides? = null
+        generation: GenerationPatch? = null
     ): Flow<StreamEvent> = flow {
         if (config.apiKey.isBlank()) {
             emit(StreamEvent.Error("[错误] API Key 未配置，请在设置中配置您的 Key 后重试。"))
@@ -162,7 +139,7 @@ class LlmClient {
                 addProperty("model", targetModel)
                 add("messages", toProviderMessages(processedMessages))
                 addProperty("stream", true)
-                applyGenerationOverrides(requestJson = this, config = config, generation = generation)
+                GenerationRequestMapper.apply(requestJson = this, provider = config.provider, patch = generation)
                 // 仅在明确支持的 provider 上请求流式 usage（DeepSeek/OpenAI 官方支持 stream_options），
                 // 其它 provider（如 MiMo）不发送该字段，避免严格网关 400；无 usage 时上层用字符估算兜底
                 if (config.provider.equals("DeepSeek", ignoreCase = true) ||
@@ -392,7 +369,7 @@ class LlmClient {
         systemPrompt: String?,
         history: List<Message>,
         tools: List<McpTool> = emptyList(),
-        generation: TavernGenerationOverrides? = null
+        generation: GenerationPatch? = null
     ): Flow<StreamEvent> {
         val chatHistory = mutableListOf<LlmChatMessage>()
         if (!systemPrompt.isNullOrBlank()) {
@@ -418,7 +395,7 @@ class LlmClient {
         config: com.loyea.ui.settings.ApiConfig,
         systemPrompt: String?,
         history: List<Message>,
-        generation: TavernGenerationOverrides? = null
+        generation: GenerationPatch? = null
     ): LlmResponse = withContext(Dispatchers.IO) {
         if (config.apiKey.isBlank()) {
             return@withContext LlmResponse(
@@ -458,7 +435,7 @@ class LlmClient {
             val requestJson = JsonObject().apply {
                 addProperty("model", targetModel)
                 add("messages", gson.toJsonTree(chatHistory))
-                applyGenerationOverrides(requestJson = this, config = config, generation = generation)
+                GenerationRequestMapper.apply(requestJson = this, provider = config.provider, patch = generation)
                 if (config.enableSearch && !config.provider.equals("MiMo", ignoreCase = true)) {
                     addProperty("web_search", true)
                 }
@@ -560,7 +537,7 @@ class LlmClient {
         config: com.loyea.ui.settings.ApiConfig,
         messages: List<LlmChatMessage>,
         tools: List<McpTool>,
-        generation: TavernGenerationOverrides? = null
+        generation: GenerationPatch? = null
     ): LlmResponse = withContext(Dispatchers.IO) {
         sendRawChatCompletion(config, messages, tools, stream = false, generation = generation)
     }
@@ -779,7 +756,7 @@ class LlmClient {
         messages: List<LlmChatMessage>,
         tools: List<McpTool>,
         stream: Boolean,
-        generation: TavernGenerationOverrides? = null
+        generation: GenerationPatch? = null
     ): LlmResponse = withContext(Dispatchers.IO) {
         if (config.apiKey.isBlank()) {
             return@withContext LlmResponse(
@@ -795,7 +772,7 @@ class LlmClient {
                 addProperty("model", resolveTargetModel(config))
                 add("messages", toProviderMessages(processedMessages))
                 addProperty("stream", stream)
-                applyGenerationOverrides(requestJson = this, config = config, generation = generation)
+                GenerationRequestMapper.apply(requestJson = this, provider = config.provider, patch = generation)
                 if (tools.isNotEmpty()) {
                     add("tools", toProviderTools(tools))
                     addProperty("tool_choice", "auto")

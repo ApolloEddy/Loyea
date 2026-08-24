@@ -2,6 +2,7 @@ package com.loyea.ui.chat
 
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.loyea.plugin.api.GenerationPatch
 
 /** SillyTavern/OpenAI preset 中可参与提示词构建的单个 prompt slot。 */
 data class TavernPresetPrompt(
@@ -76,11 +77,13 @@ data class TavernPromptPreset(
         postHistoryPrompts().joinToString("\n\n") { it.content.trim() }.takeIf { it.isNotBlank() }
     ).filter { it.isNotBlank() }.joinToString("\n\n")
 
-    fun generationOverrides(): TavernGenerationOverrides = TavernGenerationOverrides(
+    fun generationOverrides(): GenerationPatch = GenerationPatch(
+        modelHint = model,
         temperature = temperature,
         topP = topP,
         topK = topK,
-        maxTokens = maxTokens,
+        maxOutputTokens = maxTokens,
+        maxContextTokens = maxContext,
         frequencyPenalty = frequencyPenalty,
         presencePenalty = presencePenalty,
         repetitionPenalty = repetitionPenalty,
@@ -99,18 +102,6 @@ data class TavernPromptPreset(
             prompt.name.contains("post history", ignoreCase = true) ||
             prompt.name.contains("历史消息后", ignoreCase = true)
 }
-
-/** 绑定 preset 对当前请求的生成参数覆盖；空字段不覆盖 Loyea/API 配置。 */
-data class TavernGenerationOverrides(
-    val temperature: Double? = null,
-    val topP: Double? = null,
-    val topK: Int? = null,
-    val maxTokens: Int? = null,
-    val frequencyPenalty: Double? = null,
-    val presencePenalty: Double? = null,
-    val repetitionPenalty: Double? = null,
-    val stopStrings: List<String> = emptyList()
-)
 
 object TavernPresetCodec {
     private val presetKeys = listOf(

@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Added (新增)
 - **独立插件 API 基线**：新增纯 Kotlin/JVM `:plugin-api` 模块，定义稳定插件命名空间、原生/插件人格归属、能力声明、API 版本兼容检查与不可变运行代次；该模块不依赖 Android、Compose、Gson、网络库或 Tavern 具体实现。
 - **插件宿主与请求租约**：新增纯 Kotlin/JVM `:plugin-host`，支持插件注册、兼容性隔离、运行失败重试、实时启停及线程安全的在途请求排空；`LoyeaApplication` 提供 UI 与后台任务共用的应用级组合根。
+- **通用人格回合契约**：`plugin-api` 新增 `PersonaProjection`、冻结回合输入、提示词 patch、结构化消息插入、通用生成参数与分阶段文本变换接口，为 Tavern 逻辑退出核心聊天类型签名提供稳定边界。
 - **SillyTavern/Tavern 角色卡兼容层**：新增 V1/V2/V3 JSON、PNG `chara`/`ccv3` 与 V3 CHARX（受限读取根目录 `card.json`）解析、CRC/大小边界校验、原始未知字段保留、CharacterBook 全字段投影与稳定角色 ID；导出改为基于标准 codec，绑定世界书、扩展字段和第三方字段不会因 Loyea UI 未展示而丢失。
 - **角色卡绑定功能运行时**：内嵌 CharacterBook 会与当前会话/全局世界书合并，支持 `selective`、`constant`、`useRegex`、`position`、`insertion_order`、递归、分组、`groupOverride`/关键词评分/`groupWeight`、概率、sticky/cooldown/delay、全局扫描字段和深度 role 注入；CharacterBook 的 ST `extensions` 字段也会被读取并镜像导出。
 - **角色卡 scoped Regex**：新增 SillyTavern Regex 脚本解析与受控执行，支持 AI 输出/展示/用户输入/世界书 placement、宏替换、正则 flags、捕获组、trim、深度范围及无效模式隔离；输出层继续优先过滤 `[MESSAGE TIME: ...]` 元数据。
@@ -18,6 +19,7 @@ All notable changes to this project will be documented in this file.
 - **角色卡高级编辑与导出**：编辑/创建页补齐 description、creator notes、post-history、备用/群聊开场白、标签、来源、昵称、版本、内嵌 CharacterBook 与 extensions JSON；新增 V3 JSON 和 CHARX（含安全资源）导出。
 
 ### Changed (变更)
+- **生成参数与 Tavern 类型解耦**：`LlmClient` 改为消费插件 API 的通用 `GenerationPatch`，Tavern preset 仅负责投影；严格 Provider 对 `top_k`/`repetition_penalty` 的过滤由宿主 `GenerationRequestMapper` 统一执行并新增 JSON 字段级回归测试。
 - **世界书提示词插入**：世界书不再只拼成一个 legacy system 文本块；`before/after character`、作者注释、示例消息、outlet 和 `at_depth` 分桶保留，深度条目按 `system/user/assistant` role 插入实际消息边界。
 - **世界书编辑器与标准导出**：设置页补充正则、大小写、整词、注入位置和深度编辑；标准 SillyTavern World Info 导出使用数字 `position`，同时保留 `positionType`/扩展字段以兼容新版 Tavern。
 - **会话请求构建**：用户输入 placement、角色卡 Regex、preset post-history 和 CharacterBook 深度注入贯通 `PromptAssembler → LlmConversationBuilder → LlmClient`，不改变旧卡/旧会话 JSON 的读取方式。
