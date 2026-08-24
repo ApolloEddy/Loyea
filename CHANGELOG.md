@@ -25,12 +25,16 @@ All notable changes to this project will be documented in this file.
 - **AI 回复输出过滤器**：新增 `ReplyOutputSanitizer`，识别并移除只用于 provider 上下文的 `[MESSAGE TIME: ...]` 元数据；流式标签尚未闭合时先隐藏尾部，避免半截元数据闪现。
 - **回复过滤边界测试**：覆盖完整/未闭合时间元数据、历史消息的 `unavailable` 形式、相似但不应误删的 `MESSAGE TIMESTAMP`/`MESSAGE TIMEOUT` 文本，以及增量解析器出口。
 - **外部 Tavern 资源注册表**：支持导入、持久化和管理外部世界书、preset、Regex collection；角色卡常见 `extensions.world`、嵌套绑定及 preset/Regex 引用会在运行时解析。
+- **SillyTavern Quick Reply v2 接入**：支持 `qrList`/旧 `quickReplySlots` 导入、未知字段往返、启用/禁用组管理、聊天栏组/按钮切换，以及按当前会话持久化 local/global STscript 变量；普通文本、`/setinput`、`/send`/`/sendas`/`/sys`/`/comment`、`/addswipe`、`/continue`/`/swipe`/`/regenerate`/`/impersonate`/`/trigger`/`/gen`/`/genraw` 均通过 ViewModel 会话围栏落地。
+- **Quick Reply 安全 STscript 扩展**：补齐 `{{var::}}`/`{{globalvar::}}` 宏、`/let`/`/var`、有界 `/times`/`/while`、安全数学运算与 before-generation 自动钩子；仍明确阻断 JavaScript、文件/网络、第三方扩展、交互式弹窗和 QR context-menu/管理命令。
+- **当前聊天注释兼容**：导入 SillyTavern `extra.type=comment` 以及 `hidden`/`is_hidden` 标记时，仍在聊天记录中显示但从 provider 与 World Info 扫描中排除；未知 `extra` 字段继续保留。
 - **内嵌资源与角色过滤**：卡片 extensions/vendor 中直接嵌入的世界书、嵌套 preset/Regex 会直接生效；世界书补齐 `characterFilter`、数字 role、`addMemo`、`displayIndex` 和未知直字段保留。
 - **角色卡高级编辑与导出**：编辑/创建页补齐 description、creator notes、post-history、备用/群聊开场白、标签、来源、昵称、版本、内嵌 CharacterBook 与 extensions JSON；新增 V3 JSON 和 CHARX（含安全资源）导出。
 
 ### Changed (变更)
 - **Include Names、outlet 与 Author’s Note 运行语义**：World Info 默认按 SillyTavern 规则把用户/角色名称加入扫描缓冲；聊天上下文可按 preset 或世界书配置写入名称前缀。`{{outlet::Name}}` 现在只展开被提示词引用的命名 outlet，不再把全部 outlet 作为隐藏上下文追加。会话级 Author’s Note 支持 `After Scenario`/`In-chat`、深度和按用户回合计数的频率（`0` 禁用、`1` 每回合）；请求启动时冻结文本与注入参数，编辑面板限制文本/数值输入并防止重复保存。
 - **请求级宏与 Prompt Manager 运行语义**：系统提示、preset slot、World Info Regex 和输出 Regex 现在共享同一份冻结 `TavernMacroContext`；补齐角色/历史尾部/生成类型/时间/legacy 标记/条件块/只读变量宏，未知或写入类脚本保持安全边界。Preset slot 按 `normal/continue/impersonate/swipe/regenerate/quiet` trigger 过滤，支持 relative 与 in-chat/depth；Continue Nudge、Continue Prefill 和 Continue Postfix 进入真实 provider 消息序列。
+- **Quick Reply STscript 安全子集**：脚本批处理支持 pipe、转义、宏、`/if` 闭包、`/return`、`/run`、变量算术、`/qrset`、生成与消息效果；当前宿主也执行 startup/chat-change/new-chat/user/AI、群成员草稿和 World Info automationId 自动触发。`/javascript`、文件/网络、第三方扩展命令、交互式 popup/debugger 和破坏性聊天管理命令仍明确诊断为 blocked/unsupported，不把 Android 子集伪装成完整 ST 扩展生态。
 - **当前 SillyTavern 只读宏补齐**：冻结请求上下文新增 `allChatRange`、最近用户消息时间、swipe 索引、扩展名和移动端状态；宏引擎补齐 `idleDuration`、`timeDiff`、UTC 偏移、`random/pick/roll`、`trim`、`hasExtension` 等安全子集。随机与掷骰使用请求级种子，保证一次请求内 Prompt/Regex 重算不会漂移；`setvar/addvar/inc/dec` 等写入宏仍保持字面量，不执行宿主副作用。
 - **群聊成员与回复策略核心**：新增纯 JVM 的群聊 roster/静音/启用状态、自然聊天、全员回复、指定发言者和上下文选角规划器；`{{group}}`/`{{groupNotMuted}}` 与输出 Regex 共用冻结成员快照，Tavo 群聊 JSON 可读写并拒绝未知/静音成员成为发言者。
 - **群聊会话快照、成员面板与顺序生成**：会话元数据现在持久化 Tavo/SillyTavern roster；聊天页可编辑群名、启用/静音成员、自然/全员/指定/上下文选角模式、指定发言者、最大回复数和选角提示词，并支持停用群聊。请求启动时一次解析并冻结成员、`{{group}}`/`{{groupNotMuted}}`/`{{notChar}}` 与群聊系统块；自然/全员/指定模式会按计划逐成员生成，上下文模式会先调用短选角请求，再按同一队列生成；停止、切会话或人格绑定变化会取消后续队列。未安装角色卡会显示警告并跳过；群聊头像/成员专属 UI 和更完整的 Tavo 自动模式仍未伪装成已完成。

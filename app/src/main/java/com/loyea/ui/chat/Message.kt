@@ -1,6 +1,7 @@
 package com.loyea.ui.chat
 
 import androidx.compose.runtime.Immutable
+import com.google.gson.JsonParser
 
 enum class Sender {
     USER, AI
@@ -76,6 +77,23 @@ data class Message(
     // Agent 式多轮回复分段（仅新消息；空列表走旧渲染路径）
     val contentSegments: List<MessageContentSegment> = emptyList()
 )
+
+/** `/comment` records remain visible in the transcript but are omitted from model context. */
+internal fun Message.isTavernHiddenComment(): Boolean = tavernExtraJson?.let { raw ->
+    runCatching {
+        JsonParser.parseString(raw)
+            .takeIf { it.isJsonObject }
+            ?.asJsonObject
+            ?.let { extra ->
+                extra["loyeaHidden"]?.takeIf { it.isJsonPrimitive }?.asBoolean == true ||
+                    extra["hidden"]?.takeIf { it.isJsonPrimitive }?.asBoolean == true ||
+                    extra["is_hidden"]?.takeIf { it.isJsonPrimitive }?.asBoolean == true ||
+                    extra["type"]?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }
+                        ?.asString
+                        ?.equals("comment", ignoreCase = true) == true
+            } == true
+    }.getOrDefault(false)
+} == true
 
 @Immutable
 data class MessageVersion(

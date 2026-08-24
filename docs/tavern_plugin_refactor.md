@@ -26,9 +26,11 @@ World Info 的 Include Names 已同时影响扫描缓冲和聊天消息前缀，
 
 Prompt Manager 与宏运行时现在共享请求启动时冻结的 `TavernMacroContext`：角色卡字段、历史最后消息、当前输入、生成类型、请求时间、命名 outlet 和只读变量会同时用于系统提示、preset slot、World Info Regex 和输出 Regex。Preset slot 会按 generation trigger 过滤，并保留 relative / in-chat + depth 的消息位置；Continue 请求会消费 `continue_nudge_prompt`、`continue_prefill` 和 `continue_postfix`，Prefill 以最终 assistant 消息前缀发送。宏引擎支持嵌套读取、条件块、时间/历史宏和 legacy `<USER>/<CHAR>` 标记，并补齐 `allChatRange`、`idleDuration`、`timeDiff`、UTC 偏移、`random/pick/roll`、`trim`、`hasExtension` 等只读子集；随机与掷骰由请求级种子冻结。`setvar`、脚本执行、扩展副作用仍未开放，避免把第三方卡片当作宿主代码执行。
 
+Quick Reply 已接入当前聊天宿主：v2 `qrList` 与旧 `quickReplySlots` 可登记并原始字段往返，启用组会显示在输入栏上方，`disableSend` 组可回填输入草稿，`injectInput`/`placeBeforeInput` 会在手动执行普通文本时合并当前输入。安全 STscript 子集支持 pipe/转义、宏与 local/global 变量持久化、`/if` 闭包、`/return`、`/run`、`/:`、`/qrset`、`/let`/`/var`、安全数学与有界 `/times`/`/while`，普通文本发送、`/send`/`/sendas`/`/sys`/`/comment`、`/addswipe`、Continue/Swipe/Regenerate/Impersonate/Trigger/Gen/GenRaw，以及 startup/chat-change/user/AI、before-generation、群成员草稿和 World Info automationId 自动触发。`/javascript`、文件/网络、第三方扩展命令、交互式 `/input`/popup、调试断点、QR context menu/管理命令和破坏性聊天管理命令仍会返回 blocked/unsupported 诊断；这些能力必须经过后续明确的 Android UI/权限端口，不能以“字段已导入”当作运行时兼容。
+
 群聊核心已按 Tavo 当前公开语义提供 roster 与回合规划：自然聊天按 `@name` 优先、无提及时对未静音成员做稳定选择；全员回复返回全部未静音成员；指定发言者按显式角色、配置的 designated speaker 或提及角色解析；上下文选角返回带 `{{group}}` 的冻结选择提示，并只接受模型返回的已知成员。成员 JSON 支持启用/静音、权重、指定发言者和策略别名。当前 Android 宿主已将 roster 写入会话元数据，并在每次请求启动时解析一次，统一供 `{{group}}`（包含静音成员）、`{{groupNotMuted}}`、`{{notChar}}`、群聊系统块和插件回合工厂消费；同一请求内后续编辑不会改变快照。聊天页已提供会话级成员面板，可编辑群名、成员启用/静音状态、四种回复模式、指定发言者、最大回复数和上下文选角提示词，并可停用群聊；自然/全员/指定模式现在按冻结计划逐成员顺序生成，上下文模式先调用短选角请求后进入同一队列，停止、切会话或人格绑定变化会阻止后续成员继续生成。未安装角色卡会显示警告并跳过。群聊头像/成员专属 UI、Branch/Checkpoint 文件操作和更完整的 Tavo 自动模式仍是后续门禁，当前不宣称完整 UI parity。
 
-聊天文件核心现在按 SillyTavern 当前 `ChatHeader`/`ChatMessage` JSONL 形状读写：首行 `chat_metadata`、消息 `mes/is_user/is_system/send_date/swipes/swipe_id/extra` 和未知字段均可往返，Tavo/旧客户端常见别名也会归一化；坏行不会静默丢失，而是通过行号诊断返回。Branch 会复制到目标消息并切换到新文件，Checkpoint 会复制但留在当前文件，父文件分别回写 `extra.branches` 或 `extra.bookmark_link`，并通过 `main_chat` 建立返回父聊天的链接。Android 宿主现已提供 SAF 导入/导出和消息级 Branch/Checkpoint 操作：system 角色以透明 provenance 字段保留并在 provider 序列化时使用 `system` role，swipes 映射为本地回复版本，原始 ChatHeader 写回会话元数据；分支/检查点创建会保留原生图片、思考、MCP 等字段，父消息与子会话在同一存储锁范围内提交，失败会回滚父消息并清理未登记子文件。导入会按 header 角色名精确匹配本地卡片，找不到时回退当前卡片并显示警告。群聊历史 UI 和导入后的跨设备资源重绑定仍是后续门禁。
+聊天文件核心现在按 SillyTavern 当前 `ChatHeader`/`ChatMessage` JSONL 形状读写：首行 `chat_metadata`、消息 `mes/is_user/is_system/send_date/swipes/swipe_id/extra` 和未知字段均可往返，Tavo/旧客户端常见别名也会归一化；坏行不会静默丢失，而是通过行号诊断返回。当前 ST 的 `extra.type=comment`（以及兼容的 `hidden`/`is_hidden` 标记）会在聊天记录中保留，但从 provider 和 World Info 扫描中排除。Branch 会复制到目标消息并切换到新文件，Checkpoint 会复制但留在当前文件，父文件分别回写 `extra.branches` 或 `extra.bookmark_link`，并通过 `main_chat` 建立返回父聊天的链接。Android 宿主现已提供 SAF 导入/导出和消息级 Branch/Checkpoint 操作：system 角色以透明 provenance 字段保留并在 provider 序列化时使用 `system` role，swipes 映射为本地回复版本，原始 ChatHeader 写回会话元数据；分支/检查点创建会保留原生图片、思考、MCP 等字段，父消息与子会话在同一存储锁范围内提交，失败会回滚父消息并清理未登记子文件。导入会按 header 角色名精确匹配本地卡片，找不到时回退当前卡片并显示警告。群聊历史 UI 和导入后的跨设备资源重绑定仍是后续门禁。
 
 ## 当前模块与依赖方向
 
@@ -92,6 +94,7 @@ Prompt Manager 与宏运行时现在共享请求启动时冻结的 `TavernMacroC
 - World Info selective 逻辑、正则、递归、分组、概率、sticky/cooldown/delay、深度 role 注入和 token 预算。
 - Preset prompt order、生成参数覆盖、角色卡资源绑定与 Regex 输入/输出链。
 - Prompt Manager generation trigger、in-chat/depth slot、Continue Nudge/Prefill/Postfix，以及请求级宏和只读变量读取。
+- Quick Reply v2 组/按钮、`disableSend`/`injectInput`、安全 STscript pipe/变量/条件/过程/消息/生成子集，以及已实现的自动触发边界。
 - 群聊 roster、成员静音、四种回复模式、上下文选角提示与安全的 speaker 结果解析。
 - 聊天 JSONL 首行元数据、消息/swipes/extra/未知字段往返，以及 Branch/Checkpoint 截断、父链和书签链接核心模型。
 - Android 宿主提供会话级群聊成员面板与 roster 持久化、多角色顺序生成队列，以及消息级 Branch/Checkpoint 操作；群聊 avatar/member 专属 UI 与 Tavo 自动模式仍由后续请求协调器门禁覆盖。

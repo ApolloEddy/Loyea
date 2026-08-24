@@ -61,7 +61,8 @@ object LlmConversationBuilder {
             .filter {
                 (it.content.isNotBlank() || !it.imageUrl.isNullOrBlank() || !it.audioUrl.isNullOrBlank()) &&
                     !it.content.startsWith("[错误]") &&
-                    !it.content.startsWith("[Error]")
+                    !it.content.startsWith("[Error]") &&
+                    !it.isTavernHiddenComment()
             }
             .toList()
             .takeLast(20)

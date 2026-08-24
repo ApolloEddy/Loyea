@@ -140,8 +140,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     var characterCardList = mutableStateOf<List<CharacterCard>>(emptyList())
         private set
 
-    // 8.0 外部酒馆资源注册表（世界书 / preset / regex collection）
+    // 8.0 外部酒馆资源注册表（世界书 / preset / regex collection / Quick Reply）
     var tavernResourceRegistry = mutableStateOf(TavernResourceRegistry())
+        private set
+
+    val enabledTavernQuickReplySets = derivedStateOf {
+        tavernResourceRegistry.value.quickReplySets.filter { it.enabled }
+    }
+    var activeTavernQuickReplySetName = mutableStateOf("")
         private set
 
     // 8.1 全局世界观（World Info）条目列表（跨会话）
@@ -185,8 +191,138 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     var impersonatedDraft = mutableStateOf<String?>(null)
         private set
 
+    /** Input draft emitted by a Quick Reply `/setinput` or plain-text insert action. */
+    var tavernQuickReplyDraft = mutableStateOf<String?>(null)
+        private set
+
+    private val tavernQuickReplyLocalVariables = mutableMapOf<String, MutableMap<String, String>>()
+    private val tavernQuickReplyGlobalVariables = mutableMapOf<String, String>()
+    private var tavernQuickReplyGlobalVariablesLoaded = false
+    private var tavernQuickReplyAutoDepth = 0
+    private var tavernQuickReplyStartupRan = false
+    private var tavernQuickReplyNewChatPendingSessionId: String? = null
+
+    private enum class TavernQuickReplyAutoTrigger {
+        STARTUP,
+        USER_MESSAGE,
+        AI_MESSAGE,
+        CHAT_CHANGE,
+        NEW_CHAT,
+        GROUP_MEMBER_DRAFT,
+        BEFORE_GENERATION,
+        WORLD_INFO_ACTIVATION
+    }
+
+    private fun ensureTavernQuickReplyGlobalVariablesLoaded() {
+        if (tavernQuickReplyGlobalVariablesLoaded) return
+        tavernQuickReplyGlobalVariablesLoaded = true
+        val raw = prefs.getString("tavern_qr_global_variables", "").orEmpty()
+        runCatching {
+            Gson().fromJson<Map<String, String>>(
+                raw,
+                object : TypeToken<Map<String, String>>() {}.type
+            )
+        }.getOrNull()?.let {
+            tavernQuickReplyGlobalVariables.putAll(it.filterKeys { key -> key.length <= 128 })
+        }
+    }
+
+    private fun tavernQuickReplyLocalVariablesFor(sessionId: String): MutableMap<String, String> {
+        val existing = tavernQuickReplyLocalVariables[sessionId]
+        if (existing != null) return existing
+        val loaded = mutableMapOf<String, String>()
+        val raw = prefs.getString("tavern_qr_local_$sessionId", "").orEmpty()
+        runCatching {
+            Gson().fromJson<Map<String, String>>(
+                raw,
+                object : TypeToken<Map<String, String>>() {}.type
+            )
+        }.getOrNull()?.forEach { (key, value) ->
+            if (key.length <= 128 && value.length <= 32_000) loaded[key] = value
+        }
+        tavernQuickReplyLocalVariables[sessionId] = loaded
+        return loaded
+    }
+
+    private fun persistTavernQuickReplyVariables(sessionId: String) {
+        ensureTavernQuickReplyGlobalVariablesLoaded()
+        val local = tavernQuickReplyLocalVariablesFor(sessionId)
+            .filterKeys { it.length <= 128 }
+            .mapValues { (_, value) -> value.take(32_000) }
+        val global = tavernQuickReplyGlobalVariables
+            .filterKeys { it.length <= 128 }
+            .mapValues { (_, value) -> value.take(32_000) }
+        prefs.edit()
+            .putString("tavern_qr_local_$sessionId", Gson().toJson(local))
+            .putString("tavern_qr_global_variables", Gson().toJson(global))
+            .apply()
+    }
+
+    private suspend fun runTavernQuickReplyAuto(
+        trigger: TavernQuickReplyAutoTrigger,
+        sessionId: String,
+        inputText: String = "",
+        automationIds: Set<String> = emptySet()
+    ) {
+        if (tavernQuickReplyAutoDepth >= 1 || currentSessionId.value != sessionId) return
+        val candidates = enabledTavernQuickReplySets.value.flatMap { set ->
+            set.qrList.filter { reply ->
+                when (trigger) {
+                    TavernQuickReplyAutoTrigger.STARTUP -> reply.executeOnStartup
+                    TavernQuickReplyAutoTrigger.USER_MESSAGE -> reply.executeOnUserMessage
+                    TavernQuickReplyAutoTrigger.AI_MESSAGE -> reply.executeOnAiMessage
+                    TavernQuickReplyAutoTrigger.CHAT_CHANGE -> reply.executeOnChatChange
+                    TavernQuickReplyAutoTrigger.NEW_CHAT -> reply.executeOnNewChat
+                    TavernQuickReplyAutoTrigger.GROUP_MEMBER_DRAFT -> reply.executeOnGroupMemberDraft
+                    TavernQuickReplyAutoTrigger.BEFORE_GENERATION -> reply.executeBeforeGeneration
+                    TavernQuickReplyAutoTrigger.WORLD_INFO_ACTIVATION ->
+                        reply.automationId.isNotBlank() && reply.automationId in automationIds
+                }
+            }.map { reply -> set to reply }
+        }
+        if (candidates.isEmpty()) return
+        tavernQuickReplyAutoDepth++
+        try {
+            candidates.forEach { (set, reply) ->
+                if (currentSessionId.value == sessionId) {
+                    executeTavernQuickReplyInternal(
+                        setName = set.name,
+                        label = reply.label,
+                        inputText = inputText,
+                        allowHidden = true
+                    )
+                }
+            }
+        } finally {
+            tavernQuickReplyAutoDepth--
+        }
+    }
+
+    private fun runTavernQuickReplyAutoAsync(
+        trigger: TavernQuickReplyAutoTrigger,
+        sessionId: String,
+        inputText: String = "",
+        automationIds: Set<String> = emptySet()
+    ) {
+        viewModelScope.launch {
+            runTavernQuickReplyAuto(trigger, sessionId, inputText, automationIds)
+        }
+    }
+
     fun clearImpersonatedDraft() {
         impersonatedDraft.value = null
+    }
+
+    fun clearTavernQuickReplyDraft() {
+        tavernQuickReplyDraft.value = null
+    }
+
+    /** Selects an enabled Quick Reply set for the next `/run` or button action. */
+    fun selectTavernQuickReplySet(name: String) {
+        val selected = enabledTavernQuickReplySets.value.firstOrNull {
+            it.name.equals(name.trim(), ignoreCase = true)
+        } ?: return
+        activeTavernQuickReplySetName.value = selected.name
     }
 
     private var responseJob: kotlinx.coroutines.Job? = null
@@ -631,6 +767,24 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     messages.value = msgs
                     sessionWorldInfo.value = sessionBook
                     worldInfoRuntimeState = sessionWorldInfoState
+                    runTavernQuickReplyAutoAsync(
+                        TavernQuickReplyAutoTrigger.CHAT_CHANGE,
+                        sessionId
+                    )
+                    if (!tavernQuickReplyStartupRan) {
+                        tavernQuickReplyStartupRan = true
+                        runTavernQuickReplyAutoAsync(
+                            TavernQuickReplyAutoTrigger.STARTUP,
+                            sessionId
+                        )
+                    }
+                    if (tavernQuickReplyNewChatPendingSessionId == sessionId) {
+                        tavernQuickReplyNewChatPendingSessionId = null
+                        runTavernQuickReplyAutoAsync(
+                            TavernQuickReplyAutoTrigger.NEW_CHAT,
+                            sessionId
+                        )
+                    }
                 }
             }
         }
@@ -693,6 +847,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun saveTavernResourceRegistry(newRegistry: TavernResourceRegistry) {
         val next = newRegistry.copy(revision = maxOf(newRegistry.revision + 1L, System.currentTimeMillis()))
         tavernResourceRegistry.value = next
+        if (next.quickReplySets.none {
+                it.enabled && it.name.equals(activeTavernQuickReplySetName.value, ignoreCase = true)
+            }
+        ) {
+            activeTavernQuickReplySetName.value = ""
+        }
         regexCacheRegistryRevision = Long.MIN_VALUE
         viewModelScope.launch(Dispatchers.IO) {
             storageManager.saveTavernResourceRegistry(next)
@@ -985,9 +1145,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             startResolvedGroupSpeakers(token, sessionId, history, group, binding, targets, index + 1)
             return
         }
+        runTavernQuickReplyAutoAsync(
+            TavernQuickReplyAutoTrigger.GROUP_MEMBER_DRAFT,
+            sessionId,
+            history.lastOrNull()?.content.orEmpty()
+        )
         startAiResponseStream(
             sessionId = sessionId,
-            history = history,
+            initialHistory = history,
             characterCard = target.card,
             personaRef = speakerRef,
             requestBinding = binding,
@@ -1252,6 +1417,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         val newSessionId = System.currentTimeMillis().toString()
+        tavernQuickReplyNewChatPendingSessionId = newSessionId
         val newSession = ChatSession(
             id = newSessionId,
             title = if (appLanguage.value == "en") "New Chat" else "新会话",
@@ -1404,13 +1570,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         // SSE 流式接收；从点击开始持有的 lease 转交给完整请求生命周期。
                         startAiResponseStream(
                             sessionId = sessionId,
-                            history = finalMsgs,
+                            initialHistory = finalMsgs,
                             characterCard = activeCard,
                             personaRef = activePersona.ref,
                             requestBinding = binding,
                             initialRuntimeLease = runtimeLease
                         )
                     }
+                    runTavernQuickReplyAutoAsync(
+                        TavernQuickReplyAutoTrigger.USER_MESSAGE,
+                        sessionId,
+                        inputText
+                    )
                     leaseHandedToStream.set(true)
                 }
             } finally {
@@ -1480,7 +1651,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         messages.value = history
         startAiResponseStream(
             sessionId = sessionId,
-            history = history,
+            initialHistory = history,
             characterCard = activeCard,
             personaRef = activePersona.ref,
             requestBinding = binding,
@@ -1527,7 +1698,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         isThinking.value = true
         startAiResponseStream(
             sessionId = sessionId,
-            history = current,
+            initialHistory = current,
             characterCard = activePersona.card,
             personaRef = activePersona.ref,
             requestBinding = binding,
@@ -1579,7 +1750,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         isThinking.value = true
         startAiResponseStream(
             sessionId = sessionId,
-            history = current,
+            initialHistory = current,
             characterCard = activePersona.card,
             personaRef = activePersona.ref,
             requestBinding = binding,
@@ -1588,6 +1759,355 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             impersonate = true,
             generationType = "impersonate"
         )
+    }
+
+    /**
+     * Runs one imported Quick Reply through the safe STscript subset and applies its effects to
+     * the current chat.  The script engine is pure; this method is the explicit Android host
+     * boundary for input drafts, messages, swipes and generation.
+     */
+    fun executeTavernQuickReply(
+        setName: String,
+        label: String,
+        inputText: String
+    ): kotlinx.coroutines.Job = viewModelScope.launch {
+        executeTavernQuickReplyInternal(setName, label, inputText, manualExecution = true)
+    }
+
+    private suspend fun executeTavernQuickReplyInternal(
+        setName: String,
+        label: String,
+        inputText: String,
+        allowHidden: Boolean = false,
+        manualExecution: Boolean = false
+    ) {
+        val sessionId = currentSessionId.value
+        val quickReplySets = enabledTavernQuickReplySets.value
+        val set = quickReplySets.firstOrNull {
+            it.name.equals(setName.trim(), ignoreCase = true)
+        } ?: quickReplySets.firstOrNull()
+        if (set == null) {
+            android.widget.Toast.makeText(
+                context,
+                if (appLanguage.value == "en") "No enabled Quick Reply set" else "没有启用的 Quick Reply 组",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+        val reply = set.qrList.firstOrNull {
+            (allowHidden || !it.isHidden) && it.label.equals(label.trim(), ignoreCase = true)
+        } ?: label.trim().toIntOrNull()?.let { id ->
+            set.qrList.firstOrNull { (allowHidden || !it.isHidden) && it.id == id }
+        }
+        if (reply == null) {
+            android.widget.Toast.makeText(
+                context,
+                if (appLanguage.value == "en") "Quick Reply not found" else "找不到 Quick Reply",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+        val activePersona = boundPersona.value ?: run {
+            showPersonaUnavailableMessage()
+            return
+        }
+        val binding = activeSession.value?.let(PersonaBindingSnapshot::capture)
+            ?.takeIf { it.sessionId == sessionId && it.ref == activePersona.ref }
+            ?: run {
+                showPersonaUnavailableMessage()
+                return
+        }
+        activeTavernQuickReplySetName.value = set.name
+
+        ensureTavernQuickReplyGlobalVariablesLoaded()
+        val local = tavernQuickReplyLocalVariablesFor(sessionId)
+        val injectedScript = if (manualExecution && set.injectInput && inputText.isNotBlank()) {
+            if (set.placeBeforeInput) {
+                "${reply.message} $inputText"
+            } else {
+                "$inputText ${reply.message}"
+            }
+        } else {
+            reply.message
+        }
+        if (manualExecution && set.disableSend && injectedScript.trimStart().startsWith('/')) {
+            tavernQuickReplyDraft.value = injectedScript
+            return
+        }
+        val plainTextAction = if (set.disableSend) {
+            TavernQuickReplyPlainTextAction.INSERT
+        } else {
+            TavernQuickReplyPlainTextAction.SEND
+        }
+        val result = TavernStScriptEngine.execute(
+            script = injectedScript,
+            context = buildTavernQuickReplyContext(
+                card = activePersona.card,
+                history = messages.value,
+                input = inputText,
+                sessionId = sessionId,
+                plainTextAction = plainTextAction,
+                selectedSet = set.name
+            ),
+            quickReplySets = quickReplySets
+        )
+        local.clear()
+        local.putAll(result.localVariables)
+        tavernQuickReplyGlobalVariables.clear()
+        tavernQuickReplyGlobalVariables.putAll(result.globalVariables)
+        persistTavernQuickReplyVariables(sessionId)
+        applyTavernQuickReplyEffects(
+            sessionId = sessionId,
+            binding = binding,
+            card = activePersona.card,
+            result = result
+        )
+    }
+
+    private fun buildTavernQuickReplyContext(
+        card: CharacterCard,
+        history: List<Message>,
+        input: String,
+        sessionId: String,
+        plainTextAction: TavernQuickReplyPlainTextAction,
+        selectedSet: String
+    ): TavernStScriptContext {
+        val lastUser = history.lastOrNull { it.sender == Sender.USER }
+        val lastCharacter = history.lastOrNull { it.sender == Sender.AI }
+        val lastIndex = history.lastIndex
+        ensureTavernQuickReplyGlobalVariablesLoaded()
+        val local = tavernQuickReplyLocalVariablesFor(sessionId)
+        val base = TavernCardRegexAdapter.macroContext(card, userName.value)
+        val group = activeSession.value
+            ?.takeIf { it.id == sessionId }
+            ?.tavernGroupChat()
+        val macro = base.copy(
+            lastMessage = history.lastOrNull()?.content.orEmpty(),
+            lastUserMessage = lastUser?.content.orEmpty(),
+            lastCharMessage = lastCharacter?.content.orEmpty(),
+            input = input,
+            generationType = "normal",
+            group = group?.groupMacro(includeMuted = true).orEmpty(),
+            groupNotMuted = group?.groupMacro().orEmpty(),
+            notCharacter = group?.unmutedMembers
+                ?.filterNot { it.name.equals(base.characterName, ignoreCase = true) }
+                ?.joinToString(", ") { it.name }
+                .orEmpty(),
+            lastMessageId = lastIndex.takeIf { it >= 0 }?.toString().orEmpty(),
+            firstIncludedMessageId = history.indices.firstOrNull()?.toString().orEmpty(),
+            firstDisplayedMessageId = history.indices.firstOrNull()?.toString().orEmpty(),
+            lastSwipeId = lastCharacter?.versions?.size?.takeIf { it > 0 }?.toString().orEmpty(),
+            currentSwipeId = lastCharacter?.versions
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { (lastCharacter.activeVersionIndex.coerceIn(0, it.lastIndex) + 1).toString() }
+                .orEmpty(),
+            allChatRange = lastIndex.takeIf { it >= 0 }?.let { "0-$it" }.orEmpty(),
+            lastUserMessageTimestampMillis = lastUser?.timestamp,
+            timestampMillis = System.currentTimeMillis(),
+            model = activeApiConfig.value.modelName,
+            localVariables = local.toMap(),
+            globalVariables = tavernQuickReplyGlobalVariables.toMap()
+        )
+        return TavernStScriptContext(
+            macroContext = macro,
+            input = input,
+            selectedQuickReplySet = selectedSet,
+            localVariables = local.toMap(),
+            globalVariables = tavernQuickReplyGlobalVariables.toMap(),
+            plainTextAction = plainTextAction
+        )
+    }
+
+    private suspend fun applyTavernQuickReplyEffects(
+        sessionId: String,
+        binding: PersonaBindingSnapshot,
+        card: CharacterCard,
+        result: TavernStScriptResult
+    ) {
+        var nativeSendStarted = false
+        var pendingGeneration: TavernStScriptEffect.Generate? = null
+        result.effects.forEach { effect ->
+            when (effect) {
+                is TavernStScriptEffect.Toast -> {
+                    android.widget.Toast.makeText(context, effect.text, android.widget.Toast.LENGTH_SHORT).show()
+                }
+                is TavernStScriptEffect.SetInput -> {
+                    if (currentSessionId.value == sessionId) tavernQuickReplyDraft.value = effect.text
+                }
+                is TavernStScriptEffect.SelectQuickReplySet -> selectTavernQuickReplySet(effect.name)
+                is TavernStScriptEffect.AddSwipe -> {
+                    appendTavernQuickReplySwipe(sessionId, binding, effect.text)
+                }
+                is TavernStScriptEffect.SendMessage -> {
+                    if (effect.text.isBlank()) return@forEach
+                    val directMessage = effect.system || effect.hidden || !effect.speakerName.isNullOrBlank() || effect.at != null
+                    if (directMessage) {
+                        appendTavernQuickReplyMessage(sessionId, binding, card, effect)
+                    } else if (effect.triggerGeneration && !nativeSendStarted) {
+                        nativeSendStarted = true
+                        if (currentSessionId.value == sessionId) sendMessage(effect.text)
+                    } else {
+                        appendTavernQuickReplyMessage(sessionId, binding, card, effect)
+                    }
+                }
+                is TavernStScriptEffect.Generate -> {
+                    if (!nativeSendStarted) pendingGeneration = effect
+                }
+            }
+        }
+        if (nativeSendStarted) return
+        val generation = pendingGeneration ?: return
+        when (generation.type) {
+            TavernStScriptGenerationType.CONTINUE -> continueLastReply()
+            TavernStScriptGenerationType.SWIPE -> swipeLastReply()
+            TavernStScriptGenerationType.REGENERATE -> regenerateLastReply()
+            TavernStScriptGenerationType.IMPERSONATE -> impersonateLastReply(generation.prompt.orEmpty())
+            TavernStScriptGenerationType.TRIGGER,
+            TavernStScriptGenerationType.GEN,
+            TavernStScriptGenerationType.GEN_RAW -> startTavernQuickReplyGeneration(
+                sessionId = sessionId,
+                binding = binding,
+                card = card,
+                generation = generation
+            )
+        }
+    }
+
+    private fun startTavernQuickReplyGeneration(
+        sessionId: String,
+        binding: PersonaBindingSnapshot,
+        card: CharacterCard,
+        generation: TavernStScriptEffect.Generate
+    ) {
+        if (currentSessionId.value != sessionId || responseJob?.isActive == true) return
+        val activePersona = boundPersona.value?.takeIf { it.ref == binding.ref } ?: return
+        val runtimeLease = if (activePersona.ref.isNative) {
+            null
+        } else {
+            getApplication<LoyeaApplication>().acquirePersonaRuntime(activePersona.ref.ownerId)
+        }
+        if (!activePersona.ref.isNative && runtimeLease == null) {
+            showPersonaUnavailableMessage()
+            return
+        }
+        isThinking.value = true
+        val generationType = when (generation.type) {
+            TavernStScriptGenerationType.GEN_RAW -> "genraw"
+            TavernStScriptGenerationType.GEN -> "gen"
+            else -> "trigger"
+        }
+        startAiResponseStream(
+            sessionId = sessionId,
+            initialHistory = messages.value,
+            characterCard = card,
+            personaRef = activePersona.ref,
+            requestBinding = binding,
+            initialRuntimeLease = runtimeLease,
+            generationType = generationType,
+            generationPrompt = generation.prompt
+        )
+    }
+
+    private suspend fun appendTavernQuickReplyMessage(
+        sessionId: String,
+        binding: PersonaBindingSnapshot,
+        card: CharacterCard,
+        effect: TavernStScriptEffect.SendMessage
+    ): Boolean {
+        val message = Message(
+            id = newMessageId(),
+            content = effect.text,
+            sender = if (effect.system || !effect.speakerName.isNullOrBlank()) Sender.AI else Sender.USER,
+            tavernName = effect.speakerName ?: if (effect.system) "System" else userName.value,
+            tavernIsSystem = effect.system,
+            tavernExtraJson = if (effect.hidden) {
+                "{\"loyeaHidden\":true,\"source\":\"tavern-stscript\"}"
+            } else {
+                "{\"source\":\"tavern-stscript\"}"
+            },
+            characterId = if (effect.system || !effect.speakerName.isNullOrBlank()) card.id else null
+        )
+        var updated: List<Message>? = null
+        val update: (List<Message>) -> List<Message> = { current ->
+            val next = current.toMutableList()
+            val index = effect.at?.coerceIn(0, next.size) ?: next.size
+            next.add(index, message)
+            next.also { updated = it }
+        }
+        val persisted = withContext(Dispatchers.IO) {
+            storageManager.updateSessionMessagesIfPersonaBinding(binding, update)
+        }
+        val final = persisted ?: updated ?: return false
+        if (currentSessionId.value == sessionId && binding.matches(activeSession.value)) {
+            messages.value = preserveTavernQuickReplyLivePlaceholders(final, sessionId)
+        }
+        return true
+    }
+
+    /**
+     * Quick Reply auto hooks can run while a normal response has an in-memory placeholder that
+     * is intentionally not persisted yet.  Resource-backed message updates must not erase that
+     * placeholder from the live UI or the subsequent stream cannot update its bubble.
+     */
+    private fun preserveTavernQuickReplyLivePlaceholders(
+        persistedMessages: List<Message>,
+        sessionId: String
+    ): List<Message> {
+        if (currentSessionId.value != sessionId) return persistedMessages
+        val liveIds = persistedMessages.asSequence().map(Message::id).toHashSet()
+        val placeholders = messages.value.filter { it.isStillThinking && it.id !in liveIds }
+        return if (placeholders.isEmpty()) persistedMessages else persistedMessages + placeholders
+    }
+
+    private suspend fun appendTavernQuickReplySwipe(
+        sessionId: String,
+        binding: PersonaBindingSnapshot,
+        text: String
+    ): Boolean {
+        if (text.isBlank()) return false
+        var updated: List<Message>? = null
+        val update: (List<Message>) -> List<Message> = { current ->
+            val index = current.indexOfLast { it.sender == Sender.AI }
+            if (index < 0) {
+                current
+            } else {
+                val currentMessage = current[index]
+                val existing = currentMessage.versions.ifEmpty {
+                    listOf(
+                        MessageVersion(
+                            content = currentMessage.content,
+                            thoughts = currentMessage.thoughts,
+                            mcpCalls = currentMessage.mcpCalls,
+                            audioUrl = currentMessage.audioUrl,
+                            audioDuration = currentMessage.audioDuration
+                        )
+                    )
+                }
+                val versions = existing + MessageVersion(content = text)
+                current.mapIndexed { itemIndex, message ->
+                    if (itemIndex == index) message.copy(
+                        content = text,
+                        thoughts = null,
+                        mcpCalls = emptyList(),
+                        isStillThinking = false,
+                        isError = false,
+                        audioUrl = null,
+                        audioDuration = 0,
+                        contentSegments = emptyList(),
+                        versions = versions,
+                        activeVersionIndex = versions.lastIndex
+                    ) else message
+                }.also { updated = it }
+            }
+        }
+        val persisted = withContext(Dispatchers.IO) {
+            storageManager.updateSessionMessagesIfPersonaBinding(binding, update)
+        }
+        val final = persisted ?: updated ?: return false
+        if (currentSessionId.value == sessionId && binding.matches(activeSession.value)) {
+            messages.value = preserveTavernQuickReplyLivePlaceholders(final, sessionId)
+        }
+        return true
     }
 
     /**
@@ -1863,7 +2383,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun startAiResponseStream(
         sessionId: String,
-        history: List<Message>,
+        initialHistory: List<Message>,
         characterCard: CharacterCard,
         personaRef: PersonaRef,
         requestBinding: PersonaBindingSnapshot,
@@ -1874,6 +2394,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         impersonate: Boolean = false,
         generationType: String = "normal",
         continuationPrefix: String = "",
+        generationPrompt: String? = null,
         speakerDisplayName: String? = null,
         groupChatSnapshot: TavernGroupChat? = null,
         onFinished: ((Boolean) -> Unit)? = null
@@ -1888,6 +2409,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val requestId = newMessageId()
             val aiMessageId = continuationOf?.id ?: requestId
             val startTime = System.currentTimeMillis()
+
+            // SillyTavern runs before-generation Quick Replies before it snapshots the prompt.
+            // Keep the hook before the placeholder is inserted so message effects become part of
+            // this request's history instead of racing the streaming placeholder.
+            var history = initialHistory
+            runTavernQuickReplyAuto(
+                TavernQuickReplyAutoTrigger.BEFORE_GENERATION,
+                sessionId,
+                history.lastOrNull { it.sender == Sender.USER }?.content.orEmpty()
+            )
+            if (currentSessionId.value == sessionId) {
+                history = messages.value
+            }
 
             // 1. 折叠历史中的思考
             val collapsedHistoryList = messages.value.map { msg ->
@@ -2226,10 +2760,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 ""
             }
+            val tavernGenerationInstruction = generationPrompt
+                ?.trim()
+                ?.takeIf(String::isNotBlank)
+                ?.let { "[STSCRIPT /gen]\n$it" }
+                .orEmpty()
             val requestedPrompt = PromptPatch(
                 stablePersonaText = promptParts.stableSystemPrompt,
                 turnContextText = existingTurnSnapshot ?: promptParts.turnContextSnapshot,
-                postHistoryText = listOf(promptParts.postHistoryInstructions, impersonationInstruction)
+                postHistoryText = listOf(
+                    promptParts.postHistoryInstructions,
+                    impersonationInstruction,
+                    tavernGenerationInstruction
+                )
                     .filter(String::isNotBlank)
                     .joinToString("\n\n")
             )
@@ -2851,6 +3394,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     cacheMissTokens = accumulatedCacheMissTokens,
                     binding = requestBinding
                 )
+                if (!impersonate && completedNormally) {
+                    runTavernQuickReplyAutoAsync(
+                        TavernQuickReplyAutoTrigger.AI_MESSAGE,
+                        sessionId,
+                        accumulatedContent
+                    )
+                }
                 runCatching { onFinished?.invoke(completedNormally) }
                     .onFailure { callbackError ->
                         Log.e("ChatViewModel", "Tavern group completion callback failed", callbackError)
@@ -3607,7 +4157,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val includeNames = book.config.includeNames
         val safeUserName = userName.value.ifBlank { "User" }
         val safeCharacterName = card.nickname?.takeIf { it.isNotBlank() } ?: card.name.ifBlank { "Character" }
-        val scanHistory = history.map { message ->
+        val visibleHistory = history.filterNot(Message::isTavernHiddenComment)
+        val scanHistory = visibleHistory.map { message ->
             if (!includeNames) {
                 message.content
             } else {
@@ -3643,11 +4194,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
-        return TavernRegexEngine.applyToWorldInfoRender(
+        val finalRender = TavernRegexEngine.applyToWorldInfoRender(
             render = render,
             scripts = cardRegexScripts(card),
             context = macroContext ?: TavernCardRegexAdapter.macroContext(card, userName.value)
         )
+        if (finalRender.automationIds.isNotEmpty()) {
+            runTavernQuickReplyAutoAsync(
+                TavernQuickReplyAutoTrigger.WORLD_INFO_ACTIVATION,
+                currentSessionId.value,
+                automationIds = finalRender.automationIds
+            )
+        }
+        return finalRender
     }
 
     private fun activeTavernAuthorNote(card: CharacterCard, userTurnIndex: Long): TavernAuthorNote? {
@@ -4034,7 +4593,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     messages.value = truncatedMsgs
                     startAiResponseStream(
                         sessionId = sessionId,
-                        history = truncatedMsgs,
+                        initialHistory = truncatedMsgs,
                         characterCard = activeCard,
                         personaRef = activePersona.ref,
                         requestBinding = binding,

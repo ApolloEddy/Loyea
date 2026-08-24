@@ -339,4 +339,42 @@ class LlmConversationBuilderTest {
         assertEquals("system", built.single().role)
         assertEquals("System: Follow the imported policy.", built.single().content)
     }
+
+    @Test
+    fun tavernHiddenCommentStaysOutOfProviderHistory() {
+        val built = LlmConversationBuilder.build(
+            systemPrompt = null,
+            history = listOf(
+                Message(
+                    id = "comment",
+                    content = "internal note",
+                    sender = Sender.AI,
+                    tavernIsSystem = true,
+                    tavernExtraJson = "{\"loyeaHidden\" : true, \"source\":\"tavern-stscript\"}"
+                ),
+                Message(id = "visible", content = "visible", sender = Sender.USER)
+            )
+        )
+
+        assertEquals(listOf("visible"), built.mapNotNull { it.content })
+    }
+
+    @Test
+    fun currentSillyTavernCommentExtraStaysOutOfProviderHistory() {
+        val built = LlmConversationBuilder.build(
+            systemPrompt = null,
+            history = listOf(
+                Message(
+                    id = "comment",
+                    content = "current ST comment",
+                    sender = Sender.AI,
+                    tavernIsSystem = true,
+                    tavernExtraJson = "{\"type\":\"comment\",\"isSmallSys\":false}"
+                ),
+                Message(id = "visible", content = "visible", sender = Sender.USER)
+            )
+        )
+
+        assertEquals(listOf("visible"), built.mapNotNull { it.content })
+    }
 }

@@ -68,6 +68,8 @@ import com.loyea.plugins.tavern.core.TavernChatForkMode
 import com.loyea.plugins.tavern.core.TavernGroupChat
 import com.loyea.plugins.tavern.core.TavernGroupMember
 import com.loyea.plugins.tavern.core.TavernGroupReplyMode
+import com.loyea.plugins.tavern.core.TavernQuickReply
+import com.loyea.plugins.tavern.core.TavernQuickReplySet
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -181,6 +183,16 @@ fun ChatScreen(
             inputText = TextFieldValue(generatedDraft)
             if (currentSessionId.isNotEmpty()) saveDraft(currentSessionId, generatedDraft)
             viewModel?.clearImpersonatedDraft()
+        }
+    }
+
+    // Quick Reply `/setinput` and disabled-send buttons feed the same persisted composer draft.
+    LaunchedEffect(viewModel?.tavernQuickReplyDraft?.value) {
+        val quickReplyDraft = viewModel?.tavernQuickReplyDraft?.value
+        if (quickReplyDraft != null) {
+            inputText = TextFieldValue(quickReplyDraft)
+            if (currentSessionId.isNotEmpty()) saveDraft(currentSessionId, quickReplyDraft)
+            viewModel?.clearTavernQuickReplyDraft()
         }
     }
 
@@ -743,6 +755,29 @@ fun ChatScreen(
                         }
                     }
                 }
+            }
+
+            val quickReplySets = viewModel?.enabledTavernQuickReplySets?.value.orEmpty()
+            if (viewModel != null && quickReplySets.isNotEmpty()) {
+                val selectedName = viewModel.activeTavernQuickReplySetName.value
+                val selectedSet = quickReplySets.firstOrNull {
+                    it.name.equals(selectedName, ignoreCase = true)
+                } ?: quickReplySets.first()
+                LaunchedEffect(quickReplySets.map { it.name }, selectedName) {
+                    if (!selectedName.equals(selectedSet.name, ignoreCase = true)) {
+                        viewModel.selectTavernQuickReplySet(selectedSet.name)
+                    }
+                }
+                TavernQuickReplyBar(
+                    sets = quickReplySets,
+                    selectedSet = selectedSet,
+                    appLanguage = appLanguage,
+                    enabled = !isThinking && !isMcpRunning,
+                    onSelectSet = { viewModel.selectTavernQuickReplySet(it) },
+                    onExecute = { set, reply ->
+                        viewModel.executeTavernQuickReply(set.name, reply.label, inputText.text)
+                    }
+                )
             }
 
             // 底部输入区
@@ -2609,6 +2644,72 @@ fun MessageItem(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun TavernQuickReplyBar(
+    sets: List<TavernQuickReplySet>,
+    selectedSet: TavernQuickReplySet,
+    appLanguage: String,
+    enabled: Boolean,
+    onSelectSet: (String) -> Unit,
+    onExecute: (TavernQuickReplySet, TavernQuickReply) -> Unit
+) {
+    val isEn = appLanguage == "en"
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 2.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = if (isEn) "Quick Reply" else "快捷回复",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            sets.forEach { set ->
+                FilterChip(
+                    selected = set.name.equals(selectedSet.name, ignoreCase = true),
+                    onClick = { if (enabled) onSelectSet(set.name) },
+                    label = { Text(set.name, maxLines = 1, fontSize = 11.sp) },
+                    enabled = enabled
+                )
+            }
+            if (selectedSet.disableSend) {
+                Text(
+                    text = if (isEn) "insert" else "插入",
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            selectedSet.qrList
+                .filter { !it.isHidden && it.label.isNotBlank() }
+                .forEach { reply ->
+                    TextButton(
+                        onClick = { onExecute(selectedSet, reply) },
+                        enabled = enabled,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                        modifier = Modifier.heightIn(min = 30.dp)
+                    ) {
+                        Text(reply.label, maxLines = 1, fontSize = 12.sp)
+                    }
+                }
         }
     }
 }

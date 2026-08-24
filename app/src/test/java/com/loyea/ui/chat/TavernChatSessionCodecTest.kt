@@ -109,6 +109,22 @@ class TavernChatSessionCodecTest {
     }
 
     @Test
+    fun importsCurrentSillyTavernCommentMarkerWithoutDroppingExtraFields() {
+        val imported = TavernChatSessionCodec.importJsonl(
+            """{"chat_metadata":{}}""" + "\n" +
+                """{"name":"System","mes":"note","is_system":true,"extra":{"type":"comment","isSmallSys":true,"custom":"kept"}}""",
+            fallbackTimestampMillis = 1L
+        )
+
+        assertTrue(imported.messages.single().isTavernHiddenComment())
+        assertEquals(
+            "kept",
+            imported.messages.single().tavernExtraJson
+                ?.let { JsonParser.parseString(it).asJsonObject["custom"].asString }
+        )
+    }
+
+    @Test
     fun `exports and reimports swipes extra system role and raw unknown fields`() {
         val messages = listOf(
             Message(

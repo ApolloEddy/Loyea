@@ -488,6 +488,8 @@ object WorldInfoMatcher {
         val atDepth: Map<Int, String> = emptyMap(),
         val outlets: Map<String, String> = emptyMap(),
         val atDepthBlocks: Map<Int, List<WorldInfoInjectionBlock>> = emptyMap(),
+        /** Automation IDs of entries activated during this scan, for Quick Reply hooks. */
+        val automationIds: Set<String> = emptySet(),
         val runtimeState: WorldInfoRuntimeState = WorldInfoRuntimeState()
     )
 
@@ -576,6 +578,7 @@ object WorldInfoMatcher {
         val ordered = matchResult.entries
         if (ordered.isEmpty()) return WorldInfoRenderResult(
             all = null,
+            automationIds = emptySet(),
             runtimeState = matchResult.runtimeState
         )
         val all = renderEntries(ordered, config)
@@ -609,6 +612,7 @@ object WorldInfoMatcher {
             atDepth = depthBuckets,
             outlets = outletBuckets,
             atDepthBlocks = depthBlocks,
+            automationIds = ordered.mapNotNull { it.automationId.takeIf(String::isNotBlank) }.toSet(),
             runtimeState = matchResult.runtimeState
         )
     }

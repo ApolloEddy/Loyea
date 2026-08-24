@@ -252,7 +252,8 @@ fun TavernScreen(
                 val importedRegistry = if (parsedRegistry != null && (
                         parsedRegistry.worldBooks.isNotEmpty() ||
                             parsedRegistry.presets.isNotEmpty() ||
-                            parsedRegistry.regexCollections.isNotEmpty()
+                            parsedRegistry.regexCollections.isNotEmpty() ||
+                            parsedRegistry.quickReplySets.isNotEmpty()
                         )) {
                     parsedRegistry
                 } else {
@@ -266,7 +267,11 @@ fun TavernScreen(
                     val regexScripts = runCatching {
                         root?.let(TavernRegexEngine::parseScriptElement).orEmpty()
                     }.getOrDefault(emptyList())
+                    val quickReplySets = TavernQuickReplyCodec.parseSets(json)
                     when {
+                        quickReplySets.isNotEmpty() -> TavernResourceRegistry(
+                            quickReplySets = quickReplySets
+                        )
                         regexScripts.isNotEmpty() -> TavernResourceRegistry(
                             regexCollections = listOf(
                                 TavernResourceRegistryCodec.regexResource("", name, json, source)
@@ -295,11 +300,13 @@ fun TavernScreen(
                     presets = (tavernResourceRegistry.presets + importedRegistry.presets)
                         .distinctBy { it.id },
                     regexCollections = (tavernResourceRegistry.regexCollections + importedRegistry.regexCollections)
-                        .distinctBy { it.id }
+                        .distinctBy { it.id },
+                    quickReplySets = (tavernResourceRegistry.quickReplySets + importedRegistry.quickReplySets)
+                        .distinctBy { it.name.lowercase() }
                 )
                 onTavernResourceRegistrySave(merged)
                 val count = importedRegistry.worldBooks.size + importedRegistry.presets.size +
-                    importedRegistry.regexCollections.size
+                    importedRegistry.regexCollections.size + importedRegistry.quickReplySets.size
                 Toast.makeText(context, if (isEn) "Imported $count Tavern resource(s)" else "已登记 $count 个酒馆外部资源", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -379,17 +386,20 @@ fun TavernScreen(
                     )
                     if (tavernResourceRegistry.worldBooks.isNotEmpty() ||
                         tavernResourceRegistry.presets.isNotEmpty() ||
-                        tavernResourceRegistry.regexCollections.isNotEmpty()
+                        tavernResourceRegistry.regexCollections.isNotEmpty() ||
+                        tavernResourceRegistry.quickReplySets.isNotEmpty()
                     ) {
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
                             text = if (isEn) {
                                 "External resources: ${tavernResourceRegistry.worldBooks.size} world book(s), " +
                                     "${tavernResourceRegistry.presets.size} preset(s), " +
-                                    "${tavernResourceRegistry.regexCollections.size} regex collection(s)"
+                                    "${tavernResourceRegistry.regexCollections.size} regex collection(s), " +
+                                    "${tavernResourceRegistry.quickReplySets.size} quick reply set(s)"
                             } else {
                                 "已登记外部资源：世界书 ${tavernResourceRegistry.worldBooks.size} 个，" +
-                                    "预设 ${tavernResourceRegistry.presets.size} 个，正则集合 ${tavernResourceRegistry.regexCollections.size} 个"
+                                    "预设 ${tavernResourceRegistry.presets.size} 个，正则集合 ${tavernResourceRegistry.regexCollections.size} 个，" +
+                                    "Quick Reply ${tavernResourceRegistry.quickReplySets.size} 组"
                             },
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.primary
@@ -547,7 +557,7 @@ private fun TavernResourceRegistryDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                if (registry.worldBooks.isEmpty() && registry.presets.isEmpty() && registry.regexCollections.isEmpty()) {
+                if (registry.worldBooks.isEmpty() && registry.presets.isEmpty() && registry.regexCollections.isEmpty() && registry.quickReplySets.isEmpty()) {
                     Text(
                         text = if (isEn) "No external resources registered. Use the folder button to import JSON." else "暂无外部资源，请使用顶部文件夹按钮导入 JSON。",
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -584,6 +594,21 @@ private fun TavernResourceRegistryDialog(
                     },
                     onDelete = { id ->
                         onSave(registry.copy(regexCollections = registry.regexCollections.filterNot { it.id == id }))
+                    }
+                )
+                TavernQuickReplyResourceSection(
+                    title = if (isEn) "Quick Reply sets" else "Quick Reply 组",
+                    resources = registry.quickReplySets,
+                    isEn = isEn,
+                    onToggle = { name, enabled ->
+                        onSave(registry.copy(quickReplySets = registry.quickReplySets.map {
+                            if (it.name.equals(name, ignoreCase = true)) it.copy(enabled = enabled) else it
+                        }))
+                    },
+                    onDelete = { name ->
+                        onSave(registry.copy(quickReplySets = registry.quickReplySets.filterNot {
+                            it.name.equals(name, ignoreCase = true)
+                        }))
                     }
                 )
             }
@@ -661,6 +686,29 @@ private fun TavernRegexResourceSection(
             isEn = isEn,
             onEnabledChange = { onToggle(resource.id, it) },
             onDelete = { onDelete(resource.id) }
+        )
+    }
+}
+
+@Composable
+private fun TavernQuickReplyResourceSection(
+    title: String,
+    resources: List<TavernQuickReplySet>,
+    isEn: Boolean,
+    onToggle: (String, Boolean) -> Unit,
+    onDelete: (String) -> Unit
+) {
+    if (resources.isEmpty()) return
+    Text(title, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+    resources.forEach { resource ->
+        TavernResourceRow(
+            name = resource.name,
+            id = "${resource.qrList.size} ${if (isEn) "reply(s)" else "条回复"}",
+            enabled = resource.enabled,
+            source = resource.qrList.take(3).joinToString(" · ") { it.label }.ifBlank { "Quick Reply" },
+            isEn = isEn,
+            onEnabledChange = { onToggle(resource.name, it) },
+            onDelete = { onDelete(resource.name) }
         )
     }
 }

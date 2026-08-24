@@ -31,6 +31,13 @@ class TavernResourceCodecTest {
                     rawJson = """[{"id":"r","findRegex":"/foo/g","replaceString":"bar","placement":[2]}]"""
                 )
             ),
+            quickReplySets = listOf(
+                TavernQuickReplySet(
+                    name = "Writing",
+                    enabled = false,
+                    qrList = listOf(TavernQuickReply(label = "Continue", message = "/continue"))
+                )
+            ),
             revision = 7
         )
 
@@ -39,6 +46,8 @@ class TavernResourceCodecTest {
         assertEquals(registry.worldBooks.single().rawJson, parsed.worldBooks.single().rawJson)
         assertEquals(registry.presets.single().name, parsed.presets.single().name)
         assertEquals(registry.regexCollections.single().rawJson, parsed.regexCollections.single().rawJson)
+        assertEquals("Continue", parsed.quickReplySets.single().qrList.single().label)
+        assertTrue(!parsed.quickReplySets.single().enabled)
     }
 
     @Test

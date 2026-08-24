@@ -219,8 +219,8 @@ object TavernMacroEngine {
             .firstOrNull { it.key.equals(argument, ignoreCase = true) }
             ?.value
             .orEmpty()
-        "getvar" -> context.localVariables[argument].orEmpty()
-        "getglobalvar" -> context.globalVariables[argument].orEmpty()
+        "getvar", "var" -> context.localVariables[argument].orEmpty()
+        "getglobalvar", "globalvar" -> context.globalVariables[argument].orEmpty()
         "hasvar" -> (argument in context.localVariables).toString()
         "hasglobalvar" -> (argument in context.globalVariables).toString()
         "ismobile" -> context.isMobile.toString()

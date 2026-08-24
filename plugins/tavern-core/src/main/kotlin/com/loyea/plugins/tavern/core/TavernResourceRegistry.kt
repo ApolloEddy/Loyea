@@ -41,6 +41,7 @@ data class TavernResourceRegistry(
     val worldBooks: List<TavernWorldBookResource> = emptyList(),
     val presets: List<TavernPresetResource> = emptyList(),
     val regexCollections: List<TavernRegexResource> = emptyList(),
+    val quickReplySets: List<TavernQuickReplySet> = emptyList(),
     val revision: Long = 0L
 )
 
@@ -52,10 +53,12 @@ object TavernResourceRegistryCodec {
         val worldBooks = parseWorldBooks(root)
         val presets = parsePresets(root)
         val regex = parseRegexCollections(root)
+        val quickReplySets = TavernQuickReplyCodec.parseSets(json)
         TavernResourceRegistry(
             worldBooks = worldBooks,
             presets = presets,
             regexCollections = regex,
+            quickReplySets = quickReplySets,
             revision = root.longOrNull("revision") ?: System.currentTimeMillis()
         )
     }.getOrNull()
@@ -95,6 +98,13 @@ object TavernResourceRegistryCodec {
                     addProperty("enabled", resource.enabled)
                     addProperty("source", resource.source)
                 })
+            }
+        })
+        root.add("quickReplySets", JsonArray().also { array ->
+            registry.quickReplySets.forEach { set ->
+                JsonParser.parseString(TavernQuickReplyCodec.toJson(set))
+                    .takeIf { it.isJsonObject }
+                    ?.let(array::add)
             }
         })
         return root.toString()
