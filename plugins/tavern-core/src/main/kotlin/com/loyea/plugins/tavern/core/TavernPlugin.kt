@@ -69,7 +69,9 @@ class TavernTurnSpec(
     val userTurnIndex: Long = 0L,
     /** Prompt Manager Continue Nudge, already macro-expanded for this request. */
     val continueNudge: String? = null,
-    val continuePrefill: Boolean = false
+    val continuePrefill: Boolean = false,
+    /** Optional frozen group-chat roster and reply strategy for this request. */
+    groupChat: TavernGroupChat? = null
 ) {
     init {
         require(generationType.isNotBlank()) { "Tavern generation type must not be blank" }
@@ -91,6 +93,9 @@ class TavernTurnSpec(
             placement = script.placement.toList()
         )
     }
+    val groupChat: TavernGroupChat? = groupChat?.copy(
+        members = groupChat.members.map { it.copy() }
+    )
 }
 
 class TavernPersonaUnavailableException(val ref: PersonaRef) :
@@ -111,10 +116,47 @@ object TavernPreparedTurnFactory {
             authorNote = spec.authorNote?.copy(),
             userTurnIndex = spec.userTurnIndex,
             continueNudge = spec.continueNudge,
-            continuePrefill = spec.continuePrefill
+            continuePrefill = spec.continuePrefill,
+            groupChat = spec.groupChat
         )
+        val groupMacroContext = frozenSpec.groupChat?.let { group ->
+            frozenSpec.macroContext.copy(
+                group = group.groupMacro(),
+                groupNotMuted = group.groupMacro()
+            )
+        } ?: frozenSpec.macroContext
         val insertions = buildList {
-            frozenSpec.presetMessages.forEachIndexed { index, prompt ->
+            var order = 0
+            frozenSpec.groupChat?.let { group ->
+                val activeNames = group.groupMacro()
+                if (activeNames.isNotBlank()) {
+                    add(
+                        ConversationInsertion(
+                            anchor = InsertionAnchor.AFTER_SYSTEM_BEFORE_SUMMARY,
+                            role = ChatRole.SYSTEM,
+                            content = buildString {
+                                append("[GROUP CHAT / 群聊]\n")
+                                append("Active members: ").append(activeNames).append('\n')
+                                append("Reply mode: ").append(group.replyMode.wireName()).append(".\n")
+                                when (group.replyMode) {
+                                    TavernGroupReplyMode.NATURAL_CHAT -> append(
+                                        "Mentioned members should reply first; otherwise the host selects an active member.\n"
+                                    )
+                                    TavernGroupReplyMode.ALL_MEMBERS -> append("All active, unmuted members may reply.\n")
+                                    TavernGroupReplyMode.DESIGNATED_SPEAKER -> append(
+                                        "Only the designated or explicitly mentioned member may reply.\n"
+                                    )
+                                    TavernGroupReplyMode.CONTEXTUAL_SPEAKER -> append(
+                                        "The host selects the next member with the contextual speaker prompt.\n"
+                                    )
+                                }
+                            }.trim(),
+                            order = order++
+                        )
+                    )
+                }
+            }
+            frozenSpec.presetMessages.forEach { prompt ->
                 if (prompt.content.isNotBlank()) {
                     add(
                         ConversationInsertion(
@@ -126,12 +168,11 @@ object TavernPreparedTurnFactory {
                             role = prompt.role.toChatRole(),
                             content = "[PRESET SLOT / ${prompt.identifier}]\n${prompt.content.trim()}",
                             depthFromLatest = prompt.injectionDepth,
-                            order = index
+                            order = order++
                         )
                     )
                 }
             }
-            var order = frozenSpec.presetMessages.size
             frozenSpec.authorNote
                 ?.takeIf { it.shouldInsert(frozenSpec.userTurnIndex) }
                 ?.let { note ->
@@ -213,7 +254,7 @@ object TavernPreparedTurnFactory {
                     text = text,
                     scripts = frozenSpec.regexScripts,
                     placement = TavernRegexPlacement.USER_INPUT,
-                    context = frozenSpec.macroContext,
+                    context = groupMacroContext,
                     depth = depth,
                     isMarkdown = isMarkdown,
                     isPrompt = true
@@ -222,7 +263,7 @@ object TavernPreparedTurnFactory {
                 TextStage.GREETING -> TavernRegexEngine.applyOutput(
                     text = text,
                     scripts = frozenSpec.regexScripts,
-                    context = frozenSpec.macroContext,
+                    context = groupMacroContext,
                     depth = depth,
                     isMarkdown = isMarkdown
                 )
@@ -230,7 +271,7 @@ object TavernPreparedTurnFactory {
                     text = text,
                     scripts = frozenSpec.regexScripts,
                     placement = TavernRegexPlacement.REASONING,
-                    context = frozenSpec.macroContext,
+                    context = groupMacroContext,
                     depth = depth,
                     isMarkdown = isMarkdown
                 )

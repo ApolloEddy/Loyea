@@ -440,7 +440,7 @@ object TavernRegexEngine {
             .replace("{{match}}", filteredMatch, ignoreCase = true)
             .replace("{{char}}", context.characterName.ifBlank { "Char" }, ignoreCase = true)
             .replace("{{user}}", context.userName.ifBlank { "User" }, ignoreCase = true)
-        return groupPattern.replace(result) { group ->
+        val expandedGroups = groupPattern.replace(result) { group ->
             val index = group.groups[1]?.value?.toIntOrNull()
             val name = group.groups[2]?.value
             when {
@@ -450,6 +450,7 @@ object TavernRegexEngine {
                 else -> ""
             }
         }
+        return TavernMacroEngine.expand(expandedGroups, context)
     }
 
     private fun substituteMacros(

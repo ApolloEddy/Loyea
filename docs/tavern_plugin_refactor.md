@@ -26,6 +26,8 @@ World Info 的 Include Names 已同时影响扫描缓冲和聊天消息前缀，
 
 Prompt Manager 与宏运行时现在共享请求启动时冻结的 `TavernMacroContext`：角色卡字段、历史最后消息、当前输入、生成类型、请求时间、命名 outlet 和只读变量会同时用于系统提示、preset slot、World Info Regex 和输出 Regex。Preset slot 会按 generation trigger 过滤，并保留 relative / in-chat + depth 的消息位置；Continue 请求会消费 `continue_nudge_prompt`、`continue_prefill` 和 `continue_postfix`，Prefill 以最终 assistant 消息前缀发送。宏引擎支持嵌套读取、条件块、时间/历史宏和 legacy `<USER>/<CHAR>` 标记；`setvar`、脚本执行、扩展副作用仍未开放，避免把第三方卡片当作宿主代码执行。
 
+群聊核心已按 Tavo 当前公开语义提供 roster 与回合规划：自然聊天按 `@name` 优先、无提及时对未静音成员做稳定选择；全员回复返回全部未静音成员；指定发言者只接受显式/提及角色；上下文选角返回带 `{{group}}` 的冻结选择提示，并只接受模型返回的已知成员。成员 JSON 支持启用/静音、权重、指定发言者和策略别名。当前 Android 宿主还没有把群聊配置接入会话创建/成员面板与多请求循环，因此这一提交先闭合插件运行时契约，真实多角色 UI 验收仍是后续门禁。
+
 ## 当前模块与依赖方向
 
 ```text
@@ -88,6 +90,7 @@ Prompt Manager 与宏运行时现在共享请求启动时冻结的 `TavernMacroC
 - World Info selective 逻辑、正则、递归、分组、概率、sticky/cooldown/delay、深度 role 注入和 token 预算。
 - Preset prompt order、生成参数覆盖、角色卡资源绑定与 Regex 输入/输出链。
 - Prompt Manager generation trigger、in-chat/depth slot、Continue Nudge/Prefill/Postfix，以及请求级宏和只读变量读取。
+- 群聊 roster、成员静音、四种回复模式、上下文选角提示与安全的 speaker 结果解析。
 - 流式回复、MCP 多轮、后台主动问候、长会话压缩、生图和记忆整理的插件租约接入。
 
 ## 尚未完成的物理拆分

@@ -22,7 +22,8 @@ object LegacyTavernTurnAdapter {
         userTurnIndex: Long = 0L,
         macroContext: TavernMacroContext? = null,
         continueNudge: String? = null,
-        continuePrefill: Boolean = false
+        continuePrefill: Boolean = false,
+        groupChat: TavernGroupChat? = null
     ): PreparedPersonaTurn = TavernPreparedTurnFactory.prepare(
         spec(
             card = card,
@@ -37,7 +38,8 @@ object LegacyTavernTurnAdapter {
             userTurnIndex = userTurnIndex,
             macroContext = macroContext,
             continueNudge = continueNudge,
-            continuePrefill = continuePrefill
+            continuePrefill = continuePrefill,
+            groupChat = groupChat
         )
     )
 
@@ -54,7 +56,8 @@ object LegacyTavernTurnAdapter {
         userTurnIndex: Long = 0L,
         macroContext: TavernMacroContext? = null,
         continueNudge: String? = null,
-        continuePrefill: Boolean = false
+        continuePrefill: Boolean = false,
+        groupChat: TavernGroupChat? = null
     ): TavernTurnSpec = TavernTurnSpec(
             prompt = prompt,
             presetMessages = presetMessages,
@@ -66,6 +69,7 @@ object LegacyTavernTurnAdapter {
             authorNote = authorNote,
             userTurnIndex = userTurnIndex,
             continueNudge = continueNudge,
-            continuePrefill = continuePrefill
+            continuePrefill = continuePrefill,
+            groupChat = groupChat
         )
 }
