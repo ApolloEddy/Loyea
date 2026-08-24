@@ -42,6 +42,7 @@
 
     <!-- 应用本地明文存储健康/位置/API Key 等敏感数据：禁用系统与云备份，防止数据脱离设备泄露 -->
     <application
+        android:name=".LoyeaApplication"
         android:allowBackup="false"
         android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
