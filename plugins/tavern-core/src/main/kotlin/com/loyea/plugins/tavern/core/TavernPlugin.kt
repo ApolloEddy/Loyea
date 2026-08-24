@@ -1,5 +1,7 @@
 package com.loyea.plugins.tavern.core
 
+import com.loyea.context.core.*
+
 import com.loyea.plugin.api.ChatRole
 import com.loyea.plugin.api.ConversationInsertion
 import com.loyea.plugin.api.GenerationPatch

@@ -5,7 +5,7 @@
 ## 目标边界
 
 - Loyea 原生会话只依赖稳定的 `PersonaRef`、`PromptPatch`、`GenerationPatch`、文本变换和租约协议，不依赖具体 Tavern 运行时实现。
-- Tavern 角色卡、Character Book、World Info、Preset、Regex 与外部资源 codec 由 `:plugins:tavern-core` 提供。
+- Tavern 角色卡、Character Book、Preset、Regex 与外部资源 codec 由 `:plugins:tavern-core` 提供；共享知识匹配由 `:knowledge-core` 提供。
 - 插件关闭后立即拒绝新的外部人格任务；已经取得租约的请求继续使用不可变运行时代次，完成或取消后自动排空。
 - 插件启停不删除用户导入的数据。重新启用或重启应用后，持久化的期望状态与 live runtime 状态保持一致。
 - 原生人格和插件人格即使使用相同本地 ID，也不能共享消息副作用、后台任务、主动问候或图记忆。
@@ -16,18 +16,21 @@
 :app
   ├─ :plugin-api
   ├─ :plugin-host
+  ├─ :knowledge-core
   └─ :plugins:tavern-core
 
 :plugin-host ──> :plugin-api
-:plugins:tavern-core ──> :plugin-api
+:knowledge-core ──> （无生产依赖）
+:plugins:tavern-core ──> :plugin-api + :knowledge-core
 ```
 
 - `:plugin-api`：稳定身份、能力、冻结回合、提示词 patch、生成 patch 与输出变换契约。
 - `:plugin-host`：插件注册、代次管理、类型化 persona lease、停用排空和失败隔离。
-- `:plugins:tavern-core`：位于独立 `com.loyea.plugins.tavern.core` 命名空间，不依赖 Android、Compose、ViewModel 或宿主消息模型的 Tavern 纯 Kotlin 运行时。
+- `:knowledge-core`：位于 `com.loyea.context.core` 的中立纯 Kotlin 运行时；当前保留 `WorldInfo*` 兼容命名，承载通用条目模型、匹配、预算、递归和深度注入，不依赖 Android 或 Tavern 实现。
+- `:plugins:tavern-core`：位于独立 `com.loyea.plugins.tavern.core` 命名空间，不依赖 Android、Compose、ViewModel 或宿主消息模型；负责 Tavern 文档 codec、CharacterBook/Preset/Regex 和插件回合，并通过 `:knowledge-core` 投影通用知识上下文。
 - `:app`：Android 组装入口、持久化适配器、WorkManager、Compose 控制面，以及迁移期间尚未移出的旧 UI/存储适配层。
 
-核心模块不得依赖 Tavern 实现模块。Android 宿主只可在 composition root 和 Tavern 适配器中引用具体插件类型。
+核心 API 与中立知识模块不得依赖 Tavern 实现模块。Android 宿主仅可在 composition root 和 Tavern 适配器中引用具体插件类型；迁移期间的 World Info 存储/UI 仍暂留 `:app`。
 
 ## 热插拔语义
 
@@ -71,6 +74,8 @@
 - `ChatStorageManager` 中的 Tavern 资源注册表与世界书文件适配。
 - `TavernScreen`、`WorldInfoSettings` 及其对 `ChatViewModel` 的直接 UI 绑定。
 
+第一阶段物理抽取已完成：`WorldInfoModels` 和 `WorldInfoMatcher` 已移入 `:knowledge-core`；公开 `WorldInfo*` 名称暂保留，确保本步不改变序列化数据或 Prompt 语义。
+
 后续按以下顺序推进，避免把数据迁移、包名重写与 UI 拆分混成一次不可回退的大改动：
 
 1. 新增 `:plugins:tavern-storage`，迁移插件私有注册表、卡片原始文档和资源文件；会话/消息仍由宿主持有。
@@ -85,7 +90,9 @@
 每个迁移提交都必须满足：
 
 ```powershell
-.\gradlew.bat --no-daemon --no-build-cache --rerun-tasks :plugin-api:test :plugin-host:test :plugins:tavern-core:test :app:testDebugUnitTest
+.\gradlew.bat --no-daemon --no-build-cache --rerun-tasks :plugin-api:test :plugin-host:test :knowledge-core:test :plugins:tavern-core:test :app:testDebugUnitTest
 ```
+
+其中 `:knowledge-core:test` 会先执行命名空间和宿主/Tavern 禁止导入门禁，确保中立知识核心不会重新依赖具体插件或 Android 宿主实现。
 
 另外必须人工验证：设置页快速连续启停、停用时在途流式请求排空、重启后仍保持停用、旧会话/旧图记忆迁移、真实 PNG/CHARX 导入导出，以及 Android 设备上的后台 WorkManager 恢复。JVM 测试通过不能替代这些真机与系统调度验收。

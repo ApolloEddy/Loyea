@@ -1,4 +1,4 @@
-package com.loyea.plugins.tavern.core
+package com.loyea.context.core
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

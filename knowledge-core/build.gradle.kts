@@ -6,16 +6,9 @@ kotlin {
     jvmToolchain(17)
 }
 
-dependencies {
-    api(project(":plugin-api"))
-    api(project(":knowledge-core"))
-    implementation("com.google.code.gson:gson:2.10.1")
-    testImplementation("junit:junit:4.13.2")
-}
-
-val verifyTavernCoreBoundaries by tasks.registering {
+val verifyKnowledgeCoreBoundaries by tasks.registering {
     group = "verification"
-    description = "Verifies Tavern core stays in its plugin namespace and does not import host UI/runtime code."
+    description = "Verifies the neutral knowledge core has no Android or Tavern plugin dependency."
 
     val sourceRoot = layout.projectDirectory.dir("src/main/kotlin")
     inputs.dir(sourceRoot)
@@ -25,11 +18,12 @@ val verifyTavernCoreBoundaries by tasks.registering {
             .walkTopDown()
             .filter { it.isFile && it.extension == "kt" }
             .toList()
-        check(kotlinSources.isNotEmpty()) { "Tavern core has no Kotlin sources" }
+        check(kotlinSources.isNotEmpty()) { "Knowledge core has no Kotlin sources" }
 
         val forbiddenImports = listOf(
             "import android.",
             "import androidx.",
+            "import com.loyea.plugins.tavern.",
             "import com.loyea.ui.",
             "import com.loyea.worker.",
             "import com.loyea.perception.",
@@ -38,8 +32,8 @@ val verifyTavernCoreBoundaries by tasks.registering {
             val relativePath = source
                 .relativeTo(sourceRoot.asFile)
                 .invariantSeparatorsPath
-            check(relativePath.startsWith("com/loyea/plugins/tavern/core/")) {
-                "Tavern core source escaped the plugin namespace path: $relativePath"
+            check(relativePath.startsWith("com/loyea/context/core/")) {
+                "Knowledge core source escaped its neutral namespace: $relativePath"
             }
 
             val content = source.readText()
@@ -48,19 +42,23 @@ val verifyTavernCoreBoundaries by tasks.registering {
                 .map(String::trim)
                 .firstOrNull { it.startsWith("package ") }
             check(
-                packageDeclaration == "package com.loyea.plugins.tavern.core" ||
-                    packageDeclaration?.startsWith("package com.loyea.plugins.tavern.core.") == true
+                packageDeclaration == "package com.loyea.context.core" ||
+                    packageDeclaration?.startsWith("package com.loyea.context.core.") == true
             ) {
-                "Tavern core source uses a host package: $relativePath ($packageDeclaration)"
+                "Knowledge core source uses a non-neutral package: $relativePath ($packageDeclaration)"
             }
             forbiddenImports.firstOrNull(content::contains)?.let { forbiddenImport ->
-                error("Tavern core source imports host code: $relativePath ($forbiddenImport)")
+                error("Knowledge core source imports a host/plugin implementation: $relativePath ($forbiddenImport)")
             }
         }
     }
 }
 
 tasks.test {
-    dependsOn(verifyTavernCoreBoundaries)
+    dependsOn(verifyKnowledgeCoreBoundaries)
     useJUnit()
+}
+
+dependencies {
+    testImplementation("junit:junit:4.13.2")
 }

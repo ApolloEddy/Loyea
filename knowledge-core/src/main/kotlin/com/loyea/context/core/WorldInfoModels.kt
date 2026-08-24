@@ -1,4 +1,4 @@
-package com.loyea.plugins.tavern.core
+package com.loyea.context.core
 
 enum class WorldInfoInsertionOrder {
     ORDER,

@@ -1,5 +1,7 @@
 package com.loyea.plugins.tavern.core
 
+import com.loyea.context.core.*
+
 import com.google.gson.JsonArray
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject

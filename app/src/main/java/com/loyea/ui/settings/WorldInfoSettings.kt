@@ -75,11 +75,11 @@ import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.loyea.ui.chat.ChatViewModel
-import com.loyea.plugins.tavern.core.WorldInfoConfig
-import com.loyea.plugins.tavern.core.WorldInfoEntry
-import com.loyea.plugins.tavern.core.WorldInfoBook
+import com.loyea.context.core.WorldInfoConfig
+import com.loyea.context.core.WorldInfoEntry
+import com.loyea.context.core.WorldInfoBook
 import com.loyea.plugins.tavern.core.TavernWorldBookCodec
-import com.loyea.plugins.tavern.core.WorldInfoInsertionOrder
+import com.loyea.context.core.WorldInfoInsertionOrder
 import com.loyea.ui.chat.WorldInfoScope
 
 /**

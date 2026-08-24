@@ -1,5 +1,7 @@
 package com.loyea.plugins.tavern.core
 
+import com.loyea.context.core.*
+
 /**
  * 将角色卡内嵌 CharacterBook 映射为 Loyea 的运行时世界书。
  *
