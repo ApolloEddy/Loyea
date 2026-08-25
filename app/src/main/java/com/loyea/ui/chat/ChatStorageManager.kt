@@ -21,6 +21,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.runBlocking
 
 const val CHAT_SESSION_PERSONA_SCHEMA_VERSION = 1
+const val CHAT_SESSION_SCHEMA_VERSION = 1
 
 data class BackgroundOperationReceipt(
     val operationId: String,
@@ -71,7 +72,15 @@ data class ChatSession(
     /** Parent chat name from ST chat_metadata.main_chat, when this session is a fork. */
     val tavernMainChat: String? = null,
     /** BRANCH or CHECKPOINT for a locally-created Tavern fork. */
-    val tavernForkMode: String? = null
+    val tavernForkMode: String? = null,
+    /** B2: 是否在会话列表中置顶。 */
+    val isPinned: Boolean = false,
+    /** B4: 会话级 API 绑定 id；null 表示跟随全局默认。序列化键 "apiBindingId"。 */
+    val apiBindingId: String? = null,
+    /** B5: 是否启用记忆；null 表示未配置、走全局默认。序列化键 "memoryEnabled"。 */
+    val memoryEnabled: Boolean? = null,
+    /** 敏感恢复的版本化迁移标记：新会话特性字段（isPinned/apiBindingId/memoryEnabled 等）引入时递增。 */
+    val sessionSchemaVersion: Int = CHAT_SESSION_SCHEMA_VERSION
 )
 
 fun ChatSession.tavernGroupChat(): TavernGroupChat? = groupChatJson
@@ -131,6 +140,8 @@ class ChatStorageManager internal constructor(
     private val sessionsFile = File(context.filesDir, "sessions_metadata.json")
     private val personaMigrationBackupFile =
         File(context.filesDir, "sessions_metadata.pre_persona_binding_v1.json")
+    private val sessionSchemaMigrationBackupFile =
+        File(context.filesDir, "sessions_metadata.pre_session_schema_v1.json")
     private val sessionsDir = File(context.filesDir, "sessions").apply {
         if (!exists()) mkdirs()
     }
@@ -164,6 +175,7 @@ class ChatStorageManager internal constructor(
             val type = object : TypeToken<List<ChatSession>>() {}.type
             val rawList = gson.fromJson<List<ChatSession>>(json, type) ?: emptyList()
             var personaMigrationNeeded = false
+            var schemaMigrationNeeded = false
             val normalized = rawList.map { raw ->
                 val characterId = raw.characterId ?: ""
                 val persistedOwnerId = raw.personaOwnerId ?: ""
@@ -178,6 +190,9 @@ class ChatStorageManager internal constructor(
                 val schemaVersion = raw.personaBindingSchemaVersion
                     .takeIf { it >= CHAT_SESSION_PERSONA_SCHEMA_VERSION }
                     ?: CHAT_SESSION_PERSONA_SCHEMA_VERSION.also { personaMigrationNeeded = true }
+                val sessionSchemaVersion = raw.sessionSchemaVersion
+                    .takeIf { it >= CHAT_SESSION_SCHEMA_VERSION }
+                    ?: CHAT_SESSION_SCHEMA_VERSION.also { schemaMigrationNeeded = true }
                 ChatSession(
                     id = raw.id?.takeIf(String::isNotBlank) ?: UUID.randomUUID().toString(),
                     title = raw.title ?: "Unnamed Chat",
@@ -187,6 +202,7 @@ class ChatStorageManager internal constructor(
                     sessionIncarnationId = incarnationId,
                     personaBindingRevision = bindingRevision,
                     personaBindingSchemaVersion = schemaVersion,
+                    sessionSchemaVersion = sessionSchemaVersion,
                     appliedBackgroundOperations = raw.appliedBackgroundOperations ?: emptyList(),
                     useSystemTime = raw.useSystemTime ?: false,
                     coreMemories = raw.coreMemories ?: emptyList(),
@@ -205,13 +221,19 @@ class ChatStorageManager internal constructor(
                     groupChatJson = raw.groupChatJson?.takeIf(String::isNotBlank),
                     tavernChatHeaderJson = raw.tavernChatHeaderJson?.takeIf(String::isNotBlank),
                     tavernMainChat = raw.tavernMainChat?.takeIf(String::isNotBlank),
-                    tavernForkMode = raw.tavernForkMode?.takeIf(String::isNotBlank)
+                    tavernForkMode = raw.tavernForkMode?.takeIf(String::isNotBlank),
+                    isPinned = raw.isPinned ?: false,
+                    apiBindingId = raw.apiBindingId?.takeIf(String::isNotBlank),
+                    memoryEnabled = raw.memoryEnabled
                 )
             }
-            if (personaMigrationNeeded) {
+            if (personaMigrationNeeded || schemaMigrationNeeded) {
                 try {
-                    if (!personaMigrationBackupFile.exists()) {
+                    if (personaMigrationNeeded && !personaMigrationBackupFile.exists()) {
                         atomicWrite(personaMigrationBackupFile, json)
+                    }
+                    if (schemaMigrationNeeded && !sessionSchemaMigrationBackupFile.exists()) {
+                        atomicWrite(sessionSchemaMigrationBackupFile, json)
                     }
                     saveSessionListInternal(normalized)
                 } catch (migrationFailure: Exception) {
@@ -1210,4 +1232,119 @@ class ChatStorageManager internal constructor(
             }
         }
     }
+
+    // ---------- B2 克隆 / 重启存储 API ----------
+
+    /**
+     * 把宿主的原生 [Message] 会话投影成核心 [TavernChatFile]，供克隆/重启规划器使用。
+     * header 从 [ChatSession.tavernChatHeaderJson] 解析保留，消息经
+     * [TavernChatSessionCodec.exportJsonl] + [TavernChatFileCodec.parse] 无损往返。
+     */
+    private fun sessionAsTavernChatFile(session: ChatSession, messages: List<Message>): TavernChatFile {
+        val header = session.tavernChatHeaderJson
+            ?.takeIf(String::isNotBlank)
+            ?.let { raw -> runCatching { TavernChatFileCodec.parse(raw).chat.header }.getOrNull() }
+            ?: TavernChatHeader()
+        val messageJsonl = TavernChatSessionCodec.exportJsonl(
+            messages = messages,
+            userName = "",
+            characterName = "",
+            chatMetadataJson = "{}",
+            createDate = null,
+            headerRawJson = null
+        )
+        val records = TavernChatFileCodec.parse(messageJsonl).chat.messages
+        return TavernChatFile(header = header, messages = records, chatName = session.title)
+    }
+
+    /** 把核心产出的 [TavernChatFile] 写回宿主原生投影：返回 (消息列表, 单行 header JSON)。 */
+    private fun importTavernChatFile(chat: TavernChatFile): Pair<List<Message>, String?> {
+        val jsonl = TavernChatFileCodec.toJsonl(chat)
+        val imported = TavernChatSessionCodec.importJsonl(jsonl)
+        val headerJson = TavernChatFileCodec.toJsonl(TavernChatFile(header = imported.header))
+            .lineSequence()
+            .firstOrNull()
+            ?.takeIf(String::isNotBlank)
+        return imported.messages to headerJson
+    }
+
+    /**
+     * B2 存储 API：克隆会话。复用核心 [TavernChatLifecyclePlanner.cloneChat]，
+     * 消息经 tavern 往返后写入全新的独立会话文件与元数据；源会话不被修改。
+     *
+     * @return 新建的 [ChatSession]，若 [srcSessionId] 不存在则返回 null。
+     * 克隆会继承源的 apiBindingId / memoryEnabled 等配置类字段，但重置 isPinned=false、获得新 id 与 incarnation。
+     */
+    suspend fun cloneSession(srcSessionId: String, newName: String): ChatSession? =
+        sessionsMutex.withLock sessionLock@{
+            messagesMutex.withLock messageLock@{
+                val current = loadSessionListInternal()
+                val source = current.firstOrNull { it.id == srcSessionId } ?: return@messageLock null
+                val clonedChat = TavernChatLifecyclePlanner.cloneChat(
+                    source = sessionAsTavernChatFile(source, loadSessionMessagesStrictInternal(srcSessionId)),
+                    newChatName = newName
+                )
+                val (childMessages, childHeaderJson) = importTavernChatFile(clonedChat)
+                val child = source.copy(
+                    id = UUID.randomUUID().toString(),
+                    title = newName,
+                    sessionIncarnationId = UUID.randomUUID().toString(),
+                    tavernChatHeaderJson = childHeaderJson,
+                    lastActiveTime = System.currentTimeMillis(),
+                    appliedBackgroundOperations = emptyList(),
+                    promptTokens = 0,
+                    completionTokens = 0,
+                    lastContextTokens = 0,
+                    promptCacheHitTokens = 0,
+                    promptCacheMissTokens = 0,
+                    compressedSummary = "",
+                    compressedAtCount = 0,
+                    isPinned = false
+                )
+                val proposed = current + child
+                try {
+                    saveSessionMessagesInternal(child.id, childMessages)
+                    saveSessionListInternal(reconcilePersonaBindingRevisions(current, proposed))
+                    child
+                } catch (failure: Throwable) {
+                    runCatching { File(sessionsDir, "session_${child.id}.json").delete() }
+                    throw failure
+                }
+            }
+        }
+
+    /**
+     * B2 存储 API：重启会话。复用核心 [TavernChatLifecyclePlanner.restartChat]
+     * 清空全部消息、保留 header 配置并把 createDate 重置为当前时刻。
+     *
+     * @return 会话是否存在并成功重启。
+     */
+    suspend fun restartSession(sessionId: String): Boolean =
+        sessionsMutex.withLock sessionLock@{
+            messagesMutex.withLock messageLock@{
+                val current = loadSessionListInternal()
+                val index = current.indexOfFirst { it.id == sessionId }
+                if (index < 0) return@messageLock false
+                val session = current[index]
+                val restarted = TavernChatLifecyclePlanner.restartChat(
+                    sessionAsTavernChatFile(session, loadSessionMessagesStrictInternal(sessionId))
+                )
+                val (emptyMessages, headerJson) = importTavernChatFile(restarted)
+                val updated = session.copy(
+                    tavernChatHeaderJson = headerJson,
+                    lastActiveTime = System.currentTimeMillis(),
+                    appliedBackgroundOperations = emptyList(),
+                    promptTokens = 0,
+                    completionTokens = 0,
+                    lastContextTokens = 0,
+                    promptCacheHitTokens = 0,
+                    promptCacheMissTokens = 0,
+                    compressedSummary = "",
+                    compressedAtCount = 0
+                )
+                saveSessionMessagesInternal(sessionId, emptyMessages)
+                saveSessionListInternal(current.toMutableList().apply { this[index] = updated })
+                true
+            }
+        }
 }

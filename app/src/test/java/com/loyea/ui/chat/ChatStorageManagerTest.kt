@@ -789,4 +789,117 @@ class ChatStorageManagerTest {
         assertEquals(true, partial.allowRecursion)
         assertEquals(true, partial.includeNames)
     }
+
+    // ---------- B2/B4/B5 会话特性字段存储 ----------
+
+    @Test
+    fun `B2B4B5 新字段显式值与默认值往返一致`() = runBlocking {
+        // 显式写入全部新字段
+        val explicit = ChatSession(
+            id = "feature",
+            title = "Feature",
+            isPinned = true,
+            apiBindingId = "api-1",
+            memoryEnabled = false
+        )
+        storageManager.saveSessionList(listOf(explicit))
+        val loaded = storageManager.loadSessionList().single()
+        assertTrue(loaded.isPinned)
+        assertEquals("api-1", loaded.apiBindingId)
+        assertEquals(false, loaded.memoryEnabled)
+
+        // 未指定时走默认：isPinned=false、apiBindingId=null、memoryEnabled=null
+        storageManager.saveSessionList(listOf(ChatSession("plain", "Plain")))
+        val loadedDefault = storageManager.loadSessionList().single()
+        assertFalse(loadedDefault.isPinned)
+        assertNull(loadedDefault.apiBindingId)
+        assertNull(loadedDefault.memoryEnabled)
+    }
+
+    @Test
+    fun `克隆会话产生深度独立的消息与元数据且不污染源`() = runBlocking {
+        val source = ChatSession(
+            id = "src",
+            title = "Source",
+            isPinned = true,
+            apiBindingId = "api-x",
+            memoryEnabled = true
+        )
+        storageManager.saveSessionList(listOf(source))
+        storageManager.saveSessionMessages(
+            source.id,
+            listOf(Message("m1", "hello", Sender.USER), Message("m2", "world", Sender.AI))
+        )
+
+        val clone = requireNotNull(storageManager.cloneSession("src", "Clone"))
+
+        // 克隆元数据
+        assertEquals("Clone", clone.title)
+        assertNotEquals("src", clone.id)
+        assertNotEquals(source.sessionIncarnationId, clone.sessionIncarnationId)
+        // 克隆重置置顶，但继承 apiBindingId / memoryEnabled 等配置类继承
+        assertFalse(clone.isPinned)
+        assertEquals("api-x", clone.apiBindingId)
+        assertEquals(true, clone.memoryEnabled)
+
+        // 消息深度独立：内容一致、各持一份
+        val cloneMessages = storageManager.loadSessionMessages(clone.id)
+        val sourceMessages = storageManager.loadSessionMessages("src")
+        assertEquals(2, cloneMessages.size)
+        assertEquals(2, sourceMessages.size)
+        assertEquals(sourceMessages.map(Message::content), cloneMessages.map(Message::content))
+
+        // 删除克隆不会影响源会话
+        storageManager.deleteSession(clone.id)
+        assertEquals(2, storageManager.loadSessionMessages("src").size)
+        assertEquals(listOf("src"), storageManager.loadSessionList().map(ChatSession::id))
+    }
+
+    @Test
+    fun `重启会话清空消息但保留配置`() = runBlocking {
+        val session = ChatSession(
+            id = "rs",
+            title = "Restart",
+            apiBindingId = "api-r",
+            memoryEnabled = false,
+            authorNote = "keep me"
+        )
+        storageManager.saveSessionList(listOf(session))
+        storageManager.saveSessionMessages(
+            session.id,
+            listOf(Message("m1", "one", Sender.USER), Message("m2", "two", Sender.AI))
+        )
+
+        assertTrue(storageManager.restartSession("rs"))
+
+        // 消息被清空
+        assertEquals(emptyList<Message>(), storageManager.loadSessionMessages("rs"))
+        // 配置字段全部保留
+        val kept = storageManager.loadSessionList().single()
+        assertEquals("Restart", kept.title)
+        assertEquals("api-r", kept.apiBindingId)
+        assertEquals(false, kept.memoryEnabled)
+        assertEquals("keep me", kept.authorNote)
+
+        // 不存在的会话返回 false 且不抛异常
+        assertFalse(storageManager.restartSession("no-such-session"))
+    }
+
+    @Test
+    fun `旧数据加载补默认值不抛异常并写入版本迁移标记与恢复备份`() = runBlocking {
+        val sessionsFile = File(tempFolder.root, "files/sessions_metadata.json")
+        val legacyJson = """[{"id":"legacy1","title":"Old","characterId":"char_loyea_default"}]"""
+        sessionsFile.writeText(legacyJson)
+
+        val loaded = storageManager.loadSessionList().single()
+        assertFalse(loaded.isPinned)
+        assertNull(loaded.apiBindingId)
+        assertNull(loaded.memoryEnabled)
+        assertEquals(CHAT_SESSION_SCHEMA_VERSION, loaded.sessionSchemaVersion)
+
+        // 迁移落盘后元数据带版本标记，且生成敏感恢复备份（原始 JSON 原样保留）
+        assertTrue(sessionsFile.readText().contains("\"sessionSchemaVersion\":1"))
+        val backup = File(tempFolder.root, "files/sessions_metadata.pre_session_schema_v1.json")
+        assertEquals(legacyJson, backup.readText())
+    }
 }
