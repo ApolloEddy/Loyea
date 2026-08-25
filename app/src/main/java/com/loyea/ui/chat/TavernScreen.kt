@@ -46,6 +46,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.google.gson.GsonBuilder
 import com.google.gson.JsonArray
+import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -550,7 +551,48 @@ fun TavernScreen(
                 registry = tavernResourceRegistry,
                 isEn = isEn,
                 onSave = onTavernResourceRegistrySave,
+                onPresetCreate = { dispatch(TavernUiEvent.PresetEditorCreateRequested) },
+                onPresetEdit = { id -> dispatch(TavernUiEvent.PresetEditorEditRequested(id)) },
                 onDismiss = { dispatch(TavernUiEvent.ResourceDismissed) }
+            )
+        }
+
+        // 6. C2 预设编辑器：新建（presetToEditId == ""）与编辑（非空 id）共用同一对话框。
+        //    presetToEditId 由 TavernUiState 互斥管理，打开即关闭其它对话框。
+        if (uiState.presetToEditId != null) {
+            val editingId = uiState.presetToEditId
+            val existingPreset = editingId?.takeIf { it.isNotBlank() }
+                ?.let { id -> tavernResourceRegistry.presets.firstOrNull { it.id == id } }
+                ?.let { TavernPresetCodec.parse(it.rawJson) }
+            PresetEditorDialog(
+                existing = existingPreset,
+                existingId = editingId?.takeIf { it.isNotBlank() },
+                isEn = isEn,
+                onDismiss = { dispatch(TavernUiEvent.PresetEditorDismissed) },
+                onSave = { preset ->
+                    // 新建生成稳定 presetId；编辑按原 presetId 更新条目
+                    val resourceId = editingId.takeIf { !it.isNullOrBlank() }
+                        ?: TavernPresetEditor.newPresetId()
+                    val resource = TavernPresetResource(
+                        id = resourceId,
+                        name = preset.name,
+                        rawJson = TavernPresetEditor.buildPresetJson(preset),
+                        enabled = true,
+                        source = "user"
+                    )
+                    val next = if (editingId.isNullOrBlank()) {
+                        tavernResourceRegistry.copy(presets = tavernResourceRegistry.presets + resource)
+                    } else {
+                        tavernResourceRegistry.copy(
+                            presets = tavernResourceRegistry.presets.map {
+                                if (it.id == editingId) resource else it
+                            }
+                        )
+                    }
+                    onTavernResourceRegistrySave(next)
+                    dispatch(TavernUiEvent.PresetEditorSaved)
+                    Toast.makeText(context, if (isEn) "Preset saved" else "预设保存成功", Toast.LENGTH_SHORT).show()
+                }
             )
         }
     }
@@ -712,6 +754,8 @@ private fun TavernResourceRegistryDialog(
     registry: TavernResourceRegistry,
     isEn: Boolean,
     onSave: (TavernResourceRegistry) -> Unit,
+    onPresetCreate: () -> Unit,
+    onPresetEdit: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
     AlertDialog(
@@ -750,6 +794,8 @@ private fun TavernResourceRegistryDialog(
                     title = if (isEn) "Presets" else "预设",
                     resources = registry.presets,
                     isEn = isEn,
+                    onCreate = onPresetCreate,
+                    onEdit = onPresetEdit,
                     onToggle = { id, enabled ->
                         onSave(registry.copy(presets = registry.presets.map { if (it.id == id) it.copy(enabled = enabled) else it }))
                     },
@@ -821,11 +867,36 @@ private fun TavernPresetResourceSection(
     title: String,
     resources: List<TavernPresetResource>,
     isEn: Boolean,
+    onCreate: () -> Unit,
+    onEdit: (String) -> Unit,
     onToggle: (String, Boolean) -> Unit,
     onDelete: (String) -> Unit
 ) {
-    if (resources.isEmpty()) return
-    Text(title, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+    // 区块标题与"新建预设"入口始终展示，便于无预设时也能从零创建
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(title, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+        TextButton(onClick = onCreate) {
+            Icon(
+                imageVector = Icons.Default.Add,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(if (isEn) "New preset" else "新建预设", fontSize = 12.sp)
+        }
+    }
+    if (resources.isEmpty()) {
+        Text(
+            text = if (isEn) "No presets yet. Create one to customize prompt slots." else "暂无预设，可新建自定义提示词槽位。",
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        return
+    }
     resources.forEach { resource ->
         TavernResourceRow(
             name = resource.name,
@@ -833,6 +904,7 @@ private fun TavernPresetResourceSection(
             enabled = resource.enabled,
             source = resource.source,
             isEn = isEn,
+            onEdit = { onEdit(resource.id) },
             onEnabledChange = { onToggle(resource.id, it) },
             onDelete = { onDelete(resource.id) }
         )
@@ -892,6 +964,7 @@ private fun TavernResourceRow(
     enabled: Boolean,
     source: String,
     isEn: Boolean,
+    onEdit: (() -> Unit)? = null,
     onEnabledChange: (Boolean) -> Unit,
     onDelete: () -> Unit
 ) {
@@ -912,6 +985,15 @@ private fun TavernResourceRow(
                     maxLines = 1,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+            onEdit?.let { edit ->
+                IconButton(onClick = edit) {
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = if (isEn) "Edit" else "编辑",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
             }
             Switch(
                 checked = enabled,
@@ -2101,6 +2183,426 @@ fun EditPersonaDialog(
                     )
 
                     Spacer(modifier = Modifier.height(20.dp))
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 编辑器槽位的可变草稿。列表顺序即 promptOrder 顺序，保存时按序序列化。
+ */
+data class TavernPresetSlotDraft(
+    val identifier: String,
+    val label: String,
+    val content: String,
+    val enabled: Boolean = true
+) {
+    /** 转成可参与构建 / 序列化的 [TavernPresetPrompt]。 */
+    fun toPrompt(order: Int): TavernPresetPrompt = TavernPresetPrompt(
+        name = label,
+        identifier = identifier,
+        content = content,
+        role = "system",
+        systemPrompt = true,
+        marker = false,
+        enabled = enabled,
+        injectionPosition = 0,
+        injectionDepth = 0
+    )
+}
+
+/**
+ * C2 预设编辑器宿主侧的纯逻辑：Tavo 基础 9 槽位模板、默认预设、JSON 往返序列化、
+ * 槽位可用性筛选与保存校验。均为顶层公开成员，便于在 app 测试中独立单测。
+ */
+object TavernPresetEditor {
+    private data class SlotSeed(val identifier: String, val label: String, val content: String)
+
+    /** 基础 9 槽位，顺序即默认 promptOrder（对齐 Tavo 预设页语义）。label 为英文，中文由 [slotLabel] 本地化。 */
+    private val baseSlotSeeds: List<SlotSeed> = listOf(
+        SlotSeed("user_identity", "User Identity",
+            "User information: I am a human.\nMy identity details are as follows: ..."),
+        SlotSeed("character_setting", "Character Setting",
+            "{{char}}'s baseline traits, manner of speaking, and style are as follows: ..."),
+        SlotSeed("personality", "Personality",
+            "Personality summary for {{char}}: ..."),
+        SlotSeed("scenario", "Scenario",
+            "Background of the current scenario: ..."),
+        SlotSeed("example_chat", "New Example Chat",
+            "<START>\n{{user}}: ...\n{{char}}: ...\n<START>"),
+        SlotSeed("new_chat", "New Chat",
+            "<START>\n{{char}}: {{random}}"),
+        SlotSeed("group_chat_progression", "Group Chat Progression",
+            "{{group}}'s members: ...\nCurrent group chat history so far: ..."),
+        SlotSeed("continue_progression", "Continue Progression",
+            "[Summary of what happened so far]\n..."),
+        SlotSeed("ai_assistance", "AI Assistance",
+            "This is a {{llm}} roleplay session. Stay in character and write the next reply for {{char}}.")
+    )
+
+    private val zhLabels = mapOf(
+        "user_identity" to "用户身份",
+        "character_setting" to "角色设定",
+        "personality" to "性格",
+        "scenario" to "场景",
+        "example_chat" to "新示例对话",
+        "new_chat" to "新对话",
+        "group_chat_progression" to "群聊推进",
+        "continue_progression" to "继续对话推进",
+        "ai_assistance" to "AI 辅助"
+    )
+
+    private val enLabels = baseSlotSeeds.associate { it.identifier to it.label }
+
+    /** 槽位展示名（基础槽位双语，扩展槽位回退到标识符，主提示词 / 历史后指令友好化）。 */
+    fun slotLabel(identifier: String, isEn: Boolean): String {
+        (if (isEn) enLabels else zhLabels)[identifier]?.let { return it }
+        return when (identifier.trim().lowercase()) {
+            "main" -> if (isEn) "Main Prompt" else "主提示词"
+            "post_history", "post_history_instructions", "post_history_prompt" ->
+                if (isEn) "Post History" else "历史消息后"
+            else -> identifier
+        }
+    }
+
+    /** 新建预设 / 未找到时的默认 9 槽位草稿。 */
+    fun defaultSlots(): List<TavernPresetSlotDraft> = baseSlotSeeds.map { seed ->
+        TavernPresetSlotDraft(seed.identifier, enLabels.getValue(seed.identifier), seed.content, enabled = true)
+    }
+
+    /** 由基础槽位标识符补建一个启用的空内容草稿。 */
+    fun newSlot(identifier: String, isEn: Boolean): TavernPresetSlotDraft {
+        val seed = baseSlotSeeds.firstOrNull { it.identifier == identifier }
+        return TavernPresetSlotDraft(
+            identifier = identifier,
+            label = slotLabel(identifier, isEn),
+            content = seed?.content.orEmpty(),
+            enabled = true
+        )
+    }
+
+    /** 可"添加槽位"的基础标识符集合：promptOrder 尚未覆盖、也未出现在 prompts 里的基础槽位。 */
+    fun canAddSlot(prompts: List<TavernPresetPrompt>): List<String> =
+        baseSlotSeeds.map { it.identifier }.filter { id -> prompts.none { it.identifier == id } }
+
+    /** 由基础槽位生成默认预设：temperature/maxTokens 预设非空，promptOrder 覆盖全部槽位。 */
+    fun defaultPreset(name: String): TavernPromptPreset {
+        val drafts = defaultSlots()
+        return TavernPromptPreset(
+            name = name,
+            temperature = 0.7,
+            maxTokens = 1024,
+            prompts = drafts.mapIndexed { index, slot -> slot.toPrompt(index) },
+            promptOrder = drafts.mapIndexed { index, slot -> TavernPresetPromptOrder(slot.identifier, slot.enabled, index) }
+        )
+    }
+
+    /**
+     * 将 [TavernPromptPreset] 序列化为与 [TavernPresetCodec.parse] 兼容的 JSON（往返安全），
+     * 供 registry 的 preset 资源持久化；读取端仍走现有 TavernPresetCodec.parse。
+     */
+    fun buildPresetJson(preset: TavernPromptPreset): String {
+        val root = JsonObject().apply {
+            if (preset.name.isNotBlank()) addProperty("name", preset.name)
+            preset.temperature?.let { addProperty("temperature", it) }
+            preset.topP?.let { addProperty("top_p", it) }
+            preset.topK?.let { addProperty("top_k", it) }
+            preset.maxContext?.let { addProperty("max_context", it) }
+            preset.maxTokens?.let { addProperty("max_tokens", it) }
+        }
+        root.add("prompts", JsonArray().also { array ->
+            preset.prompts.forEach { p ->
+                array.add(JsonObject().apply {
+                    addProperty("name", p.name)
+                    addProperty("identifier", p.identifier)
+                    addProperty("content", p.content)
+                    addProperty("role", p.role)
+                    addProperty("system_prompt", p.systemPrompt)
+                    addProperty("marker", p.marker)
+                    addProperty("enabled", p.enabled)
+                    addProperty("injection_position", p.injectionPosition)
+                    addProperty("injection_depth", p.injectionDepth)
+                    if (p.triggers.isNotEmpty()) {
+                        add("triggers", JsonArray().also { p.triggers.forEach(it::add) })
+                    }
+                })
+            }
+        })
+        if (preset.promptOrder.isNotEmpty()) {
+            // 直序格式 [{identifier, enabled}, ...]，数组下标即 order，TavernPresetCodec 可直接读取
+            root.add("prompt_order", JsonArray().also { array ->
+                preset.promptOrder.forEach { order ->
+                    array.add(JsonObject().apply {
+                        addProperty("identifier", order.identifier)
+                        addProperty("enabled", order.enabled)
+                    })
+                }
+            })
+        }
+        return root.toString()
+    }
+
+    /** 保存校验：名称非空，且至少启用一个槽位。 */
+    fun validatePreset(name: String, prompts: List<TavernPresetPrompt>): Boolean =
+        name.isNotBlank() && prompts.any { it.enabled }
+
+    /** 生成稳定的新预设 id（仅新建时调用一次，编辑时保留原 id）。 */
+    fun newPresetId(): String = "preset_" + System.currentTimeMillis() + "_" + (100..999).random()
+}
+
+/**
+ * C2 预设编辑器对话框：新建 / 编辑共用。默认列出基础 9 槽位（或已有预设的槽位），
+ * 顶栏"添加槽位"可补充未覆盖的基础槽位；"完整模式"折叠区展示采样参数与 promptOrder 重排。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PresetEditorDialog(
+    existing: TavernPromptPreset?,
+    existingId: String?,
+    isEn: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (TavernPromptPreset) -> Unit
+) {
+    val initialSlots = if (existing != null) {
+        existing.prompts
+            .filter { it.identifier.isNotBlank() }
+            .map { TavernPresetSlotDraft(it.identifier, it.name.ifBlank { it.identifier }, it.content, it.enabled) }
+            .ifEmpty { TavernPresetEditor.defaultSlots() }
+    } else {
+        TavernPresetEditor.defaultSlots()
+    }
+    var name by remember { mutableStateOf(existing?.name ?: "") }
+    var temperatureText by remember { mutableStateOf(existing?.temperature?.toString() ?: "") }
+    var maxTokensText by remember { mutableStateOf(existing?.maxTokens?.toString() ?: "") }
+    val slots = remember { mutableStateListOf<TavernPresetSlotDraft>().apply { addAll(initialSlots) } }
+    var showFullMode by remember { mutableStateOf(false) }
+    var addMenuExpanded by remember { mutableStateOf(false) }
+    var showRemoveHint by remember { mutableStateOf(false) }
+
+    val availableIds = TavernPresetEditor.canAddSlot(slots.map { it.toPrompt(0) })
+    val canSave = TavernPresetEditor.validatePreset(name, slots.map { it.toPrompt(0) })
+
+    fun buildPreset(): TavernPromptPreset = TavernPromptPreset(
+        name = name.trim(),
+        temperature = temperatureText.trim().toDoubleOrNull(),
+        maxTokens = maxTokensText.trim().toIntOrNull(),
+        prompts = slots.mapIndexed { index, slot -> slot.toPrompt(index) },
+        promptOrder = slots.mapIndexed { index, slot -> TavernPresetPromptOrder(slot.identifier, slot.enabled, index) }
+    )
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight()
+                .background(MaterialTheme.colorScheme.background)
+        ) {
+            Scaffold(
+                topBar = {
+                    TopAppBar(
+                        title = {
+                            Text(
+                                if (existingId != null) (if (isEn) "Edit Preset" else "编辑预设")
+                                else (if (isEn) "New Preset" else "新建预设"),
+                                fontWeight = FontWeight.Bold
+                            )
+                        },
+                        navigationIcon = {
+                            IconButton(onClick = onDismiss) {
+                                Icon(Icons.Default.Close, contentDescription = "Dismiss")
+                            }
+                        },
+                        actions = {
+                            TextButton(
+                                enabled = canSave,
+                                onClick = { onSave(buildPreset()) }
+                            ) {
+                                Text(
+                                    text = if (isEn) "Save" else "保存",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp,
+                                    color = if (canSave) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                                )
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+                    )
+                },
+                containerColor = MaterialTheme.colorScheme.background
+            ) { paddingValues ->
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(paddingValues)
+                        .padding(20.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = { Text(if (isEn) "Preset Name（必填）" else "预设名称（必填）") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    // 槽位列表 + 添加槽位
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (isEn) "Prompt Slots" else "提示词槽位",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Box {
+                            TextButton(onClick = { addMenuExpanded = true }) {
+                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(if (isEn) "Add slot" else "添加槽位", fontSize = 12.sp)
+                            }
+                            DropdownMenu(
+                                expanded = addMenuExpanded,
+                                onDismissRequest = { addMenuExpanded = false }
+                            ) {
+                                if (availableIds.isEmpty()) {
+                                    DropdownMenuItem(
+                                        text = { Text(if (isEn) "All base slots added" else "基础槽位已全部添加") },
+                                        enabled = false,
+                                        onClick = {}
+                                    )
+                                }
+                                availableIds.forEach { id ->
+                                    DropdownMenuItem(
+                                        text = { Text(TavernPresetEditor.slotLabel(id, isEn)) },
+                                        onClick = {
+                                            addMenuExpanded = false
+                                            slots.add(TavernPresetEditor.newSlot(id, isEn))
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (slots.isEmpty()) {
+                        Text(
+                            text = if (isEn) "No slots. Add one to start building the preset." else "暂无槽位，请点击上方“添加槽位”。",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    slots.forEachIndexed { index, slot ->
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(slot.label, fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                                    Spacer(modifier = Modifier.weight(1f))
+                                    IconButton(
+                                        onClick = {
+                                            if (index > 0) {
+                                                slots.add(index - 1, slots.removeAt(index))
+                                            }
+                                        },
+                                        enabled = index > 0
+                                    ) {
+                                        Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Up")
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            if (index < slots.size - 1) {
+                                                slots.add(index + 1, slots.removeAt(index))
+                                            }
+                                        },
+                                        enabled = index < slots.size - 1
+                                    ) {
+                                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Down")
+                                    }
+                                    Switch(
+                                        checked = slot.enabled,
+                                        onCheckedChange = { slots[index] = slot.copy(enabled = it) },
+                                        thumbContent = null
+                                    )
+                                }
+                                OutlinedTextField(
+                                    value = slot.content,
+                                    onValueChange = { slots[index] = slot.copy(content = it) },
+                                    label = { Text(if (isEn) "Slot content" else "槽位内容") },
+                                    minLines = 3,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+                    }
+
+                    // 完整模式折叠区：全部槽位已在上方展示，此处补充采样参数与 promptOrder 说明
+                    TextButton(onClick = { showFullMode = !showFullMode }) {
+                        Text(if (showFullMode) (if (isEn) "Hide full mode" else "收起完整模式")
+                            else (if (isEn) "Full mode (sampling / order)" else "完整模式（采样参数 / prompt 顺序）"),
+                            fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                    }
+                    if (showFullMode) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            OutlinedTextField(
+                                value = temperatureText,
+                                onValueChange = { temperatureText = it },
+                                label = { Text(if (isEn) "Temperature" else "温度") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                modifier = Modifier.weight(1f)
+                            )
+                            OutlinedTextField(
+                                value = maxTokensText,
+                                onValueChange = { maxTokensText = it },
+                                label = { Text(if (isEn) "Max tokens" else "最大输出") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        Text(
+                            text = (if (isEn) "Prompt order: " else "prompt 顺序：") + slots.joinToString(" → ") { it.identifier },
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = if (isEn)
+                                "Use ↑/↓ on each slot to reorder, which updates promptOrder automatically."
+                            else
+                                "点击槽位上的 ↑/↓ 调整顺序，保存时按列表顺序生成 promptOrder。",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        TextButton(onClick = { showRemoveHint = !showRemoveHint }) {
+                            Text(if (showRemoveHint) (if (isEn) "Hide removal hint" else "收起删除提示")
+                                else (if (isEn) "How to remove a slot?" else "如何删除槽位？"),
+                                fontSize = 11.sp)
+                        }
+                        if (showRemoveHint) {
+                            Text(
+                                text = if (isEn)
+                                    "Toggle a slot off to keep it but exclude it from the prompt; clearing its content is fine."
+                                else
+                                    "关闭槽位开关即可让其不参与提示词构建（仍保留内容与顺序）。",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
             }
         }
