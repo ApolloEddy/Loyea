@@ -695,7 +695,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // 移入协程加载挂起 API
         viewModelScope.launch(Dispatchers.IO) {
             val cards = storageManager.loadCharacterCards()
-            val tavernResources = storageManager.loadTavernResourceRegistry()
+            val tavernResources = storageManager.loadTavernResourceRegistryJson()
+                ?.let { TavernResourceRegistryCodec.parse(it) } ?: TavernResourceRegistry()
             withContext(Dispatchers.Main) {
                 characterCardList.value = cards
                 tavernResourceRegistry.value = tavernResources
@@ -926,7 +927,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         regexCacheRegistryRevision = Long.MIN_VALUE
         viewModelScope.launch(Dispatchers.IO) {
-            storageManager.saveTavernResourceRegistry(next)
+            storageManager.saveTavernResourceRegistryJson(TavernResourceRegistryCodec.toJson(next))
         }
     }
 
@@ -997,7 +998,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val sessionId = currentSessionId.value
         if (sessionId.isBlank()) return
         viewModelScope.launch(Dispatchers.IO) {
-            storageManager.updateSessionGroupChat(sessionId, group)
+            storageManager.updateSessionGroupChatJson(sessionId, group?.let(TavernGroupCodec::toJson))
             val updated = storageManager.loadSessionList().sortedByDescending { it.lastActiveTime }
             withContext(Dispatchers.Main) {
                 sessions.value = updated

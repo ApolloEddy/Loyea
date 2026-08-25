@@ -85,10 +85,6 @@ data class ChatSession(
     val sessionSchemaVersion: Int = CHAT_SESSION_SCHEMA_VERSION
 )
 
-fun ChatSession.tavernGroupChat(): TavernGroupChat? = groupChatJson
-    ?.takeIf(String::isNotBlank)
-    ?.let(TavernGroupCodec::parse)
-
 enum class BackgroundGreetingCommitStatus {
     COMMITTED,
     ALREADY_COMMITTED,
@@ -978,27 +974,27 @@ class ChatStorageManager internal constructor(
     }
 
     /** 读取外部酒馆资源注册表；文件不存在时返回空注册表。 */
-    suspend fun loadTavernResourceRegistry(): TavernResourceRegistry {
+    /** 读取外部酒馆资源注册表原始 JSON；文件缺失或损坏时返回 null，由 tavern 适配层补默认值。 */
+    suspend fun loadTavernResourceRegistryJson(): String? {
         return tavernResourcesMutex.withLock {
             ensureTavernStorageMigrationInternal()
-            if (!tavernResourcesFile.exists()) return@withLock TavernResourceRegistry()
+            if (!tavernResourcesFile.exists()) return@withLock null
             try {
-                TavernResourceRegistryCodec.parse(tavernResourcesFile.readText())
-                    ?: TavernResourceRegistry()
+                tavernResourcesFile.readText()
             } catch (e: Exception) {
                 e.printStackTrace()
                 backupCorruptFile(tavernResourcesFile)
-                TavernResourceRegistry()
+                null
             }
         }
     }
 
-    /** 原子保存外部酒馆资源注册表。revision 由调用方递增，供运行时缓存失效。 */
-    suspend fun saveTavernResourceRegistry(registry: TavernResourceRegistry) {
+    /** 原子保存外部酒馆资源注册表原始 JSON。revision 由调用方递增，供运行时缓存失效。 */
+    suspend fun saveTavernResourceRegistryJson(json: String) {
         tavernResourcesMutex.withLock {
             try {
                 ensureTavernStorageMigrationInternal()
-                atomicWrite(tavernResourcesFile, TavernResourceRegistryCodec.toJson(registry))
+                atomicWrite(tavernResourcesFile, json)
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -1267,12 +1263,11 @@ class ChatStorageManager internal constructor(
         }
     }
 
-    /** Atomically persists a Tavern/Tavo group roster without changing persona binding fields. */
-    suspend fun updateSessionGroupChat(sessionId: String, group: TavernGroupChat?) {
-        val groupJson = group?.let(TavernGroupCodec::toJson)
+    /** Atomically persists a serialized Tavern/Tavo group roster without changing persona binding fields. */
+    suspend fun updateSessionGroupChatJson(sessionId: String, groupChatJson: String?) {
         updateSessionList { current ->
             current.map { session ->
-                if (session.id == sessionId) session.copy(groupChatJson = groupJson) else session
+                if (session.id == sessionId) session.copy(groupChatJson = groupChatJson) else session
             }
         }
     }

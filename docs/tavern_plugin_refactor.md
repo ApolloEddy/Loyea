@@ -125,6 +125,26 @@ UI 状态边界已建立：`:plugins:tavern-ui` 的 `TavernUiState`/`TavernUiEve
 
 核心 package rename 已作为独立迁移完成；`:plugins:tavern-core:test` 会先执行命名空间与宿主 import 防回退门禁，不与后续存储格式迁移混在同一提交。
 
+### 批次 4 完成情况（宿主核心签名去 Tavern 化 + 依赖方向架构测试）
+
+`WorldInfo*` 类型属于 `:knowledge-core`（中立契约），不在本批次的清除目标内；真正的 tavern 具体类型泄漏集中在下表，已按“持久化核心可清除 / 适配面允许保留”两类处理：
+
+- 已清除（宿主持久化核心 `ChatStorageManager` 的 4 处公开签名改为中性 JSON 传递）：
+  - `ChatSession.tavernGroupChat(): TavernGroupChat?` 扩展移入宿主适配器 `TavernGroupReplyCoordinator`。
+  - `updateSessionGroupChat(…, TavernGroupChat?)` → `updateSessionGroupChatJson(…, groupChatJson: String?)`；编解码由 Tavern 控制面 `ChatViewModel` 负责。
+  - `loadTavernResourceRegistry(): TavernResourceRegistry` / `saveTavernResourceRegistry(TavernResourceRegistry)` → `loadTavernResourceRegistryJson(): String?` / `saveTavernResourceRegistryJson(json: String)`；默认值与解析由控制面补。
+  - `WorldInfoConfig.kt` 的通配 `import com.loyea.plugins.tavern.core.*` 是死代码，已删除。
+- 已确认零签名耦合（tavern 类型只出现在 private/局部，作为架构测试的正向锁定对象）：`GreetingWorker`、`WorldInfoSettings`、`ChatScreen`。
+- 保留为允许边界（适配器 / 组合根 / Tavern 控制面 / 迁移桥，签名可合法携带 tavern 类型）：`AppTavernPersonaRepository`（实现 tavern 仓库契约）、`LoyeaApplication.prepareTavernPersonaTurn(…, TavernTurnSpec)`（组合根桥）、`ChatViewModel` 的 tavern 公开 API（控制面）、`PromptAssembler`（提示词模板迁移桥）及全部 `Tavern*` 宿主适配器文件。后续批次若迁出这些控制面/桥，再收敛白名单。
+
+新增依赖方向架构测试 `app/src/test/.../architecture/HostCoreDependencyDirectionTest`（不靠 import 文本 grep，直接检查编译产物签名）：
+
+1. `stableContractsNeverReferenceTavernTypes`：plugin-api / plugin-host / knowledge-core 的所有类签名不得引用 `com.loyea.plugins.tavern.*`。
+2. `hostCoreSignaturesDoNotExposeTavernTypes`：`ChatStorageManager` / `WorldInfoConfig` / `GreetingWorker` / `WorldInfoSettings` / `ChatScreen` 的 public+internal 签名不得携带 tavern 类型（允许 private/局部实现引用）。
+3. `onlyAdapterSourcesExposeTavernTypesInSignatures`：app 任意类的 public+internal 签名若引用 tavern 类型，其源文件必须在适配器 / 组合根 / 控制面 / 迁移桥白名单内。
+
+实现要点：从 class 字节读取 `SourceFile` 属性以精确映射“编译类→源文件”；`Modifier.isPublic` 同时覆盖 Kotlin public 与 internal 成员；跳过合成成员、lambda/匿名类（`$<数字>`）与 Kotlin private 顶层类（编译为包私有）；作用域内类加载失败会大声失败而非静默漏检。测试运行时从测试 classpath 定位模块编译产物（目录或 jar 统一处理）。
+
 ## 验收门禁
 
 每个迁移提交都必须满足：

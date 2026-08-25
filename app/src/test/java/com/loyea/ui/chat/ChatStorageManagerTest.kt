@@ -46,7 +46,8 @@ class ChatStorageManagerTest {
             """{"revision":7,"worldBooks":[],"presets":[],"regexCollections":[]}"""
         )
 
-        val loaded = storageManager.loadTavernResourceRegistry()
+        val loaded = storageManager.loadTavernResourceRegistryJson()
+            ?.let { TavernResourceRegistryCodec.parse(it) } ?: TavernResourceRegistry()
         val layout = TavernStorageLayout(File(tempFolder.root, "files/tavern"))
 
         assertEquals(7L, loaded.revision)
@@ -113,12 +114,12 @@ class ChatStorageManagerTest {
             replyMode = TavernGroupReplyMode.ALL_MEMBERS
         )
 
-        storageManager.updateSessionGroupChat("group", group)
+        storageManager.updateSessionGroupChatJson("group", TavernGroupCodec.toJson(group))
         val loaded = storageManager.loadSessionList().single()
         assertEquals(TavernGroupCodec.toJson(group), loaded.groupChatJson)
         assertEquals(group, loaded.tavernGroupChat())
 
-        storageManager.updateSessionGroupChat("group", null)
+        storageManager.updateSessionGroupChatJson("group", null)
         assertNull(storageManager.loadSessionList().single().tavernGroupChat())
     }
 

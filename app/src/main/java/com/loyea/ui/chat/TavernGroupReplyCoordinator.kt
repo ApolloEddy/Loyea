@@ -1,11 +1,17 @@
 package com.loyea.ui.chat
 
 import com.loyea.plugins.tavern.core.TavernGroupChat
+import com.loyea.plugins.tavern.core.TavernGroupCodec
 import com.loyea.plugins.tavern.core.TavernGroupMember
 import com.loyea.plugins.tavern.core.TavernGroupPlanner
 import com.loyea.plugins.tavern.core.TavernGroupReplyMode
 import com.loyea.plugins.tavern.core.TavernGroupTurnPlan
 import com.loyea.plugins.tavern.core.TavernGroupTurnRequest
+
+/** 解码会话持久化的 Tavo/SillyTavern 群聊 roster(宿主适配面,签名不进入存储核心)。 */
+fun ChatSession.tavernGroupChat(): TavernGroupChat? = groupChatJson
+    ?.takeIf(String::isNotBlank)
+    ?.let(TavernGroupCodec::parse)
 
 /** A resolved group speaker together with the local card that can generate its reply. */
 internal data class TavernGroupSpeakerTarget(
