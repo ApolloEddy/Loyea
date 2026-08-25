@@ -296,6 +296,7 @@ class ChatStorageManager internal constructor(
             val json = gson.toJson(cards)
             atomicWrite(cardsFile, json)
             syncTavernCardDocumentsInternal(cards)
+            syncPersonaSummariesInternal(cards)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -348,6 +349,9 @@ class ChatStorageManager internal constructor(
                 )
             }
             syncTavernCardDocumentsInternal(normalized)
+            // D2 一次性迁移：拆分前写原始备份（幂等），并落一份 PersonaSummary 宿主存储。
+            PersonaSummarySplitMigration.ensureBackup(cardsFile, personaSummaryBackupFile)
+            syncPersonaSummariesInternal(normalized)
             normalized
         } catch (e: Exception) {
             e.printStackTrace()
@@ -501,6 +505,12 @@ class ChatStorageManager internal constructor(
 
     private val cardsFile = File(context.filesDir, "character_cards.json")
 
+    // D2：CharacterCard → PersonaSummary / TavernCardDocument 拆分存储边界。
+    // personaSummaryStoreFile 是宿主 PersonaSummary 存储（原生最小集）；
+    // personaSummaryBackupFile 是一次性拆分迁移前的原始备份（沿用 pre_*_v1.json 命名纪律）。
+    private val personaSummaryStoreFile = File(context.filesDir, "character_persona_summaries.json")
+    private val personaSummaryBackupFile = File(context.filesDir, "character_cards.pre_persona_summary_v1.json")
+
     private val worldInfoFile = File(context.filesDir, "global_world_info.json")
 
     private val tavernStorageLayout = TavernStorageLayout(File(context.filesDir, "tavern"))
@@ -545,6 +555,24 @@ class ChatStorageManager internal constructor(
                     }
                 }.onFailure { it.printStackTrace() }
             }
+    }
+
+    /**
+     * 落一份宿主 PersonaSummary 存储（D2：原生最小集）。
+     * 只保留非内置卡片的原生投影；Tavern 完整字段走 [syncTavernCardDocumentsInternal]。与插件
+     * 文档存储配合，构成“拆两个新结构写回”的宿主侧一半。
+     *
+     * TODO(D4)：宿主核心签名清理完成后，本存储应成为宿主运行时唯一的人格持久化来源，
+     * `character_cards.json`（遗留桥类型）可退化为仅服务旧会话/旧图迁移。
+     */
+    private fun syncPersonaSummariesInternal(cards: List<CharacterCard>) {
+        runCatching {
+            val summaries = cards.asSequence()
+                .filterNot(CharacterCard::isBuiltIn)
+                .map(TavernCharacterCardAdapter::toPersonaSummary)
+                .toList()
+            atomicWrite(personaSummaryStoreFile, gson.toJson(summaries))
+        }.onFailure { it.printStackTrace() }
     }
 
     /**
@@ -816,6 +844,30 @@ class ChatStorageManager internal constructor(
     suspend fun loadCharacterCards(): List<CharacterCard> {
         return cardsMutex.withLock {
             loadCharacterCardsInternal()
+        }
+    }
+
+    /**
+     * 读取宿主 PersonaSummary 存储（D2 原生最小集）。业务运行时优先消费本视图，不再直接读
+     * CharacterCard 的 Tavern 扩展字段。存储缺失时（极端情况）回退为对已加载卡片实时投影，
+     * 保证返回结果始终可用。
+     */
+    suspend fun loadPersonaSummaries(): List<PersonaSummary> {
+        return cardsMutex.withLock {
+            if (personaSummaryStoreFile.isFile) {
+                try {
+                    val type = object : TypeToken<List<PersonaSummary>>() {}.type
+                    val stored = gson.fromJson<List<PersonaSummary>>(personaSummaryStoreFile.readText(), type)
+                    if (!stored.isNullOrEmpty()) return@withLock stored
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+            loadCharacterCardsInternal()
+                .asSequence()
+                .filterNot(CharacterCard::isBuiltIn)
+                .map(TavernCharacterCardAdapter::toPersonaSummary)
+                .toList()
         }
     }
 

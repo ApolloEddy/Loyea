@@ -25,6 +25,10 @@ data class CharacterCard(
     val creatorName: String? = null,
     val backgroundUri: String? = null,
     // ---- SillyTavern/Tavern 兼容字段 ----
+    // TODO(D4)：以下 Tavern 扩展字段仅保留用于旧 wire 序列化/导入导出迁移的“遗留桥类型”兼容。
+    // D2 已把它们拆进插件私有 TavernCardDocument（经 TavernCharacterCardAdapter.toDocument 往返），
+    // 宿主运行时改由 PersonaSummary / PersonaProjection 消费，不再直接读这些字段。D4 清理宿主
+    // 核心签名时，本字段将被移出 CharacterCard，宿主核心将不再引用 Tavern 具体类型。
     val description: String = "",
     val creatorNotes: String = "",
     val postHistoryInstructions: String = "",

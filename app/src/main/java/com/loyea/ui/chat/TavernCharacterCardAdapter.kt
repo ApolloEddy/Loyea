@@ -6,6 +6,35 @@ import com.loyea.plugin.api.PersonaRef
 
 /** Host-side projection between Loyea's legacy card model and the isolated Tavern document. */
 object TavernCharacterCardAdapter {
+
+    /**
+     * 原生单向路径：Card → [PersonaSummary]。
+     * 供宿主运行时消费原生最小集；不投射任何 Tavern 扩展字段。
+     */
+    fun toPersonaSummary(card: CharacterCard): PersonaSummary = PersonaSummary(
+        id = card.id,
+        name = card.name,
+        avatarUri = card.avatarUri,
+        avatarColor = card.avatarColor,
+        shortIntro = card.shortIntro,
+        description = card.description,
+        systemPrompt = card.systemPrompt,
+        personality = card.personality,
+        scenario = card.scenario,
+        firstMessage = card.firstMessage,
+        mesExample = card.chatExamples,
+        isBuiltIn = card.isBuiltIn,
+        creatorName = card.creatorName,
+        backgroundUri = card.backgroundUri
+    )
+
+    /**
+     * 一次性拆分：把遗留桥类型 Card 同时投影成原生 [PersonaSummary] 与 Tavern 完整文档
+     * [TavernCardDocument]。用于迁移路径（读旧 → 拆两个新结构写回）。
+     */
+    fun split(card: CharacterCard): PersonaSplitResult =
+        PersonaSplitResult(summary = toPersonaSummary(card), document = toDocument(card))
+
     fun toProjection(card: CharacterCard, ref: PersonaRef): PersonaProjection {
         require(ref.personaId == card.id) { "Persona projection ref does not match card id" }
         return PersonaProjection(
@@ -63,3 +92,12 @@ object TavernCharacterCardAdapter {
         )
     }
 }
+
+/**
+ * D2 一次性拆分的结果：原生最小集 + Tavern 完整文档。
+ * 迁移路径使用它对遗留桥类型做“拆两个新结构写回”。
+ */
+data class PersonaSplitResult(
+    val summary: PersonaSummary,
+    val document: TavernCardDocument
+)
