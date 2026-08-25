@@ -122,6 +122,7 @@ UI 状态边界已建立：`:plugins:tavern-ui` 的 `TavernUiState`/`TavernUiEve
 2. 将 `CharacterCard` 中尚未迁出的 Tavern 扩展字段拆成原生 `PersonaSummary` 与插件私有 `TavernCardDocument`，通过 adapter 投影，保留一次性旧 JSON 迁移和原始备份。
 3. 将 `TavernScreen` 的剩余渲染与 callback 控制面迁入 `:plugins:tavern-ui`，保留当前已抽出的 state/events；SAF、分享和 FileProvider 能力由宿主端口提供。
 4. 清除宿主核心签名中的 Tavern/WorldInfo/Regex/Preset 具体类型，并增加依赖方向架构测试。
+5. 不降级验收：按“批次 5 完成情况”的验收矩阵核对稳定版功能在插件挂载 / 停用下均不降级，新增酒馆功能在挂载下可用，并执行真机清单（D/T/C 系列）。
 
 核心 package rename 已作为独立迁移完成；`:plugins:tavern-core:test` 会先执行命名空间与宿主 import 防回退门禁，不与后续存储格式迁移混在同一提交。
 
@@ -155,4 +156,78 @@ UI 状态边界已建立：`:plugins:tavern-ui` 的 `TavernUiState`/`TavernUiEve
 
 其中 `:knowledge-core:test` 会先执行命名空间和宿主/Tavern 禁止导入门禁，确保中立知识核心不会重新依赖具体插件或 Android 宿主实现。
 
-另外必须人工验证：设置页快速连续启停、停用时在途流式请求排空、重启后仍保持停用、旧会话/旧图记忆迁移、真实 PNG/CHARX 导入导出，以及 Android 设备上的后台 WorkManager 恢复。JVM 测试通过不能替代这些真机与系统调度验收。
+### 批次 5 完成情况（不降级验收矩阵 + 真机清单）
+
+“不降级”按核心原则拆成两个方向验收：**稳定版已有功能在插件挂载时行为不变**（拆了再插上，原生功能照旧），**新增酒馆功能在插件挂载时可用**（新能力真实生效）。下表把每个功能域映射到两种验证手段：JVM 锁定测试（进 gate，自动化回归）与真机步骤（人工验收，`D`=稳定回归、`T`=Tavern 新增、`C`=停用回归）。JVM 绿不能替代真机验收，尤其是 WorkManager 调度、文件迁移与快速连点竞态。
+
+| 功能域 | 归属 | 插件状态 | JVM 锁定（gate 内） | 真机 |
+| --- | --- | --- | --- | --- |
+| 主聊天发送 / 流式渲染 | 原生稳定 | 挂载 | `LlmConversationBuilderTest`、`MainChatTavernLeaseParityTest` | D1 |
+| Continue / Swipe / Regenerate | 原生稳定 | 挂载 | `GenerationRequestMapperTest` | D2 |
+| Impersonate 代发草稿 | 原生稳定 | 挂载 | （人工） | D3 |
+| 消息时间本地化 / 30 分钟分隔 | 原生稳定 | 皆可 | `MessageTimeFormatterTest`、`ConversationTimelineFormatterTest` | D4 |
+| LaTeX→Unicode / Markdown | 原生稳定 | 皆可 | `LatexToUnicodeTest` | — |
+| 输入框超 3 行扩展 | 原生稳定 | 皆可 | `ChatInputUiLogicTest` | D5 |
+| API 配置解析 / 模型 Token 下拉 | 原生稳定 | 皆可 | `ApiConfigResolverTest` | D6 |
+| MCP 工具路由 / payload 规范化 | 原生稳定 | 挂载 | `McpRoutingTest`、`McpConfigStorageTest`、`LlmRequestCanonicalizerTest` | D7 |
+| 图记忆四维命名空间隔离 | 原生稳定 | 挂载 | `GraphMemoryManagerTest`、`MemoryAccessPolicyTest` | D8 |
+| 记忆整理（手动 + 自动） | 原生稳定 | 挂载 | `MemoryConsolidationWorkerTest`、`BackgroundPromptTemplatesTest` | D9 |
+| 后台主动问候 | 原生稳定 | 挂载 | `BackgroundPromptTemplatesTest` | D10 |
+| 长会话压缩 / 快照失效 | 原生稳定 | 挂载 | `BackgroundPromptTemplatesTest` | D11 |
+| 生图（插件人格租约） | 原生稳定 | 挂载 | （人工） | D12 |
+| 人格绑定 / 身份围栏 / ABA | 原生稳定 | 挂载 | `AppTavernPersonaRepositoryTest`、`PersonaSummaryProjectionTest`、`PersonaSummarySplitMigrationTest` | D13 |
+| 原生世界书匹配 / 提示词组装 | 原生稳定 | 挂载 | `WorldInfoMatcherTest`、`PromptAssemblerTest` | D14 |
+| 插件启停 / 排空 / 重启保持 | 框架 | 皆可 | `PluginManagerTest`、`PersistentPluginControllerTest`、`PluginEnablementStoreTest`、`PersonaTurnLeaseTest` | D15 |
+| 依赖方向 / 签名边界 | 框架 | 皆可 | `HostCoreDependencyDirectionTest` + 各模块 verify 边界 gate | — |
+| 会话列表 / 查询 / 回复输出过滤 | 原生稳定 | 皆可 | `ChatSessionQueryTest`、`ReplyOutputSanitizerTest` | — |
+| 角色卡 V1/V2/V3 JSON / PNG / CHARX 导入导出 | Tavern 新增 | 需开 | `TavernCardCodecTest`、`TavernCardParserTest`、`TavernCardWireFormatTest`、`TavernCardCodecIsolationTest` | T1 |
+| CharacterBook / World Info 绑定运行时 | Tavern 新增 | 需开 | `TavernResourceCodecTest`、`WorldInfoMatcherTest` | T2 |
+| Preset prompt / 生成参数覆盖 | Tavern 新增 | 需开 | `TavernPresetCodecTest`、`TavernPresetCoreTest`、`TavernPresetEditorTest`、`TavernCardPresetAdapterTest` | T3 |
+| Regex 输入 / 输出链 | Tavern 新增 | 需开 | `TavernRegexEngineTest`、`TavernRegexCoreTest`、`TavernCardRegexAdapterTest` | T4 |
+| Quick Reply / 安全 STscript 子集 | Tavern 新增 | 需开 | `TavernQuickReplyTest` | T5 |
+| 请求级宏运行时 | Tavern 新增 | 需开 | `TavernMacroRuntimeParityTest` | T6 |
+| 群聊 roster / 四种回复模式 / 选角 | Tavern 新增 | 需开 | `TavernGroupChatTest`、`TavernGroupReplyCoordinatorTest` | T7 |
+| 聊天 JSONL / Branch / Checkpoint | Tavern 新增 | 需开 | `TavernChatFileCodecTest`、`TavernChatExportCodecTest`、`TavernChatLifecyclePlannerTest`、`TavernChatSessionCodecTest`、`TavernChatStatisticsTest` | T8 |
+| 外部资源注册表 / 下载器 | Tavern 新增 | 需开 | `TavernResourceCodecTest`、`TavernCardDownloaderTest`、`TavernCardUrlResolverTest` | T9 |
+| 存储边界 / 迁移 / 恢复 | Tavern 新增 | 需开 | `TavernStorageMigrationTest`、`TavernStorageRecoveryTest`、`TavernCardDocumentStoreTest` | T10 |
+| Tavern UI 状态 / 文本边界 | Tavern 新增 | 需开 | `TavernUiStateTest`、`TavernUiTextTest`、`TavernPluginDescriptorTest` | T11 |
+| 插件运行时 / 描述符自述 | Tavern 新增 | 需开 | `TavernPluginRuntimeTest`、`TavernPluginDescriptorTest` | — |
+
+真机清单（按序执行，每一项通过才算该功能域不降级）：
+
+**D 系列 —— 插件挂载下的稳定版回归**
+- D1 以 Loyea 原生人格发送消息：流式渲染、思考块、Markdown 排版、生成中停止、回复落盘与重启后可见。
+- D2 对最后一条 AI 回复依次 Continue / Swipe / Regenerate：气泡追加、版本归并、World Info 生成类型过滤看到真实请求。
+- D3 Impersonate：代发草稿只回填输入框，点击发送后才写入聊天，失败不留伪造用户消息。
+- D4 同天 / 昨天 / 前天 / 跨年时间格式正确，时间间隔分隔条正确分组。
+- D5 输入文本超过三行（含自动折行）才出现全屏编辑按钮。
+- D6 多 provider 切换、模型 / Token 下拉布局与用量显示正常。
+- D7 启用工具后一轮对话多次 MCP 工具调用，工具结果进入上下文且不重复时间 token。
+- D8 图记忆新记录按 owner / persona / incarnation / revision 隔离；删除重建与 A→B→A 重绑不复活旧记忆。
+- D9 手动 + 自动记忆总结均入队 WorkManager，失败保留弹窗并提示。
+- D10 后台主动问候在杀进程恢复后幂等，不重复生成、不重复计费。
+- D11 长会话压缩触发时历史前缀按语义变化正确失效。
+- D12 插件人格下生图成功、任务完成写回，身份围栏拒绝跨绑定写回。
+- D13 删除重建 / 重绑期间的旧流式写回被拒；旧会话 owner 迁移为 `loyea.native` 后功能正常。
+- D14 全局 / 会话世界书匹配、递归、timed effects、Include Names 与预设覆盖符合稳定版行为。
+- D15 设置页快速连续启停：停用时在途流式请求排空、重启后保持停用、停用不删除已导入数据、重新启用后 UI 入口与功能恢复。
+
+**T 系列 —— 插件挂载下的 Tavern 新增功能**
+- T1 导入真实 PNG（`chara`/`ccv3`）与 V3 CHARX，再标准导出；未知字段、CharacterBook、扩展字段往返不丢。
+- T2 内嵌 CharacterBook 与外部世界书合并，`selective`/`constant`/正则/概率/sticky/cooldown/delay 生效。
+- T3 导入 preset：prompt order、post-history、采样参数覆盖进入真实请求。
+- T4 Regex 各 placement 受控执行，AI 输出 `[MESSAGE TIME: ...]` 元数据被过滤。
+- T5 Quick Reply 组登记、`disableSend`/`injectInput`、安全 STscript 命令子集生效，危险命令返回 blocked 诊断。
+- T6 `{{group}}`、时间 / 历史宏、请求级种子随机在 Prompt 与 Regex 间保持一致。
+- T7 成员面板编辑 roster、四种回复模式顺序生成、上下文选角先选角后入队。
+- T8 SAF 导入 / 导出 JSONL、Branch / Checkpoint 截断与父链、坏行行号诊断、system 消息 provenance 保留。
+- T9 外部世界书 / preset / Regex collection 导入并绑定卡片资源解析。
+- T10 旧 `tavern_resources.json` 首访迁移到 `files/tavern/registry` 且源文件保留；非内置卡写入 `cards/<sha256>.json`；冲突保留 / 恢复可观测。
+- T11 创建 / 资源管理 / 编辑 / 删除确认弹窗互斥，不互相泄漏选择状态。
+
+**C 系列 —— 插件停用回归（稳定版不受影响）**
+- C1 停用后以原生人格继续主聊天，流式、记忆、问候、压缩、生图全部可用。
+- C2 停用后 Tavern 管理 UI 入口隐藏，重启仍保持停用。
+- C3 停用不删除已导入的角色卡 / 资源；重新启用后原数据可继续使用。
+
+执行上述清单前，先跑一次全文 gate（见上）并确认全部 JVM 锁定测试绿；任何一项真机失败都按“有功能降级”对待，先修复再合入，不能以“仅 UI 差异”放行。
