@@ -931,10 +931,10 @@ class ChatStorageManagerTest {
         assertEquals("speaker-api-9", storageManager.loadSessionList().single().speakerApiBindingId)
     }
 
-    // ---- TODO1：wire 格式 v2 ----
+    // ---- TODO2：personaSummaryStore 单一真源 ----
 
     @Test
-    fun `save writes wire v2 without tavern fields but keeps tavern data in document store`() = runBlocking {
+    fun `save writes persona summary store and document store but not character cards json`() = runBlocking {
         val card = requireNotNull(
             TavernCardParser.parseJsonCard(
                 """{"name":"V2","description":"desc","tags":["a"],"first_mes":"hi","extensions":{"x":1}}"""
@@ -943,17 +943,53 @@ class ChatStorageManagerTest {
 
         storageManager.saveCharacterCards(listOf(card))
 
-        val wireJson = File(tempFolder.root, "files/character_cards.json").readText()
-        val card0 = JsonParser.parseString(wireJson).asJsonArray[0].asJsonObject
-        assertFalse(card0.has("description"))
-        assertFalse(card0.has("tags"))
-        assertTrue(card0.has("name"))
-        assertTrue(card0.has("shortIntro"))
-
+        // 单一真源：Tavern 完整字段进插件文档库，原生投影进 personaSummaryStore。
         val layout = TavernStorageLayout(File(tempFolder.root, "files/tavern"))
         val docRaw = layout.resolve(layout.cardDocumentRelativePath(card.id)).readText()
         assertTrue(docRaw.contains("desc"))
         assertTrue(docRaw.contains("a"))
+        val summaries = storageManager.loadPersonaSummaries().single()
+        assertEquals(card.id, summaries.id)
+        assertEquals("V2", summaries.name)
+        // character_cards.json 不再写入（退化为仅服务一次性迁移）。
+        assertFalse(File(tempFolder.root, "files/character_cards.json").exists())
+    }
+
+    @Test
+    fun `load assembles cards from persona summary store plus document store`() = runBlocking {
+        val card = requireNotNull(
+            TavernCardParser.parseJsonCard(
+                """{"name":"SingleSource","description":"d","tags":["t"],"first_mes":"hi","extensions":{"k":1}}"""
+            )
+        )
+        storageManager.saveCharacterCards(listOf(card))
+
+        // store-first 路径：personaSummaryStore 已存在，直接组装（不再读 character_cards.json）。
+        val loaded = storageManager.loadCharacterCards()
+
+        val user = loaded.first { it.id == card.id }
+        assertEquals("SingleSource", user.name)
+        assertEquals("d", user.description)
+        assertEquals(listOf("t"), user.tags)
+        assertTrue(loaded.any { it.isBuiltIn })
+    }
+
+    @Test
+    fun `edited builtin override survives single source round trip but pristine builtin stays out of store`() = runBlocking {
+        // 首载注入内置卡并落 store（未改动内置卡不入库）。
+        storageManager.loadCharacterCards()
+        assertTrue(storageManager.loadPersonaSummaries().isEmpty())
+
+        // 用户编辑一个内置卡（原生字段），保存。
+        val pristine = TavernCardParser.getBuiltInCards()
+        val edited = pristine.first().copy(systemPrompt = "edited prompt")
+        storageManager.saveCharacterCards(pristine.map { if (it.id == edited.id) edited else it })
+
+        // 二次加载：编辑保留；store 只含该内置覆盖。
+        val reloaded = storageManager.loadCharacterCards()
+        assertEquals("edited prompt", reloaded.first { it.id == edited.id }.systemPrompt)
+        val summaries = storageManager.loadPersonaSummaries()
+        assertEquals(listOf(edited.id), summaries.map { it.id })
     }
 
     @Test

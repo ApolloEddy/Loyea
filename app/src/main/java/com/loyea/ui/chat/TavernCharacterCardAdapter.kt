@@ -29,6 +29,65 @@ object TavernCharacterCardAdapter {
     )
 
     /**
+     * TODO2：从 personaSummaryStore 的原生投影重建 [CharacterCard]（单一真源读路径）。
+     *
+     * 内置卡覆盖以静态模板为底、仅覆写原生字段（Tavern 字段随模板走，天然不丢）；
+     * 非内置卡用全新原生卡，Tavern 扩展字段留空，由调用方经 [overlayTavernFields]
+     * 从插件文档库补齐。
+     */
+    fun fromPersonaSummary(summary: PersonaSummary): CharacterCard {
+        val pristineBase = if (summary.isBuiltIn) {
+            TavernCardParser.getBuiltInCards().firstOrNull { it.id == summary.id }
+        } else {
+            null
+        }
+        val base = pristineBase ?: CharacterCard(
+            id = summary.id,
+            name = summary.name,
+            shortIntro = summary.shortIntro,
+            systemPrompt = summary.systemPrompt
+        )
+        return base.copy(
+            id = summary.id,
+            name = summary.name,
+            avatarUri = summary.avatarUri,
+            avatarColor = summary.avatarColor ?: "#E5D3B3",
+            shortIntro = summary.shortIntro,
+            systemPrompt = summary.systemPrompt,
+            personality = summary.personality,
+            scenario = summary.scenario,
+            firstMessage = summary.firstMessage,
+            chatExamples = summary.mesExample,
+            isBuiltIn = summary.isBuiltIn,
+            creatorName = summary.creatorName,
+            backgroundUri = summary.backgroundUri
+        )
+    }
+
+    /**
+     * TODO2：内置卡是否仍是出厂模板（仅比较原生字段）。
+     *
+     * personaSummaryStore 单一真源下，未改动的内置卡不落盘（模板可随版本升级传播）；
+     * 用户编辑过的内置卡才作为“内置覆盖”持久化。比较仅限原生字段——Tavern 扩展字段在
+     * 迁移/往返中可能为空，参与比较会产生误判的“幻影覆盖”。
+     */
+    fun isPristineBuiltin(card: CharacterCard): Boolean {
+        val pristine = TavernCardParser.getBuiltInCards().firstOrNull { it.id == card.id }
+            ?: return false
+        return card.name == pristine.name &&
+            card.avatarUri == pristine.avatarUri &&
+            card.avatarColor == pristine.avatarColor &&
+            card.shortIntro == pristine.shortIntro &&
+            card.systemPrompt == pristine.systemPrompt &&
+            card.personality == pristine.personality &&
+            card.scenario == pristine.scenario &&
+            card.firstMessage == pristine.firstMessage &&
+            card.chatExamples == pristine.chatExamples &&
+            card.creatorName == pristine.creatorName &&
+            card.backgroundUri == pristine.backgroundUri
+    }
+
+    /**
      * 一次性拆分：把遗留桥类型 Card 同时投影成原生 [PersonaSummary] 与 Tavern 完整文档
      * [TavernCardDocument]。用于迁移路径（读旧 → 拆两个新结构写回）。
      */

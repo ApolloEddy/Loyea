@@ -139,8 +139,6 @@ class ChatStorageManager internal constructor(
     private val backgroundGreetingFailureHook: ((BackgroundGreetingCommitStage) -> Unit)? = null
 ) {
     private val gson = Gson()
-    // TODO1：wire 格式 v2 —— 序列化 character_cards.json 时排除 Tavern 扩展字段（读取仍用 gson）。
-    private val wireGson = TavernCardWireFormat.createWireGson()
     private val sessionsFile = File(context.filesDir, "sessions_metadata.json")
     private val personaMigrationBackupFile =
         File(context.filesDir, "sessions_metadata.pre_persona_binding_v1.json")
@@ -295,9 +293,9 @@ class ChatStorageManager internal constructor(
 
     private fun saveCharacterCardsInternal(cards: List<CharacterCard>) {
         try {
-            // TODO1：wire 格式 v2 —— Tavern 扩展字段不再落盘（读取旧格式仍宽容，见 TavernCardWireFormat）。
-            val json = wireGson.toJson(cards)
-            atomicWrite(cardsFile, json)
+            // TODO2：单一真源 —— 原生投影进 personaSummaryStore，Tavern 完整字段进插件文档库。
+            // character_cards.json 不再写入，退化为仅服务旧会话/旧图一次性迁移（见
+            // migrateLegacyCardsInternal），原文件保留作为降级/恢复点。
             syncTavernCardDocumentsInternal(cards)
             syncPersonaSummariesInternal(cards)
         } catch (e: Exception) {
@@ -306,72 +304,151 @@ class ChatStorageManager internal constructor(
     }
 
     private fun loadCharacterCardsInternal(): List<CharacterCard> {
+        // TODO2：personaSummaryStore 为单一真源（含内置卡覆盖，见 syncPersonaSummariesInternal）。
+        // character_cards.json 仅在 store 缺失/损坏时做一次性迁移。
+        if (personaSummaryStoreFile.isFile) {
+            val fromStore = runCatching {
+                readPersonaSummariesStore()?.let(::assembleFromSummaries)
+            }.getOrNull()
+            if (fromStore != null) return fromStore
+        }
         return try {
-            if (!cardsFile.exists()) {
-                val defaults = TavernCardParser.getBuiltInCards()
-                saveCharacterCardsInternal(defaults)
-                return defaults
-            }
-            // D2 一次性备份：在 wire 迁移改写源文件之前，先按旧格式完整备份（幂等）。
-            PersonaSummarySplitMigration.ensureBackup(cardsFile, personaSummaryBackupFile)
-            // TODO1：wire 格式 v2 一次性迁移 —— 备份原文件、补齐插件文档库、以 v2 重写、写标记。
-            TavernFieldDropMigration.ensureWireV2(
-                sourceFile = cardsFile,
-                backupFile = tavernFieldDropBackupFile,
-                markerFile = tavernFieldDropMarkerFile,
-                layout = tavernStorageLayout
-            )
-            val json = cardsFile.readText()
-            val type = object : TypeToken<List<CharacterCard>>() {}.type
-            val rawList = gson.fromJson<List<CharacterCard>>(json, type) ?: emptyList()
-            // 进行自愈式清洗
-            val normalized = rawList.map { raw ->
-                CharacterCard(
-                    id = raw.id ?: System.currentTimeMillis().toString(),
-                    name = raw.name ?: "Unknown",
-                    avatarUri = raw.avatarUri,
-                    avatarColor = raw.avatarColor ?: "#E5D3B3",
-                    shortIntro = raw.shortIntro ?: "",
-                    systemPrompt = raw.systemPrompt ?: "",
-                    personality = raw.personality ?: "",
-                    scenario = raw.scenario ?: "",
-                    firstMessage = raw.firstMessage ?: "",
-                    chatExamples = raw.chatExamples ?: "",
-                    isBuiltIn = raw.isBuiltIn,
-                    creatorName = raw.creatorName,
-                    backgroundUri = raw.backgroundUri,
-                    description = raw.description ?: "",
-                    creatorNotes = raw.creatorNotes ?: "",
-                    postHistoryInstructions = raw.postHistoryInstructions ?: "",
-                    alternateGreetings = raw.alternateGreetings ?: emptyList(),
-                    groupOnlyGreetings = raw.groupOnlyGreetings ?: emptyList(),
-                    tags = raw.tags ?: emptyList(),
-                    characterVersion = raw.characterVersion ?: "",
-                    nickname = raw.nickname,
-                    source = raw.source ?: emptyList(),
-                    creationDate = raw.creationDate,
-                    modificationDate = raw.modificationDate,
-                    creatorNotesMultilingualJson = raw.creatorNotesMultilingualJson ?: "{}",
-                    assetsJson = raw.assetsJson ?: "[]",
-                    extensionsJson = raw.extensionsJson ?: "{}",
-                    characterBookJson = raw.characterBookJson,
-                    spec = raw.spec ?: "chara_card_v2",
-                    specVersion = raw.specVersion ?: "2.0",
-                    originalCardJson = raw.originalCardJson
-                )
-            }
-            // TODO1：非内置卡从插件文档库补齐 Tavern 扩展字段（v2 wire 不再携带，文档库是唯一事实来源）。
-            val enriched = normalized.map { card ->
-                if (card.isBuiltIn) card
-                else overlayTavernFromDocumentStore(card) ?: card
-            }
-            syncPersonaSummariesInternal(enriched)
-            enriched
+            migrateLegacyCardsInternal()
         } catch (e: Exception) {
             e.printStackTrace()
             backupCorruptFile(cardsFile)
             emptyList()
         }
+    }
+
+    /**
+     * TODO2：character_cards.json 一次性迁移 —— 唯一仍读取该遗留文件的路径。
+     * 读旧图 → 拆两个新结构写回（personaSummaryStore + 插件文档库，见 TavernFieldDropMigration
+     * 与 D2 拆分）；cardsFile 迁移后不再写入，保留为降级/恢复点。
+     */
+    private fun migrateLegacyCardsInternal(): List<CharacterCard> {
+        val defaults = TavernCardParser.getBuiltInCards()
+        if (!cardsFile.exists()) {
+            syncPersonaSummariesInternal(defaults)
+            syncTavernCardDocumentsInternal(defaults)
+            return defaults
+        }
+        // D2 一次性备份：在 wire 迁移改写源文件之前，先按旧格式完整备份（幂等）。
+        PersonaSummarySplitMigration.ensureBackup(cardsFile, personaSummaryBackupFile)
+        // TODO1：wire 格式 v2 一次性迁移 —— 备份原文件、补齐插件文档库、以 v2 重写、写标记。
+        TavernFieldDropMigration.ensureWireV2(
+            sourceFile = cardsFile,
+            backupFile = tavernFieldDropBackupFile,
+            markerFile = tavernFieldDropMarkerFile,
+            layout = tavernStorageLayout
+        )
+        val json = cardsFile.readText()
+        val type = object : TypeToken<List<CharacterCard>>() {}.type
+        val rawList = gson.fromJson<List<CharacterCard>>(json, type) ?: emptyList()
+        // 进行自愈式清洗
+        val normalized = rawList.map { raw ->
+            CharacterCard(
+                id = raw.id ?: System.currentTimeMillis().toString(),
+                name = raw.name ?: "Unknown",
+                avatarUri = raw.avatarUri,
+                avatarColor = raw.avatarColor ?: "#E5D3B3",
+                shortIntro = raw.shortIntro ?: "",
+                systemPrompt = raw.systemPrompt ?: "",
+                personality = raw.personality ?: "",
+                scenario = raw.scenario ?: "",
+                firstMessage = raw.firstMessage ?: "",
+                chatExamples = raw.chatExamples ?: "",
+                isBuiltIn = raw.isBuiltIn,
+                creatorName = raw.creatorName,
+                backgroundUri = raw.backgroundUri,
+                description = raw.description ?: "",
+                creatorNotes = raw.creatorNotes ?: "",
+                postHistoryInstructions = raw.postHistoryInstructions ?: "",
+                alternateGreetings = raw.alternateGreetings ?: emptyList(),
+                groupOnlyGreetings = raw.groupOnlyGreetings ?: emptyList(),
+                tags = raw.tags ?: emptyList(),
+                characterVersion = raw.characterVersion ?: "",
+                nickname = raw.nickname,
+                source = raw.source ?: emptyList(),
+                creationDate = raw.creationDate,
+                modificationDate = raw.modificationDate,
+                creatorNotesMultilingualJson = raw.creatorNotesMultilingualJson ?: "{}",
+                assetsJson = raw.assetsJson ?: "[]",
+                extensionsJson = raw.extensionsJson ?: "{}",
+                characterBookJson = raw.characterBookJson,
+                spec = raw.spec ?: "chara_card_v2",
+                specVersion = raw.specVersion ?: "2.0",
+                originalCardJson = raw.originalCardJson
+            )
+        }
+        // TODO1：非内置卡从插件文档库补齐 Tavern 扩展字段（v2 wire 不再携带，文档库是唯一事实来源）。
+        val enriched = normalized.map { card ->
+            if (card.isBuiltIn) card
+            else overlayTavernFromDocumentStore(card) ?: card
+        }
+        // 拆两个新结构写回（不再写 cardsFile；文档库由 ensureWireV2 补齐，此处不重建以免覆盖）。
+        syncPersonaSummariesInternal(enriched)
+        return enriched
+    }
+
+    /**
+     * TODO2：personaSummaryStore 原生投影自愈式读取。store 缺失/损坏/不可解析时返回 null，
+     * 调用方回退到 character_cards.json 一次性迁移；空 store 是合法状态（全新安装只写内置卡
+     * 覆盖，未改动的内置卡不入库）。
+     */
+    private fun readPersonaSummariesStore(): List<PersonaSummary>? {
+        if (!personaSummaryStoreFile.isFile) return null
+        return try {
+            val type = object : TypeToken<List<PersonaSummary>>() {}.type
+            val raw = gson.fromJson<List<PersonaSummary>>(personaSummaryStoreFile.readText(), type)
+            raw?.map { s ->
+                PersonaSummary(
+                    id = s.id ?: "",
+                    name = s.name ?: "Unknown",
+                    avatarUri = s.avatarUri,
+                    avatarColor = s.avatarColor ?: "#E5D3B3",
+                    shortIntro = s.shortIntro ?: "",
+                    description = s.description ?: "",
+                    systemPrompt = s.systemPrompt ?: "",
+                    personality = s.personality ?: "",
+                    scenario = s.scenario ?: "",
+                    firstMessage = s.firstMessage ?: "",
+                    mesExample = s.mesExample ?: "",
+                    isBuiltIn = s.isBuiltIn,
+                    creatorName = s.creatorName,
+                    backgroundUri = s.backgroundUri
+                )
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
+    /**
+     * TODO2：由 personaSummaryStore 组装运行时卡片列表 —— 内置卡模板 + 内置覆盖 + 非内置卡
+     * （后者的 Tavern 扩展字段从插件文档库补齐）。内置卡不读文档库（文档库不存内置卡）。
+     */
+    private fun assembleFromSummaries(stored: List<PersonaSummary>): List<CharacterCard> {
+        val summaries = stored.filter { it.id.isNotBlank() }
+        val pristineBuiltIns = TavernCardParser.getBuiltInCards()
+        val pristineIds = pristineBuiltIns.mapTo(mutableSetOf()) { it.id }
+        val storedById = summaries.associateBy { it.id }
+        // 内置卡：模板为底，store 中有同名覆盖（用户编辑过）时用覆盖的原生字段。
+        val builtins = pristineBuiltIns.map { pristine ->
+            val override = storedById[pristine.id]
+            if (override == null || !override.isBuiltIn) pristine
+            else TavernCharacterCardAdapter.fromPersonaSummary(override)
+        }
+        // 非内置卡（含防御性保留的未知内置 id）：重建原生卡后从文档库补齐扩展字段。
+        val users = summaries
+            .filter { !it.isBuiltIn || it.id !in pristineIds }
+            .map(TavernCharacterCardAdapter::fromPersonaSummary)
+            .map { card ->
+                if (card.isBuiltIn) card
+                else overlayTavernFromDocumentStore(card) ?: card
+            }
+        return builtins + users
     }
 
     /**
@@ -527,10 +604,12 @@ class ChatStorageManager internal constructor(
         }
     }
 
+    // TODO2：personaSummaryStore 是宿主运行时唯一人格持久化来源（单一真源）；
+    // character_cards.json 仅在一次性迁移（migrateLegacyCardsInternal）中读取，不再写入。
     private val cardsFile = File(context.filesDir, "character_cards.json")
 
     // D2：CharacterCard → PersonaSummary / TavernCardDocument 拆分存储边界。
-    // personaSummaryStoreFile 是宿主 PersonaSummary 存储（原生最小集）；
+    // personaSummaryStoreFile 是宿主 PersonaSummary 存储（原生最小集 + 内置卡覆盖）；
     // personaSummaryBackupFile 是一次性拆分迁移前的原始备份（沿用 pre_*_v1.json 命名纪律）。
     private val personaSummaryStoreFile = File(context.filesDir, "character_persona_summaries.json")
     private val personaSummaryBackupFile = File(context.filesDir, "character_cards.pre_persona_summary_v1.json")
@@ -586,17 +665,16 @@ class ChatStorageManager internal constructor(
     }
 
     /**
-     * 落一份宿主 PersonaSummary 存储（D2：原生最小集）。
-     * 只保留非内置卡片的原生投影；Tavern 完整字段走 [syncTavernCardDocumentsInternal]。与插件
-     * 文档存储配合，构成“拆两个新结构写回”的宿主侧一半。
-     *
-     * TODO(D4)：宿主核心签名清理完成后，本存储应成为宿主运行时唯一的人格持久化来源，
-     * `character_cards.json`（遗留桥类型）可退化为仅服务旧会话/旧图迁移。
+     * TODO2：落一份宿主 PersonaSummary 存储 —— 单一真源的写路径。
+     * 入库内容 = 非内置卡片的原生投影 + 被用户编辑过的内置卡“覆盖”（原生字段判定，见
+     * [TavernCharacterCardAdapter.isPristineBuiltin]）。未改动的内置卡不入库，模板可随版本
+     * 升级传播。Tavern 完整字段走 [syncTavernCardDocumentsInternal]；character_cards.json
+     * 不再写入，退化为仅服务旧会话/旧图一次性迁移。
      */
     private fun syncPersonaSummariesInternal(cards: List<CharacterCard>) {
         runCatching {
             val summaries = cards.asSequence()
-                .filterNot(CharacterCard::isBuiltIn)
+                .filter { card -> !card.isBuiltIn || !TavernCharacterCardAdapter.isPristineBuiltin(card) }
                 .map(TavernCharacterCardAdapter::toPersonaSummary)
                 .toList()
             atomicWrite(personaSummaryStoreFile, gson.toJson(summaries))
@@ -876,9 +954,9 @@ class ChatStorageManager internal constructor(
     }
 
     /**
-     * 读取宿主 PersonaSummary 存储（D2 原生最小集）。业务运行时优先消费本视图，不再直接读
-     * CharacterCard 的 Tavern 扩展字段。存储缺失时（极端情况）回退为对已加载卡片实时投影，
-     * 保证返回结果始终可用。
+     * 读取宿主 PersonaSummary 存储（TODO2：单一真源）。返回 store 原始内容（含内置卡覆盖）。
+     * store 损坏/缺失时（极端情况）回退为对已加载卡片实时投影，过滤未改动内置卡，语义与
+     * store 入库规则一致，保证返回结果始终可用。
      */
     suspend fun loadPersonaSummaries(): List<PersonaSummary> {
         return cardsMutex.withLock {
@@ -886,14 +964,14 @@ class ChatStorageManager internal constructor(
                 try {
                     val type = object : TypeToken<List<PersonaSummary>>() {}.type
                     val stored = gson.fromJson<List<PersonaSummary>>(personaSummaryStoreFile.readText(), type)
-                    if (!stored.isNullOrEmpty()) return@withLock stored
+                    if (stored != null) return@withLock stored
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
             }
             loadCharacterCardsInternal()
                 .asSequence()
-                .filterNot(CharacterCard::isBuiltIn)
+                .filter { !it.isBuiltIn || !TavernCharacterCardAdapter.isPristineBuiltin(it) }
                 .map(TavernCharacterCardAdapter::toPersonaSummary)
                 .toList()
         }
