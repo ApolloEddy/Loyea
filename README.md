@@ -179,8 +179,6 @@ Loyea 是一个运行在 Android 上的本地优先（local-first）的 AI 对�
 
 ## 构建与签名
 
-开发中的 Tavern 即时插件边界、热插拔语义与分阶段迁移门禁见 [`docs/tavern_plugin_refactor.md`](docs/tavern_plugin_refactor.md)。
-
 ```bash
 # 需要 JDK 17
 ./gradlew.bat :app:assembleDebug   # 调试包
