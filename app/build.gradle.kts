@@ -129,6 +129,7 @@ val verifyHostCoreBoundaries by tasks.registering {
             "com/loyea/ui/chat/LegacyTavernTurnAdapter.kt",
             "com/loyea/ui/chat/AppTavernPersonaRepository.kt",
             "com/loyea/ui/chat/CharacterPersonaOwnership.kt",
+            "com/loyea/ui/chat/TavernFieldDropMigration.kt",
             // 迁移期间仍暂留 :app 的 World Info 配置 / 提示词模板桥
             "com/loyea/ui/chat/WorldInfoConfig.kt",
             "com/loyea/ui/chat/PromptAssembler.kt",

@@ -2,6 +2,7 @@ package com.loyea.ui.chat
 
 import android.content.Context
 import com.google.gson.Gson
+import com.google.gson.JsonParser
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -147,10 +148,15 @@ class PersonaSummarySplitMigrationTest {
         val loaded = storage.manager.loadCharacterCards().single()
 
         assertEquals("char_legacy", loaded.id)
-        // 一次性备份已写入，源文件未被动过。
+        // D2 一次性备份已写入（捕获旧格式原样）。
         assertTrue(storage.backupFile.isFile)
         assertEquals(legacyRaw(), storage.backupFile.readText())
-        assertEquals(legacyRaw(), storage.cardsFile.readText())
+        // TODO1：wire 格式 v2 迁移同样先写原始备份，再把源文件改写为 v2。
+        assertTrue(File(filesDir, "character_cards.pre_tavern_field_drop_v1.json").isFile)
+        // 源文件已升级为 v2：Tavern 扩展字段不再落盘，原生字段保留；原始内容完整留在备份里。
+        val wireJson = storage.cardsFile.readText()
+        assertFalse(JsonParser.parseString(wireJson).asJsonArray[0].asJsonObject.has("description"))
+        assertTrue(wireJson.contains("char_legacy"))
         // 拆出的 PersonaSummary 宿主存储已存在，且只含原生字段。
         assertTrue(storage.personaStoreFile.isFile)
         val summaries = storage.manager.loadPersonaSummaries().single()

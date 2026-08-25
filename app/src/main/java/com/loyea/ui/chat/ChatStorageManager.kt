@@ -139,6 +139,8 @@ class ChatStorageManager internal constructor(
     private val backgroundGreetingFailureHook: ((BackgroundGreetingCommitStage) -> Unit)? = null
 ) {
     private val gson = Gson()
+    // TODO1：wire 格式 v2 —— 序列化 character_cards.json 时排除 Tavern 扩展字段（读取仍用 gson）。
+    private val wireGson = TavernCardWireFormat.createWireGson()
     private val sessionsFile = File(context.filesDir, "sessions_metadata.json")
     private val personaMigrationBackupFile =
         File(context.filesDir, "sessions_metadata.pre_persona_binding_v1.json")
@@ -293,7 +295,8 @@ class ChatStorageManager internal constructor(
 
     private fun saveCharacterCardsInternal(cards: List<CharacterCard>) {
         try {
-            val json = gson.toJson(cards)
+            // TODO1：wire 格式 v2 —— Tavern 扩展字段不再落盘（读取旧格式仍宽容，见 TavernCardWireFormat）。
+            val json = wireGson.toJson(cards)
             atomicWrite(cardsFile, json)
             syncTavernCardDocumentsInternal(cards)
             syncPersonaSummariesInternal(cards)
@@ -309,6 +312,15 @@ class ChatStorageManager internal constructor(
                 saveCharacterCardsInternal(defaults)
                 return defaults
             }
+            // D2 一次性备份：在 wire 迁移改写源文件之前，先按旧格式完整备份（幂等）。
+            PersonaSummarySplitMigration.ensureBackup(cardsFile, personaSummaryBackupFile)
+            // TODO1：wire 格式 v2 一次性迁移 —— 备份原文件、补齐插件文档库、以 v2 重写、写标记。
+            TavernFieldDropMigration.ensureWireV2(
+                sourceFile = cardsFile,
+                backupFile = tavernFieldDropBackupFile,
+                markerFile = tavernFieldDropMarkerFile,
+                layout = tavernStorageLayout
+            )
             val json = cardsFile.readText()
             val type = object : TypeToken<List<CharacterCard>>() {}.type
             val rawList = gson.fromJson<List<CharacterCard>>(json, type) ?: emptyList()
@@ -348,16 +360,28 @@ class ChatStorageManager internal constructor(
                     originalCardJson = raw.originalCardJson
                 )
             }
-            syncTavernCardDocumentsInternal(normalized)
-            // D2 一次性迁移：拆分前写原始备份（幂等），并落一份 PersonaSummary 宿主存储。
-            PersonaSummarySplitMigration.ensureBackup(cardsFile, personaSummaryBackupFile)
-            syncPersonaSummariesInternal(normalized)
-            normalized
+            // TODO1：非内置卡从插件文档库补齐 Tavern 扩展字段（v2 wire 不再携带，文档库是唯一事实来源）。
+            val enriched = normalized.map { card ->
+                if (card.isBuiltIn) card
+                else overlayTavernFromDocumentStore(card) ?: card
+            }
+            syncPersonaSummariesInternal(enriched)
+            enriched
         } catch (e: Exception) {
             e.printStackTrace()
             backupCorruptFile(cardsFile)
             emptyList()
         }
+    }
+
+    /**
+     * TODO1：从插件文档库读取非内置卡的 TavernCardDocument 并补齐扩展字段。
+     * 文档缺失或解析失败时返回 null，调用方保留卡片的原生最小集（降级但不崩溃）。
+     */
+    private fun overlayTavernFromDocumentStore(card: CharacterCard): CharacterCard? {
+        val rawJson = runCatching { tavernCardDocumentStore.read(card.id) }.getOrNull() ?: return null
+        val document = runCatching { TavernCardCodec.parseJson(rawJson) }.getOrNull() ?: return null
+        return TavernCharacterCardAdapter.overlayTavernFields(card, document)
     }
 
     /**
@@ -511,10 +535,18 @@ class ChatStorageManager internal constructor(
     private val personaSummaryStoreFile = File(context.filesDir, "character_persona_summaries.json")
     private val personaSummaryBackupFile = File(context.filesDir, "character_cards.pre_persona_summary_v1.json")
 
+    // TODO1：wire 格式 v2 迁移的原始备份与幂等标记（沿用 pre_*_v1.json 命名纪律）。
+    private val tavernFieldDropBackupFile =
+        File(context.filesDir, "character_cards.pre_tavern_field_drop_v1.json")
+    private val tavernFieldDropMarkerFile =
+        File(context.filesDir, "character_cards.tavern_field_drop_v1.marker")
+
     private val worldInfoFile = File(context.filesDir, "global_world_info.json")
 
     private val tavernStorageLayout = TavernStorageLayout(File(context.filesDir, "tavern"))
     private val tavernResourcesFile = tavernStorageLayout.registryFile
+    // TODO1：插件私有卡片文档库（wire v2 下 Tavern 扩展字段的唯一事实来源）。
+    private val tavernCardDocumentStore = TavernCardDocumentStore(tavernStorageLayout)
     private var tavernStorageMigrationDone = false
 
     /**
@@ -547,11 +579,7 @@ class ChatStorageManager internal constructor(
                 runCatching {
                     val rawJson = TavernCardCodec.toJson(TavernCharacterCardAdapter.toDocument(card))
                     if (rawJson.isNotBlank()) {
-                        TavernStorageMigrator.writeUtf8(
-                            tavernStorageLayout,
-                            tavernStorageLayout.cardDocumentRelativePath(card.id),
-                            rawJson
-                        )
+                        tavernCardDocumentStore.write(card.id, rawJson)
                     }
                 }.onFailure { it.printStackTrace() }
             }

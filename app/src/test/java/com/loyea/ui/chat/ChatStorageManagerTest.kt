@@ -5,6 +5,7 @@ import com.loyea.plugins.tavern.core.*
 import com.loyea.plugins.tavern.storage.*
 
 import android.content.Context
+import com.google.gson.JsonParser
 import com.loyea.plugin.api.PluginIds
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -928,5 +929,55 @@ class ChatStorageManagerTest {
             listOf(ChatSession("filled", "Filled", speakerApiBindingId = "speaker-api-9"))
         )
         assertEquals("speaker-api-9", storageManager.loadSessionList().single().speakerApiBindingId)
+    }
+
+    // ---- TODO1：wire 格式 v2 ----
+
+    @Test
+    fun `save writes wire v2 without tavern fields but keeps tavern data in document store`() = runBlocking {
+        val card = requireNotNull(
+            TavernCardParser.parseJsonCard(
+                """{"name":"V2","description":"desc","tags":["a"],"first_mes":"hi","extensions":{"x":1}}"""
+            )
+        )
+
+        storageManager.saveCharacterCards(listOf(card))
+
+        val wireJson = File(tempFolder.root, "files/character_cards.json").readText()
+        val card0 = JsonParser.parseString(wireJson).asJsonArray[0].asJsonObject
+        assertFalse(card0.has("description"))
+        assertFalse(card0.has("tags"))
+        assertTrue(card0.has("name"))
+        assertTrue(card0.has("shortIntro"))
+
+        val layout = TavernStorageLayout(File(tempFolder.root, "files/tavern"))
+        val docRaw = layout.resolve(layout.cardDocumentRelativePath(card.id)).readText()
+        assertTrue(docRaw.contains("desc"))
+        assertTrue(docRaw.contains("a"))
+    }
+
+    @Test
+    fun `load migrates legacy json to v2 backup and enriches tavern fields from document store`() = runBlocking {
+        val legacy = """
+            [
+              {"id":"c1","name":"Imported","shortIntro":"s","systemPrompt":"p",
+               "description":"desc","tags":["a"],"extensionsJson":"{\"k\":1}","isBuiltIn":false}
+            ]
+        """.trimIndent()
+        File(tempFolder.root, "files/character_cards.json").writeText(legacy)
+
+        val loaded = storageManager.loadCharacterCards()
+
+        val card = loaded.single()
+        assertEquals("desc", card.description)
+        assertEquals(listOf("a"), card.tags)
+
+        // 源文件已重写为 v2。
+        val wireJson = File(tempFolder.root, "files/character_cards.json").readText()
+        assertFalse(JsonParser.parseString(wireJson).asJsonArray[0].asJsonObject.has("description"))
+
+        // wire v2 备份与 D2 备份都存在（D2 备份先于 wire 迁移、捕获旧格式原样）。
+        assertTrue(File(tempFolder.root, "files/character_cards.pre_tavern_field_drop_v1.json").isFile)
+        assertTrue(File(tempFolder.root, "files/character_cards.pre_persona_summary_v1.json").isFile)
     }
 }
