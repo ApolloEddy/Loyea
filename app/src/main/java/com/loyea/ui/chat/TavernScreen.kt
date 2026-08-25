@@ -3,6 +3,10 @@ package com.loyea.ui.chat
 import com.loyea.plugins.tavern.core.*
 import com.loyea.plugins.tavern.ui.TavernUiEvent
 import com.loyea.plugins.tavern.ui.TavernUiState
+import com.loyea.plugins.tavern.ui.TavernUiText.AVATAR_PALETTE
+import com.loyea.plugins.tavern.ui.TavernUiText.isOptionalJsonObjectValid
+import com.loyea.plugins.tavern.ui.TavernUiText.parseGreetingInput
+import com.loyea.plugins.tavern.ui.TavernUiText.parseTavernListInput
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -139,25 +143,6 @@ private fun localizeCharxAssets(
         assetsJson = localized.toString()
     )
 }
-
-/** 将编辑器中的逗号/换行列表稳定转换为 ST 数组，忽略空项并去重。 */
-private fun parseTavernListInput(value: String): List<String> = value
-    .split(',', '\n')
-    .map(String::trim)
-    .filter(String::isNotBlank)
-    .distinct()
-
-/** 可选的扩展 JSON 只接受完整 JSON 对象，避免导出后破坏角色卡结构。 */
-private fun isOptionalJsonObjectValid(value: String): Boolean = value.isBlank() || runCatching {
-    JsonParser.parseString(value).isJsonObject
-}.getOrDefault(false)
-
-/** 角色卡编辑器中的多条问候语以独立行保存；保留空行外的可见内容。 */
-private fun parseGreetingInput(value: String): List<String> = value
-    .split("\n---\n", "\n<GREETING>\n")
-    .map(String::trim)
-    .filter(String::isNotBlank)
-    .toList()
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -470,6 +455,8 @@ fun TavernScreen(
         if (uiState.showUrlImportDialog) {
             UrlImportDialog(
                 isEn = isEn,
+                url = uiState.urlImportText,
+                onUrlChange = { dispatch(TavernUiEvent.UrlImportTextChanged(it)) },
                 onDismiss = { dispatch(TavernUiEvent.UrlImportDismissed) },
                 onImport = { url ->
                     downloadAndImportCharacterCard(
@@ -678,10 +665,11 @@ private fun parseImportedCard(
 @Composable
 private fun UrlImportDialog(
     isEn: Boolean,
+    url: String,
+    onUrlChange: (String) -> Unit,
     onDismiss: () -> Unit,
     onImport: suspend (url: String) -> String?
 ) {
-    var url by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -694,7 +682,7 @@ private fun UrlImportDialog(
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(
                     value = url,
-                    onValueChange = { url = it; error = null },
+                    onValueChange = { onUrlChange(it); error = null },
                     label = { Text(if (isEn) "Paste chub.ai / character card link" else "粘贴角色卡链接（chub.ai / 其他）") },
                     placeholder = { Text("https://chub.ai/characters/...") },
                     singleLine = true,
@@ -1350,7 +1338,7 @@ fun CreatePersonaDialog(
     }
 
     // 头像背景色选择 (兜底色)
-    val colors = listOf("#E5D3B3", "#D3E2CD", "#CBE3F5", "#E2D3F5", "#F2D4D7")
+    val colors = AVATAR_PALETTE
     var selectedColorIndex by remember { mutableStateOf(0) }
 
     Dialog(
@@ -1803,7 +1791,7 @@ fun EditPersonaDialog(
     }
 
     // 头像背景色选择 (兜底色)
-    val colors = listOf("#E5D3B3", "#D3E2CD", "#CBE3F5", "#E2D3F5", "#F2D4D7")
+    val colors = AVATAR_PALETTE
     var selectedColorIndex by remember {
         mutableStateOf(colors.indexOf(existingCard.avatarColor).takeIf { it >= 0 } ?: 0)
     }

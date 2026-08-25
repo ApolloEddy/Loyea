@@ -7,6 +7,10 @@ kotlin {
 }
 
 dependencies {
+    // D3：URL/表单 JSON 校验（isOptionalJsonObjectValid）需要轻量 JSON 解析器。
+    // 仅此一个生产依赖，仍保持纯 JVM、不依赖 Android/Compose/宿主类型。
+    implementation("com.google.code.gson:gson:2.10.1")
+
     testImplementation("junit:junit:4.13.2")
 }
 

@@ -12,6 +12,8 @@ data class TavernUiState(
     val showResourceDialog: Boolean = false,
     // URL 导入（粘贴链接）对话框开关，与其它对话框互斥
     val showUrlImportDialog: Boolean = false,
+    // D3：URL 导入输入框的当前文本，随状态机持久化（关闭/完成即清空，见 reduce）。
+    val urlImportText: String = "",
     val cardToDeleteId: String? = null,
     val cardToEditId: String? = null,
     // null=编辑器未打开；""=新建预设（CREATE）；非空白串=编辑已有预设（EDIT）
@@ -44,7 +46,9 @@ data class TavernUiState(
         TavernUiEvent.CreateCompleted -> TavernUiState()
         TavernUiEvent.ResourceRequested -> TavernUiState(showResourceDialog = true)
         TavernUiEvent.ResourceDismissed -> TavernUiState()
-        TavernUiEvent.UrlImportRequested -> TavernUiState(showUrlImportDialog = true)
+        TavernUiEvent.UrlImportRequested -> TavernUiState(showUrlImportDialog = true, urlImportText = "")
+        is TavernUiEvent.UrlImportTextChanged ->
+            TavernUiState(showUrlImportDialog = true, urlImportText = event.text)
         TavernUiEvent.UrlImportDismissed,
         TavernUiEvent.UrlImportCompleted -> TavernUiState()
         is TavernUiEvent.DeleteRequested -> TavernUiState(cardToDeleteId = event.cardId.requireCardId())
@@ -78,6 +82,7 @@ sealed interface TavernUiEvent {
     data object UrlImportRequested : TavernUiEvent
     data object UrlImportDismissed : TavernUiEvent
     data object UrlImportCompleted : TavernUiEvent
+    data class UrlImportTextChanged(val text: String) : TavernUiEvent
     data class DeleteRequested(val cardId: String) : TavernUiEvent
     data object DeleteDismissed : TavernUiEvent
     data object DeleteCompleted : TavernUiEvent

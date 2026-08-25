@@ -133,4 +133,33 @@ class TavernUiStateTest {
     fun urlImportDialogCannotBeActiveAlongsideAnotherDialog() {
         TavernUiState(showUrlImportDialog = true, showResourceDialog = true)
     }
+
+    // D3：URL 导入文本随状态机持久化——打开清空、键入累积、关闭/完成清空。
+    @Test
+    fun urlImportTextTypingAccumulatesAndResetsOnClose() {
+        val opened = TavernUiState().reduce(TavernUiEvent.UrlImportRequested)
+        assertEquals("", opened.urlImportText)
+
+        val typed = opened.reduce(TavernUiEvent.UrlImportTextChanged("https://chub.ai"))
+        assertEquals("https://chub.ai", typed.urlImportText)
+        assertTrue(typed.showUrlImportDialog)
+
+        val more = typed.reduce(TavernUiEvent.UrlImportTextChanged("https://chub.ai/characters/1"))
+        assertEquals("https://chub.ai/characters/1", more.urlImportText)
+
+        val closed = more.reduce(TavernUiEvent.UrlImportDismissed)
+        assertEquals(TavernUiState(), closed)
+        assertEquals("", closed.urlImportText)
+
+        val reopened = TavernUiState().reduce(TavernUiEvent.UrlImportRequested)
+        assertEquals("", reopened.urlImportText)
+    }
+
+    @Test
+    fun urlImportTextClearsOnCompleted() {
+        val typed = TavernUiState()
+            .reduce(TavernUiEvent.UrlImportRequested)
+            .reduce(TavernUiEvent.UrlImportTextChanged("https://chub.ai"))
+        assertEquals("", typed.reduce(TavernUiEvent.UrlImportCompleted).urlImportText)
+    }
 }

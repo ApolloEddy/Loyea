@@ -33,7 +33,10 @@ object TavernPluginDefinition {
         capabilities = setOf(
             PluginCapability.PERSONAS,
             PluginCapability.PROMPT_PIPELINE,
-            PluginCapability.OUTPUT_PIPELINE
+            PluginCapability.OUTPUT_PIPELINE,
+            // D3：插件自述提供用户界面控制面。宿主据此在插件停用时隐藏/禁用其 UI 入口，
+            // 重新启用后恢复；Compose 渲染与 SAF/分享/FileProvider 副作用仍由宿主端口持有。
+            PluginCapability.USER_INTERFACE
         )
     )
 }
