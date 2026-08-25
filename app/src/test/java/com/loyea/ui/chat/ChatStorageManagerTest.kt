@@ -790,29 +790,32 @@ class ChatStorageManagerTest {
         assertEquals(true, partial.includeNames)
     }
 
-    // ---------- B2/B4/B5 会话特性字段存储 ----------
+    // ---------- B2/B4/B5/B7 会话特性字段存储 ----------
 
     @Test
-    fun `B2B4B5 新字段显式值与默认值往返一致`() = runBlocking {
-        // 显式写入全部新字段
+    fun `B2B4B5B7 新字段显式值与默认值往返一致`() = runBlocking {
+        // 显式写入全部新字段（含 B7 选角专用绑定 speakerApiBindingId）
         val explicit = ChatSession(
             id = "feature",
             title = "Feature",
             isPinned = true,
             apiBindingId = "api-1",
+            speakerApiBindingId = "speaker-api-1",
             memoryEnabled = false
         )
         storageManager.saveSessionList(listOf(explicit))
         val loaded = storageManager.loadSessionList().single()
         assertTrue(loaded.isPinned)
         assertEquals("api-1", loaded.apiBindingId)
+        assertEquals("speaker-api-1", loaded.speakerApiBindingId)
         assertEquals(false, loaded.memoryEnabled)
 
-        // 未指定时走默认：isPinned=false、apiBindingId=null、memoryEnabled=null
+        // 未指定时走默认：isPinned=false、apiBindingId=null、speakerApiBindingId=null、memoryEnabled=null
         storageManager.saveSessionList(listOf(ChatSession("plain", "Plain")))
         val loadedDefault = storageManager.loadSessionList().single()
         assertFalse(loadedDefault.isPinned)
         assertNull(loadedDefault.apiBindingId)
+        assertNull(loadedDefault.speakerApiBindingId)
         assertNull(loadedDefault.memoryEnabled)
     }
 
@@ -894,6 +897,7 @@ class ChatStorageManagerTest {
         val loaded = storageManager.loadSessionList().single()
         assertFalse(loaded.isPinned)
         assertNull(loaded.apiBindingId)
+        assertNull(loaded.speakerApiBindingId)
         assertNull(loaded.memoryEnabled)
         assertEquals(CHAT_SESSION_SCHEMA_VERSION, loaded.sessionSchemaVersion)
 
@@ -901,5 +905,28 @@ class ChatStorageManagerTest {
         assertTrue(sessionsFile.readText().contains("\"sessionSchemaVersion\":1"))
         val backup = File(tempFolder.root, "files/sessions_metadata.pre_session_schema_v1.json")
         assertEquals(legacyJson, backup.readText())
+    }
+
+    @Test
+    fun `B7 旧会话缺失 speakerApiBindingId 归一化为 null 且空白串也被清洗`() = runBlocking {
+        // 模拟旧/残缺数据：speakerApiBindingId 要么不存在、要么为空白串
+        val sessionsFile = File(tempFolder.root, "files/sessions_metadata.json")
+        val legacyJson = """
+            [
+              {"id":"old","title":"Old","characterId":"char_loyea_default"},
+              {"id":"blank","title":"Blank","characterId":"char_loyea_default","speakerApiBindingId":"   "}
+            ]
+            """.trimIndent()
+        sessionsFile.writeText(legacyJson)
+
+        val loaded = storageManager.loadSessionList().associateBy(ChatSession::id)
+        assertNull(loaded.getValue("old").speakerApiBindingId)
+        assertNull(loaded.getValue("blank").speakerApiBindingId)
+
+        // 显式有效值保留并正常往返
+        storageManager.saveSessionList(
+            listOf(ChatSession("filled", "Filled", speakerApiBindingId = "speaker-api-9"))
+        )
+        assertEquals("speaker-api-9", storageManager.loadSessionList().single().speakerApiBindingId)
     }
 }

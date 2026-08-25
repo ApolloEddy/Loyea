@@ -77,6 +77,8 @@ data class ChatSession(
     val isPinned: Boolean = false,
     /** B4: 会话级 API 绑定 id；null 表示跟随全局默认。序列化键 "apiBindingId"。 */
     val apiBindingId: String? = null,
+    /** B7: 群聊上下文选角专用 API 绑定 id；null 表示跟随当前会话生效 API。序列化键 "speakerApiBindingId"。 */
+    val speakerApiBindingId: String? = null,
     /** B5: 是否启用记忆；null 表示未配置、走全局默认。序列化键 "memoryEnabled"。 */
     val memoryEnabled: Boolean? = null,
     /** 敏感恢复的版本化迁移标记：新会话特性字段（isPinned/apiBindingId/memoryEnabled 等）引入时递增。 */
@@ -224,6 +226,7 @@ class ChatStorageManager internal constructor(
                     tavernForkMode = raw.tavernForkMode?.takeIf(String::isNotBlank),
                     isPinned = raw.isPinned ?: false,
                     apiBindingId = raw.apiBindingId?.takeIf(String::isNotBlank),
+                    speakerApiBindingId = raw.speakerApiBindingId?.takeIf(String::isNotBlank),
                     memoryEnabled = raw.memoryEnabled
                 )
             }

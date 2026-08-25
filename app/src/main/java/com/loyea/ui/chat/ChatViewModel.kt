@@ -132,6 +132,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         sessions.value.find { it.id == currentSessionId.value }
     }
 
+    // B3：按角色查询会话（状态层薄转发，委托纯函数 ChatSessionQuery，供角色页"历史会话"与过滤 UI 使用）
+    fun sessionsFor(characterId: String): List<ChatSession> =
+        ChatSessionQuery.sessionsForCharacter(sessions.value, characterId)
+
+    fun chatFilterCounts(): Map<String, Int> =
+        ChatSessionQuery.chatFilterOptions(sessions.value)
+
+    fun filterSessions(characterIdOrNull: String?): List<ChatSession> =
+        ChatSessionQuery.filterSessionsByCharacter(sessions.value, characterIdOrNull)
+
     // 7. 消息列表状态管理
     var messages = mutableStateOf<List<Message>>(emptyList())
         private set
@@ -1021,7 +1031,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         turnId: String,
         input: String
     ) {
-        val selectionConfig = activeApiConfig.value
+        // B7：上下文选角请求优先使用会话元数据 speakerApiBindingId 命中的选角专用配置；
+        // 无选角绑定或绑定配置缺失时回退会话生效 API（含会话级绑定→全局）最终仍缺失时兜底 activeApiConfig。
+        val selectionConfig = ApiConfigResolver.resolveSpeakerApiConfig(
+            session = sessions.value.find { it.id == sessionId },
+            globalConfigId = activeConfigId.value,
+            configList = apiConfigList.value
+        ) ?: activeApiConfig.value
         val selectionJob = viewModelScope.launch {
             var queueStarted = false
             try {
@@ -2558,7 +2574,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val presetGeneration = boundPreset?.generationOverrides()
 
             // 获取 API 配置和 MCP 工具列表
-            var apiConfig = activeApiConfig.value.let { config ->
+            // B4：优先解析当前会话 apiBindingId 命中的绑定配置；无会话级绑定或绑定配置缺失时
+            // 回退全局 activeConfigId；最终仍缺失时兜底 activeApiConfig 的默认构造。
+            // 会话级绑定是独立于顶部 ModelSelector 切换（activeConfigId）的维度，不改动其行为。
+            var apiConfig = (ApiConfigResolver.resolveApiConfigForSession(
+                session = activeSession.value,
+                globalConfigId = activeConfigId.value,
+                configList = apiConfigList.value
+            ) ?: activeApiConfig.value).let { config ->
                 boundPreset?.model?.takeIf { it.isNotBlank() }?.let { model ->
                     config.copy(modelName = model)
                 } ?: config
@@ -2644,7 +2667,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 null
             }
 
-            val graphMemory = if (needsTurnSnapshot && enableGraphMemory.value) {
+            // B5 会话级记忆开关：false 时本会话不检索 / 不注入图记忆（globalDefault 沿用图记忆全局开关）
+            val graphMemory = if (needsTurnSnapshot &&
+                MemoryAccessPolicy.isMemoryEnabledForSession(activeSession.value, enableGraphMemory.value)
+            ) {
                 graphMemoryManager.retrieveRelationalContext(
                     binding = requestBinding,
                     userInput = requestUserMessage?.content ?: ""
@@ -2701,7 +2727,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     ?.takeIf { it.isNotEmpty() }
                     ?.let { (lastCharacterMessage.activeVersionIndex.coerceIn(0, it.lastIndex) + 1).toString() }
                     .orEmpty(),
-                summary = activeSession.value?.compressedSummary.orEmpty(),
+                summary = if (MemoryAccessPolicy.isMemoryEnabledForSession(
+                        activeSession.value, globalDefault = true
+                    )
+                ) {
+                    activeSession.value?.compressedSummary.orEmpty()
+                } else {
+                    ""
+                },
                 model = apiConfig.modelName,
                 maxContextTokens = boundPreset?.maxContext?.toString().orEmpty(),
                 maxResponseTokens = boundPreset?.maxTokens?.toString().orEmpty(),
@@ -2733,7 +2766,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 includeSystemTimeInSnapshot = false,
                 physicalContext = physicalContextData,
                 enableSearch = apiConfig.enableSearch,
-                coreMemories = activeSession.value?.coreMemories ?: emptyList(),
+                coreMemories = if (MemoryAccessPolicy.isMemoryEnabledForSession(
+                        activeSession.value, globalDefault = true
+                    )
+                ) {
+                    activeSession.value?.coreMemories ?: emptyList()
+                } else {
+                    emptyList()
+                },
                 graphMemory = graphMemory,
                 worldInfo = worldInfo,
                 worldInfoPosition = worldInfoPosition,
@@ -2841,12 +2881,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 includeNames = boundPreset?.includeNames ?: resolveWorldInfoBook(characterCard).config.includeNames,
                 userName = userName.value,
                 characterName = responseCharacterName,
-                compressedSummary = activeSession.value?.compressedSummary ?: "",
+                compressedSummary = if (MemoryAccessPolicy.isMemoryEnabledForSession(
+                        activeSession.value, globalDefault = true
+                    )
+                ) {
+                    activeSession.value?.compressedSummary ?: ""
+                } else {
+                    ""
+                },
                 postHistoryInstructions = pluginPrompt.postHistoryText,
                 preparedTurn = preparedTurn,
                 includeMessageTimestamps = sessionUsesSystemTime,
                 allowPhysicalContext = sessionUsesSystemTime,
-                allowGraphContext = enableGraphMemory.value
+                allowGraphContext = MemoryAccessPolicy.isMemoryEnabledForSession(
+                    activeSession.value, enableGraphMemory.value
+                )
             )
             var round = 0
             val maxRounds = 5
@@ -3872,6 +3921,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private fun checkAndTriggerMemorySummaryAsync(sessionId: String) {
         val enableMemory = prefs.getBoolean("enable_memory_consolidation", true)
         if (!enableMemory) return
+        // B5 会话级记忆开关：false 时不累计消息数、不触发记忆提炼（避免无谓计数与入队尝试）
+        val targetSession = sessions.value.firstOrNull { it.id == sessionId }
+        if (!MemoryAccessPolicy.isMemoryEnabledForSession(targetSession, globalDefault = true)) return
 
         val triggerThreshold = prefs.getInt("memory_consolidation_trigger_count", 10)
         val sessionCount = (messageCountBySession[sessionId] ?: 0) + 1
@@ -3892,6 +3944,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private fun enqueueMemoryConsolidation(sessionId: String): Boolean {
         if (sessionId.isBlank()) return false
         val targetSession = sessions.value.firstOrNull { it.id == sessionId } ?: return false
+        if (!MemoryAccessPolicy.isMemoryEnabledForSession(targetSession, globalDefault = true)) {
+            return false
+        }
         val binding = PersonaBindingSnapshot.capture(targetSession) ?: return false
 
         return try {
@@ -4234,6 +4289,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         if (sessionId.isBlank()) return
         if (!compressionInFlight.compareAndSet(false, true)) return
         val sessionSnapshot = activeSession.value ?: run {
+            compressionInFlight.set(false)
+            return
+        }
+        // B5 会话级记忆开关：false 时不写入新的压缩摘要（长会话滑窗压缩视为记忆写回）
+        if (!MemoryAccessPolicy.isMemoryEnabledForSession(sessionSnapshot, globalDefault = true)) {
             compressionInFlight.set(false)
             return
         }

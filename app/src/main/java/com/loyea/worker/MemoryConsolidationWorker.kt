@@ -20,6 +20,7 @@ import com.loyea.ui.chat.ChatStorageManager
 import com.loyea.ui.chat.BackgroundPromptTemplates
 import com.loyea.ui.chat.CharacterPersonaOwnership
 import com.loyea.ui.chat.LlmClient
+import com.loyea.ui.chat.MemoryAccessPolicy
 import com.loyea.ui.chat.Message
 import com.loyea.ui.chat.PromptAssembler
 import com.loyea.ui.chat.PersonaBindingSnapshot
@@ -114,6 +115,11 @@ class MemoryConsolidationWorker(
                     expectedBindingRevision
                 )
             ) {
+                return@withContext Result.success()
+            }
+            // B5 会话级记忆开关：false 时本会话不写入新记忆（核心记忆提炼 + 图记忆写回一并跳过）。
+            // globalDefault=true 保持「未配置」现状：是否执行仍由各维度全局开关（如 enable_graph_memory）决定。
+            if (!MemoryAccessPolicy.isMemoryEnabledForSession(session, globalDefault = true)) {
                 return@withContext Result.success()
             }
             val loyeaApplication = context.applicationContext as? LoyeaApplication
