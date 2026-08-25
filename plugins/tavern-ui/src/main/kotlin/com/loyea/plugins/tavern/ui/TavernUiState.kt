@@ -1,9 +1,17 @@
 package com.loyea.plugins.tavern.ui
 
-/** Platform-neutral state for the Tavern control surface. */
+/**
+ * 平台无关的 Tavern 控制面状态。
+ *
+ * 仅描述"互斥类 UI 状态"（对话框/面板开关与待操作 id），不承载任何 Android /
+ * Compose / 宿主角色的副作用——SAF 文件选择、Toast、分享、FileProvider、网络下载、
+ * 存储写盘等都由宿主持有并按其回调执行。本类只保存布尔/枚举/ID 等纯数据。
+ */
 data class TavernUiState(
     val showCreateDialog: Boolean = false,
     val showResourceDialog: Boolean = false,
+    // URL 导入（粘贴链接）对话框开关，与其它对话框互斥
+    val showUrlImportDialog: Boolean = false,
     val cardToDeleteId: String? = null,
     val cardToEditId: String? = null,
     // null=编辑器未打开；""=新建预设（CREATE）；非空白串=编辑已有预设（EDIT）
@@ -20,6 +28,7 @@ data class TavernUiState(
             listOf(
                 showCreateDialog,
                 showResourceDialog,
+                showUrlImportDialog,
                 cardToDeleteId != null,
                 cardToEditId != null,
                 presetToEditId != null
@@ -35,6 +44,9 @@ data class TavernUiState(
         TavernUiEvent.CreateCompleted -> TavernUiState()
         TavernUiEvent.ResourceRequested -> TavernUiState(showResourceDialog = true)
         TavernUiEvent.ResourceDismissed -> TavernUiState()
+        TavernUiEvent.UrlImportRequested -> TavernUiState(showUrlImportDialog = true)
+        TavernUiEvent.UrlImportDismissed,
+        TavernUiEvent.UrlImportCompleted -> TavernUiState()
         is TavernUiEvent.DeleteRequested -> TavernUiState(cardToDeleteId = event.cardId.requireCardId())
         TavernUiEvent.DeleteDismissed,
         TavernUiEvent.DeleteCompleted -> TavernUiState()
@@ -63,6 +75,9 @@ sealed interface TavernUiEvent {
     data object CreateCompleted : TavernUiEvent
     data object ResourceRequested : TavernUiEvent
     data object ResourceDismissed : TavernUiEvent
+    data object UrlImportRequested : TavernUiEvent
+    data object UrlImportDismissed : TavernUiEvent
+    data object UrlImportCompleted : TavernUiEvent
     data class DeleteRequested(val cardId: String) : TavernUiEvent
     data object DeleteDismissed : TavernUiEvent
     data object DeleteCompleted : TavernUiEvent

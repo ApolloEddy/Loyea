@@ -98,4 +98,39 @@ class TavernUiStateTest {
         assertTrue(replaced.showCreateDialog)
         assertNull(replaced.presetToEditId)
     }
+
+    // URL 导入对话框：Requested 打开并关掉其它互斥状态，Dismissed/Completed 关闭并回到空状态
+    @Test
+    fun urlImportDialogCanOpenAndClose() {
+        val opened = TavernUiState().reduce(TavernUiEvent.UrlImportRequested)
+        assertTrue(opened.showUrlImportDialog)
+        assertFalse(opened.showCreateDialog)
+        assertFalse(opened.showResourceDialog)
+        assertNull(opened.cardToDeleteId)
+        assertNull(opened.cardToEditId)
+        assertNull(opened.presetToEditId)
+
+        assertEquals(TavernUiState(), opened.reduce(TavernUiEvent.UrlImportDismissed))
+        assertEquals(TavernUiState(), opened.reduce(TavernUiEvent.UrlImportCompleted))
+    }
+
+    // 互斥：打开 URL 导入对话框会替换其它对话框状态，反之亦然
+    @Test
+    fun urlImportDialogReplacesAndIsReplacedByOtherDialogs() {
+        val replaced = TavernUiState()
+            .reduce(TavernUiEvent.CreateRequested)
+            .reduce(TavernUiEvent.UrlImportRequested)
+        assertTrue(replaced.showUrlImportDialog)
+        assertFalse(replaced.showCreateDialog)
+
+        val replacedBack = replaced.reduce(TavernUiEvent.ResourceRequested)
+        assertTrue(replacedBack.showResourceDialog)
+        assertFalse(replacedBack.showUrlImportDialog)
+    }
+
+    // 互斥守卫：URL 导入对话框不可与其它对话框同时激活
+    @Test(expected = IllegalArgumentException::class)
+    fun urlImportDialogCannotBeActiveAlongsideAnotherDialog() {
+        TavernUiState(showUrlImportDialog = true, showResourceDialog = true)
+    }
 }

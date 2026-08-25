@@ -177,8 +177,6 @@ fun TavernScreen(
     fun dispatch(event: TavernUiEvent) {
         uiState = uiState.reduce(event)
     }
-    // 从链接导入角色卡的对话框开关
-    var showUrlImportDialog by remember { mutableStateOf(false) }
     val cardToDelete = uiState.cardToDeleteId?.let { cardId ->
         characterCardList.firstOrNull { it.id == cardId }
     }
@@ -338,7 +336,7 @@ fun TavernScreen(
                     IconButton(onClick = { jsonImportLauncher.launch("*/*") }) {
                         Icon(imageVector = Icons.Default.Code, contentDescription = "Import JSON / CHARX", tint = MaterialTheme.colorScheme.primary)
                     }
-                    IconButton(onClick = { showUrlImportDialog = true }) {
+                    IconButton(onClick = { dispatch(TavernUiEvent.UrlImportRequested) }) {
                         Icon(imageVector = Icons.Default.Link, contentDescription = "Import from URL", tint = MaterialTheme.colorScheme.primary)
                     }
                     IconButton(onClick = { resourceImportLauncher.launch("application/json") }) {
@@ -469,10 +467,10 @@ fun TavernScreen(
         }
 
         // 从链接导入角色卡对话框
-        if (showUrlImportDialog) {
+        if (uiState.showUrlImportDialog) {
             UrlImportDialog(
                 isEn = isEn,
-                onDismiss = { showUrlImportDialog = false },
+                onDismiss = { dispatch(TavernUiEvent.UrlImportDismissed) },
                 onImport = { url ->
                     downloadAndImportCharacterCard(
                         url = url,
