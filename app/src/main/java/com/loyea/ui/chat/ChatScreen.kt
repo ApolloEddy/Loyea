@@ -340,60 +340,11 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    if (viewModel != null) {
-                        IconButton(onClick = {
-                            pendingTavernExport = viewModel.exportCurrentSessionTavernChat()
-                            exportTavernChatLauncher.launch("loyea_chat_${currentSessionId.ifBlank { "export" }}.jsonl")
-                        }) {
-                            Icon(
-                                imageVector = Icons.Default.Save,
-                                contentDescription = if (isEn) "Export Tavern chat" else "导出 Tavern 聊天",
-                                tint = MaterialTheme.colorScheme.onBackground,
-                                modifier = Modifier.size(25.dp)
-                            )
-                        }
-                        IconButton(onClick = {
-                            importTavernChatLauncher.launch(
-                                arrayOf("application/json", "application/x-ndjson", "text/plain", "*/*")
-                            )
-                        }) {
-                            Icon(
-                                imageVector = Icons.Default.FileOpen,
-                                contentDescription = if (isEn) "Import Tavern chat" else "导入 Tavern 聊天",
-                                tint = MaterialTheme.colorScheme.onBackground,
-                                modifier = Modifier.size(25.dp)
-                            )
-                        }
-                        IconButton(onClick = { showGroupEditor = true }) {
-                            Icon(
-                                imageVector = Icons.Default.Groups,
-                                contentDescription = if (isEn) "Group chat" else "群聊设置",
-                                tint = if (activeGroupChat != null) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.onBackground
-                                },
-                                modifier = Modifier.size(25.dp)
-                            )
-                        }
-                    }
-                    // 本会话世界书入口（每会话独立配置；未配置回退全局书）
-                    IconButton(onClick = { showWorldInfoEditor = true }) {
-                        Icon(
-                            imageVector = Icons.Default.MenuBook,
-                            contentDescription = if (isEn) "Session World Info" else "会话世界书",
-                            tint = MaterialTheme.colorScheme.onBackground,
-                            modifier = Modifier.size(28.dp)
-                        )
-                    }
-                    IconButton(onClick = { showAuthorNoteEditor = true }) {
-                        Icon(
-                            imageVector = Icons.Default.EditNote,
-                            contentDescription = if (isEn) "Author's Note" else "作者注释",
-                            tint = MaterialTheme.colorScheme.onBackground,
-                            modifier = Modifier.size(28.dp)
-                        )
-                    }
+                    val vm = viewModel
+                    // 酒馆 UI 仅在插件处于有效启用状态时显示；关闭开关后整个“更多”入口消失，
+                    // 界面随开关实时变化（issue 7）。
+                    val tavernUiEnabled = vm?.tavernPluginControlState?.value?.effective?.status ==
+                        com.loyea.plugin.host.PluginStatus.ENABLED
                     val hasUserSpoken = remember(messages) {
                         messages.any { it.sender == Sender.USER }
                     }
@@ -415,6 +366,67 @@ fun ChatScreen(
                             tint = MaterialTheme.colorScheme.onBackground,
                             modifier = Modifier.size(28.dp)
                         )
+                    }
+                    if (vm != null && tavernUiEnabled) {
+                        // 酒馆功能收进“更多”溢出菜单，避免顶部栏被酒馆按钮挤满（issue 2）。
+                        var tavernMoreExpanded by remember { mutableStateOf(false) }
+                        Box {
+                            IconButton(onClick = { tavernMoreExpanded = true }) {
+                                Icon(
+                                    imageVector = Icons.Default.MoreVert,
+                                    contentDescription = if (isEn) "More" else "更多",
+                                    tint = MaterialTheme.colorScheme.onBackground
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = tavernMoreExpanded,
+                                onDismissRequest = { tavernMoreExpanded = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text(if (isEn) "Export Tavern chat" else "导出 Tavern 聊天") },
+                                    onClick = {
+                                        tavernMoreExpanded = false
+                                        pendingTavernExport = vm.exportCurrentSessionTavernChat()
+                                        exportTavernChatLauncher.launch("loyea_chat_${currentSessionId.ifBlank { "export" }}.jsonl")
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (isEn) "Import Tavern chat" else "导入 Tavern 聊天") },
+                                    onClick = {
+                                        tavernMoreExpanded = false
+                                        importTavernChatLauncher.launch(
+                                            arrayOf("application/json", "application/x-ndjson", "text/plain", "*/*")
+                                        )
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (isEn) "Group chat" else "群聊设置") },
+                                    trailingIcon = if (activeGroupChat != null) {
+                                        { Icon(Icons.Default.Check, contentDescription = null) }
+                                    } else {
+                                        null
+                                    },
+                                    onClick = {
+                                        tavernMoreExpanded = false
+                                        showGroupEditor = true
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (isEn) "Session World Info" else "会话世界书") },
+                                    onClick = {
+                                        tavernMoreExpanded = false
+                                        showWorldInfoEditor = true
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (isEn) "Author's Note" else "作者注释") },
+                                    onClick = {
+                                        tavernMoreExpanded = false
+                                        showAuthorNoteEditor = true
+                                    }
+                                )
+                            }
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(

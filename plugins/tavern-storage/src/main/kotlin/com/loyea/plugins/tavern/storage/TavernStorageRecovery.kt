@@ -76,8 +76,8 @@ object TavernStorageRecovery {
     const val CORRUPT_SUFFIX = ".corrupt"
     const val TEMP_SUFFIX = ".tmp"
 
-    private val tempNamePattern = Regex("^\\..+\\.tmp$")
-    private val corruptNamePattern = Regex("^(.+)\\.corrupt$")
+    private val tempNamePattern by lazy { Regex("^\\..+\\.tmp$") }
+    private val corruptNamePattern by lazy { Regex("^(.+)\\.corrupt$") }
 
     /** 读取迁移标记中的 schemaVersion；标记缺失或字段非法时返回 null。 */
     fun readMarkerSchemaVersion(layout: TavernStorageLayout): Int? {

@@ -22,8 +22,8 @@ android {
         applicationId = "com.loyea"
         minSdk = 26
         targetSdk = 34
-        versionCode = 11
-        versionName = "0.5.5"
+        versionCode = 13
+        versionName = "0.6.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

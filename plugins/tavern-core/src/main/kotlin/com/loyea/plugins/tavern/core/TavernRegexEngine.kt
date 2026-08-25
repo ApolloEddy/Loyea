@@ -96,18 +96,27 @@ data class TavernMacroContext(
  */
 object TavernMacroEngine {
     private const val MAX_EXPANSION_PASSES = 8
-    private val tokenPattern = Regex("\\{\\{\\s*([A-Za-z.$][A-Za-z0-9_.-]*)\\s*(?:::\\s*([^{}]*?))?\\s*}}")
-    private val singleColonPattern = Regex("\\{\\{\\s*([A-Za-z.$][A-Za-z0-9_.-]*)\\s*:(?!:)\\s*([^{}]*?)\\s*}}")
-    private val spacedTokenPattern = Regex("\\{\\{\\s*([A-Za-z.$][A-Za-z0-9_.-]*)\\s+([^{}]+?)\\s*}}")
-    private val conditionalPattern = Regex(
-        "\\{\\{\\s*if(?:\\s*::\\s*|\\s+)([^{}]*?)\\s*}}([\\s\\S]*?)\\{\\{\\s*/if\\s*}}",
-        RegexOption.IGNORE_CASE
-    )
+    // 惰性编译：类加载期（object <clinit>）永不接触 Android/ICU 正则引擎。若某设备上的 ICU
+    // 拒绝这些模式，失败发生在首次使用时，由下方 runCatching 统一降级为“不展开宏”，而不是让
+    // 类初始化抛 ExceptionInInitializerError 导致整个会话/发送流程崩溃。
+    private val tokenPattern by lazy { Regex("\\{\\{\\s*([A-Za-z.$][A-Za-z0-9_.-]*)\\s*(?:::\\s*([^{}]*?))?\\s*}}") }
+    private val singleColonPattern by lazy { Regex("\\{\\{\\s*([A-Za-z.$][A-Za-z0-9_.-]*)\\s*:(?!:)\\s*([^{}]*?)\\s*}}") }
+    private val spacedTokenPattern by lazy { Regex("\\{\\{\\s*([A-Za-z.$][A-Za-z0-9_.-]*)\\s+([^{}]+?)\\s*}}") }
+    private val conditionalPattern by lazy {
+        Regex(
+            "\\{\\{\\s*if(?:\\s*::\\s*|\\s+)([^{}]*?)\\s*}}([\\s\\S]*?)\\{\\{\\s*/if\\s*}}",
+            RegexOption.IGNORE_CASE
+        )
+    }
     private const val ESCAPED_OPEN = "\\u0001"
     private const val ESCAPED_CLOSE = "\\u0002"
 
     fun expand(text: String, context: TavernMacroContext): String {
         if (text.isBlank()) return text
+        return runCatching { expandInternal(text, context) }.getOrDefault(text)
+    }
+
+    private fun expandInternal(text: String, context: TavernMacroContext): String {
         var result = text
             .replace("<USER>", "{{user}}", ignoreCase = true)
             .replace("<BOT>", "{{char}}", ignoreCase = true)
@@ -135,7 +144,7 @@ object TavernMacroEngine {
                 } else {
                     branches.getOrNull(1).orEmpty()
                 }
-                expand(selected, context)
+                expandInternal(selected, context)
             }
             result = spacedTokenPattern.replace(result) { match ->
                 val name = match.groupValues[1].lowercase()
@@ -364,7 +373,7 @@ object TavernRegexEngine {
     private const val MAX_COMPILED_REGEX_CACHE = 128
     private val compiledRegexCache = ConcurrentHashMap<String, Regex>()
     private val invalidRegexCache = ConcurrentHashMap.newKeySet<String>()
-    private val groupPattern = Regex("\\$(\\d+)|\\$<([^>]+)>")
+    private val groupPattern by lazy { Regex("\\$(\\d+)|\\$<([^>]+)>") }
 
     fun parseScripts(extensionsJson: String): List<TavernRegexScript> {
         val root = runCatching { JsonParser.parseString(extensionsJson) }.getOrNull() ?: return emptyList()
@@ -405,6 +414,23 @@ object TavernRegexEngine {
         isEdit: Boolean = false
     ): String {
         if (text.isEmpty() || scripts.isEmpty()) return text
+        // 任何脚本编译/执行异常都降级为“跳过该脚本处理”，绝不让聊天输出流程因导入的
+        // 坏正则或设备 ICU 兼容问题而崩溃。
+        return runCatching {
+            applyInternal(text, scripts, placement, context, depth, isMarkdown, isPrompt, isEdit)
+        }.getOrDefault(text)
+    }
+
+    private fun applyInternal(
+        text: String,
+        scripts: List<TavernRegexScript>,
+        placement: Int,
+        context: TavernMacroContext = TavernMacroContext(),
+        depth: Int? = null,
+        isMarkdown: Boolean = false,
+        isPrompt: Boolean = false,
+        isEdit: Boolean = false
+    ): String {
         var result = text
         scripts.forEach { script ->
             if (script.disabled || script.findRegex.isBlank() || placement !in script.placement) return@forEach

@@ -8,16 +8,29 @@ package com.loyea.ui.chat
  */
 object ReplyOutputSanitizer {
 
-    private val messageTimeMetadataRegex = Regex(
-        """\[MESSAGE\s+TIME\s*:[^\]\r\n]*\]""",
-        RegexOption.IGNORE_CASE
-    )
-    private val messageTimePrefixRegex = Regex(
-        """\[MESSAGE\s+TIME\s*:""",
-        RegexOption.IGNORE_CASE
-    )
+    // 惰性编译：类加载期（object <clinit>）永不接触 Android/ICU 正则引擎，避免在旧设备上
+    // 因 ICU 拒绝模式而抛 ExceptionInInitializerError。首次使用若仍失败，由 sanitize 的
+    // runCatching 兜底为“原样返回”，流式输出不受影响。
+    private val messageTimeMetadataRegex by lazy {
+        Regex(
+            """\[MESSAGE\s+TIME\s*:[^\]\r\n]*\]""",
+            RegexOption.IGNORE_CASE
+        )
+    }
+    private val messageTimePrefixRegex by lazy {
+        Regex(
+            """\[MESSAGE\s+TIME\s*:""",
+            RegexOption.IGNORE_CASE
+        )
+    }
 
     fun sanitize(text: String): String {
+        return runCatching {
+            sanitizeInternal(text)
+        }.getOrDefault(text)
+    }
+
+    private fun sanitizeInternal(text: String): String {
         val withoutCompleteMetadata = text.replace(messageTimeMetadataRegex, "")
         val markerStart = messageTimePrefixRegex.findAll(withoutCompleteMetadata)
             .lastOrNull()

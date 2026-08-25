@@ -7,7 +7,7 @@ const val LOYEA_PLUGIN_API_VERSION: Int = 1
 @JvmInline
 value class PluginId private constructor(val value: String) {
     companion object {
-        private val VALID_ID = Regex("[a-z][a-z0-9._-]{2,95}")
+        private val VALID_ID by lazy { Regex("[a-z][a-z0-9._-]{2,95}") }
 
         fun of(value: String): PluginId {
             require(VALID_ID.matches(value)) {

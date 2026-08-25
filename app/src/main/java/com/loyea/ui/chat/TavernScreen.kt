@@ -1305,8 +1305,8 @@ fun CreatePersonaDialog(
 
     val extensionsJsonValid = isOptionalJsonObjectValid(extensionsJson)
     val characterBookJsonValid = isOptionalJsonObjectValid(characterBookJson)
-    val canSave = name.isNotBlank() && systemPrompt.isNotBlank() &&
-        extensionsJsonValid && characterBookJsonValid
+    // 世界书/扩展 JSON 均为可选高级字段：格式错误仅红框提示（isError），绝不阻断保存（issue 8）。
+    val canSave = name.isNotBlank() && systemPrompt.isNotBlank()
 
     // 本地头像及背景 URI 绝对路径
     var localAvatarUri by remember { mutableStateOf<String?>(null) }
@@ -1758,8 +1758,8 @@ fun EditPersonaDialog(
 
     val extensionsJsonValid = isOptionalJsonObjectValid(extensionsJson)
     val characterBookJsonValid = isOptionalJsonObjectValid(characterBookJson)
-    val canSave = name.isNotBlank() && systemPrompt.isNotBlank() &&
-        extensionsJsonValid && characterBookJsonValid
+    // 世界书/扩展 JSON 均为可选高级字段：格式错误仅红框提示（isError），绝不阻断保存（issue 8）。
+    val canSave = name.isNotBlank() && systemPrompt.isNotBlank()
 
     // 本地头像及背景 URI 绝对路径
     var localAvatarUri by remember { mutableStateOf(existingCard.avatarUri) }

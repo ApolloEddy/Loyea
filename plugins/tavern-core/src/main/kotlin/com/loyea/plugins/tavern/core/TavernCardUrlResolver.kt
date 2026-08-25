@@ -34,10 +34,10 @@ object TavernCardUrlResolver {
     private const val aicharacterHost = "aicharactercards.com"
 
     /** chub 角色页路径前缀：`characters` 必须是完整路径段（后面跟着 / 或路径结束），大小写不敏感。 */
-    private val chubCharactersPrefixRegex = Regex("""^/characters(/|$)""", RegexOption.IGNORE_CASE)
+    private val chubCharactersPrefixRegex by lazy { Regex("""^/characters(/|$)""", RegexOption.IGNORE_CASE) }
 
     /** chub 角色 id 允许的字符白名单（字母、数字、下划线、短横线、点）。 */
-    private val chubIdAllowed = Regex("""[A-Za-z0-9_.-]+""")
+    private val chubIdAllowed by lazy { Regex("""[A-Za-z0-9_.-]+""") }
 
     /**
      * 所有本解析器可识别（至少能做 host 判定）的主机集合。

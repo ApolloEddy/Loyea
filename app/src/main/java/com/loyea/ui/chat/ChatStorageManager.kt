@@ -5,6 +5,7 @@ import com.loyea.plugins.tavern.core.*
 import com.loyea.plugins.tavern.storage.*
 
 import android.content.Context
+import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.reflect.TypeToken
@@ -310,8 +311,15 @@ class ChatStorageManager internal constructor(
         }
         return try {
             migrateLegacyCardsInternal()
-        } catch (e: Exception) {
-            e.printStackTrace()
+        } catch (e: Throwable) {
+            // 捕获 Throwable（含 ExceptionInInitializerError）：迁移链上任何类初始化异常都不得
+            // 砖化卡片/会话加载。先尝试以普通 Gson 直读旧文件保住原有卡片，再考虑标记损坏。
+            Log.e("ChatStorage", "角色卡迁移失败，回退到原始文件直读", e)
+            val raw = runCatching {
+                val type = object : TypeToken<List<CharacterCard>>() {}.type
+                gson.fromJson<List<CharacterCard>>(cardsFile.readText(), type) ?: emptyList()
+            }.getOrNull()
+            if (raw != null) return raw
             backupCorruptFile(cardsFile)
             emptyList()
         }

@@ -679,7 +679,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             list = listOf(deepseekPro, deepseekFlash, mimoPro)
             prefs.edit().putString("api_config_list", Gson().toJson(list)).apply()
         }
-        apiConfigList.value = list.filter { !it.provider.equals("Anthropic", ignoreCase = true) }
+        // 内存列表与持久化列表保持完全一致，不再按 provider 过滤任何配置。此前过滤 Anthropic
+        // 会导致：设置里保存的配置在重启后被静默丢弃、顶部模型选择器与设置面板不一致。
+        apiConfigList.value = list
 
         val savedActiveId = prefs.getString("active_config_id", "") ?: ""
         activeConfigId.value = if (savedActiveId.isNotEmpty() && list.any { it.id == savedActiveId }) {
@@ -882,16 +884,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun selectActiveConfig(activeId: String) {
         activeConfigId.value = activeId
         prefs.edit().putString("active_config_id", activeId).apply()
-        
-        val activeConfig = apiConfigList.value.find { it.id == activeId }
-        if (activeConfig != null) {
-            prefs.edit()
-                .putString("api_provider", activeConfig.provider)
-                .putString("api_url", activeConfig.apiUrl)
-                .putString("api_key", activeConfig.apiKey)
-                .putString("api_model", activeConfig.modelName)
-                .apply()
-        }
+        // 单一真源 = api_config_list + active_config_id。删除旧的 api_provider/api_url/
+        // api_key/api_model 冗余写入（全仓已无读取方），避免"顶部选择器与设置不同步"的误解来源。
     }
 
     fun changeAppLanguage(newLang: String) {
@@ -1587,7 +1581,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     if (appLanguage.value == "en") "Hello! I'm {{char}}. How can I help you today?" else "你好！我是 {{char}}。今天我能帮您做点什么？"
                 }
             }
-        val formattedWelcome = PromptAssembler.formatMessageContent(welcomeText, selectedCard, userName.value)
+        // 宏展开/正则管道任何异常（含旧设备 ICU 正则拒绝）都降级为原样问候语，绝不阻断新建会话。
+        val formattedWelcome = runCatching {
+            PromptAssembler.formatMessageContent(welcomeText, selectedCard, userName.value)
+        }.getOrDefault(welcomeText)
 
         val initialMsgs = listOf(
             Message(

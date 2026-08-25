@@ -128,7 +128,7 @@ data class TavernGroupTurnPlan(
  * [resolveSelection] turns that model result back into known, unmuted members only.
  */
 object TavernGroupPlanner {
-    private val mentionPattern = Regex("(?<![\\p{L}\\p{N}_-])@([\\p{L}\\p{N}_-]+)")
+    private val mentionPattern by lazy { Regex("(?<![\\p{L}\\p{N}_-])@([\\p{L}\\p{N}_-]+)") }
 
     fun plan(request: TavernGroupTurnRequest): TavernGroupTurnPlan {
         val group = request.group
