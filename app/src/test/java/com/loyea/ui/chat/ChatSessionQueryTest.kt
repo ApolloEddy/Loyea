@@ -150,4 +150,35 @@ class ChatSessionQueryTest {
         )
         assertEquals(listOf("blank"), ChatSessionQuery.filterSessionsByCharacter(all, "").map { it.id })
     }
+
+    // ---------- sortedForDisplay 全部列表置顶排序 ----------
+
+    @Test
+    fun `sortedForDisplay 置顶优先于最近活跃`() {
+        val all = listOf(
+            session("fresh", "char_a", lastActiveTime = 3000),
+            session("pinned-old", "char_a", lastActiveTime = 100, isPinned = true),
+            session("normal", "char_b", lastActiveTime = 2000)
+        )
+        assertEquals(listOf("pinned-old", "fresh", "normal"), ChatSessionQuery.sortedForDisplay(all).map { it.id })
+    }
+
+    @Test
+    fun `sortedForDisplay 多个置顶会话按最近活跃降序`() {
+        val all = listOf(
+            session("pin-old", "char_a", lastActiveTime = 100, isPinned = true),
+            session("pin-new", "char_a", lastActiveTime = 500, isPinned = true),
+            session("normal", "char_a", lastActiveTime = 1000)
+        )
+        assertEquals(listOf("pin-new", "pin-old", "normal"), ChatSessionQuery.sortedForDisplay(all).map { it.id })
+    }
+
+    @Test
+    fun `sortedForDisplay 不修改入参列表且空输入返回空列表`() {
+        val all = listOf(session("a", "char_a", lastActiveTime = 2), session("b", "char_a", lastActiveTime = 1))
+        val snapshot = all.map { it.id }
+        ChatSessionQuery.sortedForDisplay(all)
+        assertEquals(snapshot, all.map { it.id })
+        assertEquals(emptyList<ChatSession>(), ChatSessionQuery.sortedForDisplay(emptyList()))
+    }
 }

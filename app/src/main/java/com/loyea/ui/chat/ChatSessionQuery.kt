@@ -56,4 +56,15 @@ object ChatSessionQuery {
         } else {
             sessionsForCharacter(allSessions, characterIdOrNull)
         }
+
+    /**
+     * 置顶优先、其次按最近活跃时间降序的"全部"会话排序，供会话列表（未按角色过滤时）展示使用。
+     * 与 [sessionsForCharacter] 的置顶 / 活跃排序口径一致，保证列表视图与角色过滤视图排序一致。
+     * 不修改入参列表。
+     */
+    fun sortedForDisplay(allSessions: List<ChatSession>): List<ChatSession> =
+        allSessions.sortedWith(
+            compareByDescending<ChatSession> { it.isPinned }
+                .thenByDescending { it.lastActiveTime }
+        )
 }

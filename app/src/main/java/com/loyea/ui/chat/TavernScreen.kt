@@ -3,6 +3,9 @@ package com.loyea.ui.chat
 import com.loyea.plugins.tavern.core.*
 import com.loyea.plugins.tavern.ui.TavernUiEvent
 import com.loyea.plugins.tavern.ui.TavernUiState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 import android.content.Context
 import android.net.Uri
@@ -173,6 +176,8 @@ fun TavernScreen(
     fun dispatch(event: TavernUiEvent) {
         uiState = uiState.reduce(event)
     }
+    // 从链接导入角色卡的对话框开关
+    var showUrlImportDialog by remember { mutableStateOf(false) }
     val cardToDelete = uiState.cardToDeleteId?.let { cardId ->
         characterCardList.firstOrNull { it.id == cardId }
     }
@@ -332,6 +337,9 @@ fun TavernScreen(
                     IconButton(onClick = { jsonImportLauncher.launch("*/*") }) {
                         Icon(imageVector = Icons.Default.Code, contentDescription = "Import JSON / CHARX", tint = MaterialTheme.colorScheme.primary)
                     }
+                    IconButton(onClick = { showUrlImportDialog = true }) {
+                        Icon(imageVector = Icons.Default.Link, contentDescription = "Import from URL", tint = MaterialTheme.colorScheme.primary)
+                    }
                     IconButton(onClick = { resourceImportLauncher.launch("application/json") }) {
                         Icon(imageVector = Icons.Default.FolderOpen, contentDescription = "Import Tavern resources", tint = MaterialTheme.colorScheme.primary)
                     }
@@ -459,6 +467,23 @@ fun TavernScreen(
             }
         }
 
+        // 从链接导入角色卡对话框
+        if (showUrlImportDialog) {
+            UrlImportDialog(
+                isEn = isEn,
+                onDismiss = { showUrlImportDialog = false },
+                onImport = { url ->
+                    downloadAndImportCharacterCard(
+                        url = url,
+                        existing = characterCardList,
+                        onSave = onCharacterCardListSave,
+                        context = context,
+                        isEn = isEn
+                    )
+                }
+            )
+        }
+
         // 3. 自定义创建弹窗
         if (uiState.showCreateDialog) {
             CreatePersonaDialog(
@@ -529,6 +554,153 @@ fun TavernScreen(
             )
         }
     }
+}
+
+/**
+ * 从链接导入角色卡：粘贴 chub.ai / aicharactercards 等链接，一键下载并走
+ * 与本地文件导入一致的解析/保存管线。
+ *
+ * 流程：
+ * 1. 在 IO 线程调用 [TavernCardDownloader.downloadFromUrl] 取字节（内部已做 1MB 上限与宽松实体提取）；
+ * 2. 下载失败按 [com.loyea.ui.chat.TavernCardDownloader.TavernDownloadFailure] 映射成可读文案；
+ * 3. 下载成功则交给 [parseImportedBytes] 原样复用现有 codec（JSON / PNG）解析；
+ * 4. 解析成功即保存并 Toast，失败则返回"无法解析"提示。
+ *
+ * @return null 表示导入成功；否则返回需要展示给用户的错误文案。
+ */
+private suspend fun downloadAndImportCharacterCard(
+    url: String,
+    existing: List<CharacterCard>,
+    onSave: (List<CharacterCard>) -> Unit,
+    context: Context,
+    isEn: Boolean
+): String? {
+    // 网络 I/O 放到 IO 线程，避免阻塞主线程
+    val result = withContext(Dispatchers.IO) {
+        TavernCardDownloader.downloadFromUrl(url, TavernCardDownloader.defaultFetchBytes)
+    }
+    return when (result) {
+        is TavernCardDownloader.TavernDownloadResult.Failure -> when (result.reason) {
+            // apiUrl 为空（例如 aicharactercards 链接未被解析到端点）时给出引导性提示
+            TavernCardDownloader.TavernDownloadFailure.INVALID_URL ->
+                "该站点暂不支持，可改从文件导入"
+            TavernCardDownloader.TavernDownloadFailure.NETWORK ->
+                if (isEn) "Network error, please check connection and retry" else "网络错误，请检查网络后重试"
+            TavernCardDownloader.TavernDownloadFailure.TOO_LARGE ->
+                if (isEn) "Card file too large (over 1MB)" else "角色卡文件过大（超过 1MB），无法导入"
+            TavernCardDownloader.TavernDownloadFailure.PARSE ->
+                if (isEn) "Cannot recognize character card" else "无法解析角色卡"
+        }
+        is TavernCardDownloader.TavernDownloadResult.Success -> {
+            val card = parseImportedCard(result)
+            if (card != null) {
+                onSave(existing + card)
+                Toast.makeText(
+                    context,
+                    if (isEn) "Imported [${card.name}] successfully" else "成功导入角色卡 [${card.name}]",
+                    Toast.LENGTH_SHORT
+                ).show()
+                null
+            } else {
+                if (isEn) "Cannot parse character card" else "无法解析角色卡，请确认链接指向标准角色卡"
+            }
+        }
+    }
+}
+
+/**
+ * 复用现有 codec 解析下载结果：
+ * 1. 优先用 [com.loyea.ui.chat.TavernCardDownloader.TavernDownloadResult.Success.cardJson]
+ *    （chub 提取出的角色 JSON）走 JSON 解析；
+ * 2. 兜底用原始字节：先按 UTF-8 文本解析 JSON，失败再尝试 PNG 隐写卡片。
+ * 全部解析都失败则返回 null。
+ */
+private fun parseImportedCard(
+    result: TavernCardDownloader.TavernDownloadResult.Success
+): CharacterCard? {
+    result.cardJson?.let { json ->
+        runCatching { TavernCardParser.parseJsonCard(json) }.getOrNull()?.let { return it }
+    }
+    // 原样交给现有 codec，能解析则导入（覆盖 JSON 文本 / PNG 隐写两种形态）
+    val rawText = String(result.rawBytes, Charsets.UTF_8)
+    runCatching { TavernCardParser.parseJsonCard(rawText) }.getOrNull()?.let { return it }
+    runCatching { TavernCardParser.parsePngCard(ByteArrayInputStream(result.rawBytes)) }
+        .getOrNull()
+        ?.let { return it }
+    return null
+}
+
+/**
+ * 从链接导入角色卡的输入对话框。
+ * 支持粘贴 URL 后确认；点击确认后在协程里执行 [onImport]（挂起函数），
+ * 返回 null 表示成功（自动关闭），否则把错误文案展示在输入框下方。
+ */
+@Composable
+private fun UrlImportDialog(
+    isEn: Boolean,
+    onDismiss: () -> Unit,
+    onImport: suspend (url: String) -> String?
+) {
+    var url by remember { mutableStateOf("") }
+    var loading by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    val canConfirm = url.isNotBlank() && !loading
+
+    AlertDialog(
+        onDismissRequest = { if (!loading) onDismiss() },
+        title = { Text(if (isEn) "Import from URL" else "从链接导入角色卡", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it; error = null },
+                    label = { Text(if (isEn) "Paste chub.ai / character card link" else "粘贴角色卡链接（chub.ai / 其他）") },
+                    placeholder = { Text("https://chub.ai/characters/...") },
+                    singleLine = true,
+                    enabled = !loading,
+                    isError = error != null,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Uri,
+                        imeAction = ImeAction.Done
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (error != null) {
+                    Text(error!!, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                }
+                if (loading) {
+                    CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = canConfirm,
+                onClick = {
+                    loading = true
+                    error = null
+                    scope.launch {
+                        val err = onImport(url.trim())
+                        if (err == null) {
+                            onDismiss()
+                        } else {
+                            loading = false
+                            error = err
+                        }
+                    }
+                }
+            ) { Text(if (isEn) "Import" else "导入") }
+        },
+        dismissButton = {
+            TextButton(enabled = !loading, onClick = onDismiss) {
+                Text(
+                    if (isEn) "Cancel" else "取消",
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+            }
+        }
+    )
 }
 
 /**

@@ -142,6 +142,67 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun filterSessions(characterIdOrNull: String?): List<ChatSession> =
         ChatSessionQuery.filterSessionsByCharacter(sessions.value, characterIdOrNull)
 
+    // B3-B2：会话列表角色过滤当前选中角色 id（null = 显示全部）。过滤状态放 VM，由会话列表过滤 UI 读写。
+    var filterCharacterId = mutableStateOf<String?>(null)
+        private set
+
+    /** 设置会话列表角色过滤；null 或空白表示"显示全部"。过滤状态与会话列表分离，切换即生效。 */
+    fun setFilterCharacter(characterIdOrNull: String?) {
+        filterCharacterId.value = characterIdOrNull?.takeIf(String::isNotBlank)
+    }
+
+    // --- B2：会话列表 置顶 / 克隆 / 重启 操作（均委托存储层 suspend 调用，UI 仅调用本层方法） ---
+
+    /** 置顶优先、其次按最近活跃降序的"全部"会话排序，保证列表视图与角色过滤视图的排序口径一致。 */
+    private fun sortedSessions(list: List<ChatSession>): List<ChatSession> =
+        ChatSessionQuery.sortedForDisplay(list)
+
+    /** 置顶 / 取消置顶指定会话：copy isPinned，并按置顶优先规则重排列表。 */
+    fun toggleSessionPin(sessionId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val target = sessions.value.firstOrNull { it.id == sessionId }
+            val newPinned = !(target?.isPinned ?: false)
+            storageManager.updateSessionList { diskSessions ->
+                diskSessions.map { if (it.id == sessionId) it.copy(isPinned = newPinned) else it }
+            }
+            val updated = storageManager.loadSessionList()
+            withContext(Dispatchers.Main) {
+                sessions.value = sortedSessions(updated)
+            }
+        }
+    }
+
+    /** 克隆会话：生成完整副本（继承源配置、重置置顶并分配新 id）后刷新列表并跳转到新会话。 */
+    fun cloneSession(srcSessionId: String, newName: String) {
+        val trimmed = newName.trim()
+        if (trimmed.isBlank() || trimmed.length > 50) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val created = storageManager.cloneSession(srcSessionId, trimmed)
+            val updated = storageManager.loadSessionList()
+            withContext(Dispatchers.Main) {
+                sessions.value = sortedSessions(updated)
+                if (created != null) {
+                    selectSession(created.id) // 克隆成功即跳转到新会话
+                }
+            }
+        }
+    }
+
+    /** 重启聊天：清空该会话全部消息，并刷新当前视图（若正展示该会话则同步清空消息区）。 */
+    fun restartSession(sessionId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val ok = storageManager.restartSession(sessionId)
+            val updated = storageManager.loadSessionList()
+            val msgs = storageManager.loadSessionMessages(sessionId)
+            withContext(Dispatchers.Main) {
+                sessions.value = sortedSessions(updated)
+                if (ok && currentSessionId.value == sessionId) {
+                    messages.value = msgs // 刷新当前会话视图
+                }
+            }
+        }
+    }
+
     // 7. 消息列表状态管理
     var messages = mutableStateOf<List<Message>>(emptyList())
         private set
@@ -743,7 +804,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             )
             storageManager.saveSessionMessages(defaultSession.id, defaultMsgs)
         }
-        val sortedList = list.sortedByDescending { it.lastActiveTime }
+        val sortedList = sortedSessions(list)
         withContext(Dispatchers.Main) {
             sessions.value = sortedList
         }
@@ -942,6 +1003,81 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 sessions.value = updated
             }
         }
+    }
+
+    // --- B4/B5/B7：会话级配置写入口（薄包装，UI 仅调本层，不直接碰存储） ---
+
+    /**
+     * B4：设置当前会话的会话级 API 绑定。传 null 表示"跟随全局"默认；
+     * 非空白 id 表示显式绑定到对应 ApiConfig。
+     */
+    fun setSessionApiBinding(apiBindingId: String?) {
+        val sessionId = currentSessionId.value
+        if (sessionId.isBlank()) return
+        updateSessionSingle { it.copy(apiBindingId = apiBindingId?.takeIf(String::isNotBlank)) }
+    }
+
+    /**
+     * B7：设置当前会话群聊上下文选角的专用 API 绑定。传 null 表示"跟随当前会话生效 API"。
+     */
+    fun setSessionSpeakerApiBinding(speakerApiBindingId: String?) {
+        val sessionId = currentSessionId.value
+        if (sessionId.isBlank()) return
+        updateSessionSingle {
+            it.copy(speakerApiBindingId = speakerApiBindingId?.takeIf(String::isNotBlank))
+        }
+    }
+
+    /**
+     * B5：设置当前会话的长期记忆开关。三态：null=跟随全局默认，true=开启，false=关闭（本会话不注入/不写入记忆）。
+     */
+    fun setSessionMemoryEnabled(memoryEnabled: Boolean?) {
+        val sessionId = currentSessionId.value
+        if (sessionId.isBlank()) return
+        updateSessionSingle { it.copy(memoryEnabled = memoryEnabled) }
+    }
+
+    /** 对当前会话 copy 单个字段并原子写回，随后刷新内存里的 sessions 列表。 */
+    private fun updateSessionSingle(transform: (ChatSession) -> ChatSession) {
+        val sessionId = currentSessionId.value
+        viewModelScope.launch(Dispatchers.IO) {
+            var updatedList: List<ChatSession> = emptyList()
+            storageManager.updateSessionList { diskSessions ->
+                val updated = diskSessions.map { session ->
+                    if (session.id == sessionId) transform(session) else session
+                }
+                updatedList = updated
+                updated
+            }
+            withContext(Dispatchers.Main) {
+                sessions.value = updatedList
+            }
+        }
+    }
+
+    /**
+     * B6：计算当前会话的陪伴统计（纯核心计算，输入为当前内存中的消息快照）。
+     * 将宿主 [Message] 归一化为 [TavernChatMessageRecord] 后调用
+     * [TavernChatStatistics.calculate]，统计口径与 Tavo 统计页一致（不计系统消息）。
+     */
+    fun statisticsForCurrentSession(): TavernChatStatisticsResult {
+        val records = messages.value.map { message ->
+            val hasVersions = message.versions.isNotEmpty()
+            TavernChatMessageRecord(
+                name = if (message.sender == Sender.USER) "" else (message.tavernName ?: ""),
+                message = message.content,
+                isUser = message.sender == Sender.USER && !message.tavernIsSystem,
+                isSystem = message.tavernIsSystem,
+                sendDate = message.timestamp.toString(), // epoch 毫秒，TavernChatStatistics 可直接解析
+                swipes = message.versions.map { it.content },
+                swipeId = if (hasVersions) {
+                    message.activeVersionIndex.coerceIn(0, message.versions.lastIndex)
+                } else {
+                    0
+                }
+            )
+        }
+        return TavernChatStatistics.calculate(records)
     }
 
     private fun groupSequenceIsCurrent(
@@ -1374,7 +1510,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             deletedBinding?.let { graphMemoryManager.clearMemoriesForBinding(it) }
             val updatedSessions = storageManager.loadSessionList()
             withContext(Dispatchers.Main) {
-                sessions.value = updatedSessions
+                sessions.value = sortedSessions(updatedSessions)
                 
                 if (currentSessionId.value == deleteId) {
                     val nextSession = updatedSessions.firstOrNull()

@@ -70,6 +70,7 @@ import com.loyea.plugins.tavern.core.TavernGroupMember
 import com.loyea.plugins.tavern.core.TavernGroupReplyMode
 import com.loyea.plugins.tavern.core.TavernQuickReply
 import com.loyea.plugins.tavern.core.TavernQuickReplySet
+import com.loyea.plugins.tavern.core.TavernChatStatisticsResult
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -140,6 +141,10 @@ fun ChatScreen(
     var showGroupEditor by remember { mutableStateOf(false) }
     var pendingTavernExport by remember { mutableStateOf<String?>(null) }
     var pendingTavernFork by remember { mutableStateOf<PendingTavernFork?>(null) }
+    // B4/B5/B6：会话级"高级选项"面板（API 连接 / 长期记忆 / 统计）
+    var showAdvancedOptions by remember { mutableStateOf(false) }
+    var showApiBindingDialog by remember { mutableStateOf(false) }
+    var showStatisticsDialog by remember { mutableStateOf(false) }
     // 世界书编辑器覆盖层打开时，系统返回键关闭编辑器（顶栏返回箭头在 WorldInfoSettingsLayout 内）
     BackHandler(enabled = showWorldInfoEditor) { showWorldInfoEditor = false }
     var lastSessionId by remember { mutableStateOf(currentSessionId) }
@@ -401,6 +406,15 @@ fun ChatScreen(
                                 modifier = Modifier.size(28.dp)
                             )
                         }
+                    }
+                    // B4/B5/B6：会话级高级选项面板入口（API 连接 / 长期记忆 / 统计）
+                    IconButton(onClick = { showAdvancedOptions = true }) {
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = if (isEn) "Advanced options" else "高级选项",
+                            tint = MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier.size(28.dp)
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
@@ -964,6 +978,12 @@ fun ChatScreen(
                 currentGroup = activeGroupChat,
                 characterCards = characterCardList,
                 appLanguage = appLanguage,
+                apiConfigList = apiConfigList,
+                globalApiConfigId = apiConfig.id,
+                session = viewModel.activeSession.value,
+                onSpeakerApiChange = { bindingId ->
+                    viewModel.setSessionSpeakerApiBinding(bindingId)
+                },
                 onDismiss = { showGroupEditor = false },
                 onDisable = {
                     viewModel.setSessionGroupChat(null)
@@ -973,6 +993,45 @@ fun ChatScreen(
                     viewModel.setSessionGroupChat(group)
                     showGroupEditor = false
                 }
+            )
+        }
+
+        // B4/B5/B6：会话级高级选项面板（占位入口，真正内容以会话配置为准）
+        if (showAdvancedOptions && viewModel != null) {
+            AdvancedOptionsDialog(
+                session = viewModel.activeSession.value,
+                apiConfigList = apiConfigList,
+                globalConfigId = apiConfig.id,
+                appLanguage = appLanguage,
+                onOpenApiBinding = { showApiBindingDialog = true },
+                onOpenStatistics = { showStatisticsDialog = true },
+                onMemoryChange = viewModel::setSessionMemoryEnabled,
+                onDismiss = { showAdvancedOptions = false }
+            )
+        }
+
+        // B4：会话级 API 连接选择器（找到的配置 + "跟随全局"项）
+        if (showApiBindingDialog && viewModel != null) {
+            ApiBindingSelectorDialog(
+                session = viewModel.activeSession.value,
+                apiConfigList = apiConfigList,
+                globalConfigId = apiConfig.id,
+                appLanguage = appLanguage,
+                onSelect = { bindingId ->
+                    viewModel.setSessionApiBinding(bindingId)
+                    showApiBindingDialog = false
+                    showAdvancedOptions = false
+                },
+                onDismiss = { showApiBindingDialog = false }
+            )
+        }
+
+        // B6：会话统计页（陪伴天数 / 双方消息数 / 总字数）
+        if (showStatisticsDialog && viewModel != null) {
+            SessionStatisticsDialog(
+                result = viewModel.statisticsForCurrentSession(),
+                appLanguage = appLanguage,
+                onDismiss = { showStatisticsDialog = false }
             )
         }
 
@@ -1223,6 +1282,10 @@ private fun TavernGroupEditorDialog(
     currentGroup: TavernGroupChat?,
     characterCards: List<CharacterCard>,
     appLanguage: String,
+    apiConfigList: List<com.loyea.ui.settings.ApiConfig>,
+    globalApiConfigId: String,
+    session: ChatSession?,
+    onSpeakerApiChange: (String?) -> Unit,
     onDismiss: () -> Unit,
     onDisable: () -> Unit,
     onSave: (TavernGroupChat) -> Unit
@@ -1374,6 +1437,54 @@ private fun TavernGroupEditorDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
                 if (mode == TavernGroupReplyMode.CONTEXTUAL_SPEAKER) {
+                    // B7：上下文选角专用 API 绑定（"跟随会话 / 专属 API"），写入 session.speakerApiBindingId
+                    var speakerApiExpanded by remember { mutableStateOf(false) }
+                    val boundSpeakerId = session?.speakerApiBindingId?.takeIf(String::isNotBlank)
+                    val resolvedSpeakerApiName = ApiConfigResolver.resolveSpeakerApiConfig(
+                        session = session,
+                        globalConfigId = globalApiConfigId,
+                        configList = apiConfigList
+                    )?.name
+                    Box {
+                        OutlinedTextField(
+                            value = if (boundSpeakerId != null) {
+                                resolvedSpeakerApiName ?: boundSpeakerId
+                            } else {
+                                if (isEn) {
+                                    "Follow session (${resolvedSpeakerApiName ?: "default"})"
+                                } else {
+                                    "跟随会话（${resolvedSpeakerApiName ?: "默认"}）"
+                                }
+                            },
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text(if (isEn) "Context casting API" else "上下文选角 API") },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { speakerApiExpanded = true }
+                        )
+                        DropdownMenu(
+                            expanded = speakerApiExpanded,
+                            onDismissRequest = { speakerApiExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(if (isEn) "Follow session" else "跟随会话") },
+                                onClick = {
+                                    onSpeakerApiChange(null)
+                                    speakerApiExpanded = false
+                                }
+                            )
+                            apiConfigList.filter { it.isEnabled }.forEach { config ->
+                                DropdownMenuItem(
+                                    text = { Text(config.name) },
+                                    onClick = {
+                                        onSpeakerApiChange(config.id)
+                                        speakerApiExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
                     OutlinedTextField(
                         value = contextualPrompt,
                         onValueChange = { contextualPrompt = it.take(4_000) },
@@ -1478,6 +1589,272 @@ private fun TavernGroupEditorDialog(
 }
 
 // 1:1 复刻 Claude 顶部模型选择胶囊 (增强角色卡头像及双行文本解耦设计)
+@Composable
+private fun AdvancedOptionsDialog(
+    session: ChatSession?,
+    apiConfigList: List<ApiConfig>,
+    globalConfigId: String,
+    appLanguage: String,
+    onOpenApiBinding: () -> Unit,
+    onOpenStatistics: () -> Unit,
+    onMemoryChange: (Boolean?) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val isEn = appLanguage == "en"
+    var memoryExpanded by remember { mutableStateOf(false) }
+    val memoryValue = session?.memoryEnabled
+    val memoryLabel = when (memoryValue) {
+        true -> if (isEn) "On" else "开启"
+        false -> if (isEn) "Off" else "关闭"
+        null -> if (isEn) "Follow global" else "跟随全局"
+    }
+    val memorySub = if (memoryValue == false) {
+        if (isEn) "Off: not injected or written for this chat" else "关闭：本会话不注入/不写入记忆"
+    } else {
+        memoryLabel
+    }
+    // B4：展示当前会话生效连接（会话级绑定优先，否则回退全局）
+    val boundApiId = session?.apiBindingId?.takeIf(String::isNotBlank)
+    val resolvedApiName = ApiConfigResolver.resolveApiConfigForSession(
+        session = session,
+        globalConfigId = globalConfigId,
+        configList = apiConfigList
+    )?.name ?: (if (isEn) "Default" else "默认")
+    val apiLabel = if (boundApiId != null) {
+        resolvedApiName
+    } else if (isEn) {
+        "Follow global ($resolvedApiName)"
+    } else {
+        "跟随全局（$resolvedApiName）"
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (isEn) "Advanced options" else "高级选项") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                // B4：API 连接
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onOpenApiBinding() },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(if (isEn) "API connection" else "API 连接")
+                        Text(
+                            apiLabel,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                HorizontalDivider()
+                // B5：长期记忆（三态）
+                Box {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { memoryExpanded = true },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(if (isEn) "Long-term memory" else "长期记忆")
+                            Text(
+                                memorySub,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Text(memoryLabel, color = MaterialTheme.colorScheme.primary)
+                        Icon(
+                            imageVector = Icons.Default.ArrowDropDown,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = memoryExpanded,
+                        onDismissRequest = { memoryExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(if (isEn) "Follow global" else "跟随全局") },
+                            onClick = { onMemoryChange(null); memoryExpanded = false }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (isEn) "On" else "开启") },
+                            onClick = { onMemoryChange(true); memoryExpanded = false }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (isEn) "Off" else "关闭") },
+                            onClick = { onMemoryChange(false); memoryExpanded = false }
+                        )
+                    }
+                }
+                HorizontalDivider()
+                // B6：统计入口
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onOpenStatistics() },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(if (isEn) "Statistics" else "统计")
+                        Text(
+                            if (isEn) {
+                                "Days, messages and characters of this chat"
+                            } else {
+                                "本会话陪伴天数、双方消息数与总字数"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(if (isEn) "Done" else "完成") }
+        }
+    )
+}
+
+// B4：会话级 API 连接选择器（启用的配置 + "跟随全局"项）
+@Composable
+private fun ApiBindingSelectorDialog(
+    session: ChatSession?,
+    apiConfigList: List<ApiConfig>,
+    globalConfigId: String,
+    appLanguage: String,
+    onSelect: (String?) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val isEn = appLanguage == "en"
+    val currentBound = session?.apiBindingId?.takeIf(String::isNotBlank)
+    val currentResolvedName = ApiConfigResolver.resolveApiConfigForSession(
+        session = session,
+        globalConfigId = globalConfigId,
+        configList = apiConfigList
+    )?.name
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (isEn) "API connection" else "API 连接") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                apiConfigList.filter { it.isEnabled }.forEach { config ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelect(config.id) },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(config.name)
+                            Text(
+                                "${config.provider} · ${config.modelName}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        RadioButton(
+                            selected = currentBound == config.id,
+                            onClick = { onSelect(config.id) }
+                        )
+                    }
+                }
+                HorizontalDivider()
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelect(null) },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(if (isEn) "Follow global" else "跟随全局")
+                        Text(
+                            currentResolvedName ?: (if (isEn) "Default" else "默认"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    RadioButton(
+                        selected = currentBound == null,
+                        onClick = { onSelect(null) }
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(if (isEn) "Cancel" else "取消") }
+        }
+    )
+}
+
+// B6：会话统计页（陪伴天数 / 双方消息数 / 总字数）
+@Composable
+private fun SessionStatisticsDialog(
+    result: TavernChatStatisticsResult,
+    appLanguage: String,
+    onDismiss: () -> Unit
+) {
+    val isEn = appLanguage == "en"
+    @Composable
+    fun statRow(label: String, value: String) {
+        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+            Text(
+                label,
+                modifier = Modifier.weight(1f),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(value, fontWeight = FontWeight.SemiBold)
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (isEn) "Chat statistics" else "会话统计") },
+        text = {
+            Column {
+                statRow(if (isEn) "Companionship days" else "陪伴天数", result.companionshipDays.toString())
+                statRow(if (isEn) "Your messages" else "你的消息数", result.userMessageCount.toString())
+                statRow(if (isEn) "Character replies" else "角色回复数", result.characterMessageCount.toString())
+                statRow(
+                    if (isEn) "Total messages" else "双方消息总数",
+                    (result.userMessageCount + result.characterMessageCount).toString()
+                )
+                statRow(if (isEn) "Total characters" else "总字数", result.totalCharacterCount.toString())
+                Text(
+                    if (isEn) {
+                        "As of ${result.statisticsDay}" +
+                            (result.firstMessageDate?.let { " · from $it" } ?: "") +
+                            ". System messages are not counted."
+                    } else {
+                        "统计截止 ${result.statisticsDay}" +
+                            (result.firstMessageDate?.let { " · 自 $it" } ?: "") +
+                            "。系统消息不计入统计。"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(if (isEn) "Close" else "关闭") }
+        }
+    )
+}
+
 @Composable
 fun ModelSelector(
     activeCharacterCard: CharacterCard,

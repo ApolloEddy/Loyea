@@ -12,6 +12,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -93,6 +94,20 @@ fun MainScreen(
 
     var isSidebarExpanded by rememberSaveable { mutableStateOf(true) }
 
+    // B2：会话列表角色过滤与 置顶/克隆/重启 操作接线（UI 仅转发到 ViewModel，状态放 VM）
+    val viewModelForOps = viewModel
+    val filterCharacterId = viewModelForOps?.filterCharacterId?.value
+    val filterCounts = viewModelForOps?.chatFilterCounts() ?: emptyMap()
+    val displaySessions = if (viewModelForOps != null) {
+        viewModelForOps.filterSessions(filterCharacterId)
+    } else {
+        sessions
+    }
+    val onTogglePin: (String) -> Unit = { id -> viewModelForOps?.toggleSessionPin(id) }
+    val onCloneSession: (String, String) -> Unit = { src, name -> viewModelForOps?.cloneSession(src, name) }
+    val onRestartSession: (String) -> Unit = { id -> viewModelForOps?.restartSession(id) }
+    val onFilterCharacterSelect: (String?) -> Unit = { id -> viewModelForOps?.setFilterCharacter(id) }
+
     Box(modifier = Modifier.fillMaxSize()) {
         if (useTwoPane) {
             Row(modifier = Modifier.fillMaxSize()) {
@@ -113,7 +128,7 @@ fun MainScreen(
                         SidebarContent(
                             userName = userName,
                             appLanguage = appLanguage,
-                            sessions = sessions,
+                            sessions = displaySessions,
                             currentSessionId = currentSessionId,
                             onHistoryItemClick = { sessionId ->
                                 onSessionSelect(sessionId)
@@ -128,6 +143,13 @@ fun MainScreen(
                             onTriggerManualMemorySummary = onTriggerManualMemorySummary,
                             onRenameSession = onRenameSession,
                             onRegenerateSessionTitle = onRegenerateSessionTitle,
+                            characterCardList = characterCardList,
+                            filterCharacterId = filterCharacterId,
+                            filterCounts = filterCounts,
+                            onFilterCharacterSelect = onFilterCharacterSelect,
+                            onTogglePin = onTogglePin,
+                            onCloneSession = onCloneSession,
+                            onRestartSession = onRestartSession,
                             onCloseDrawer = { isSidebarExpanded = false }
                         )
                     }
@@ -171,7 +193,7 @@ fun MainScreen(
                         SidebarContent(
                             userName = userName,
                             appLanguage = appLanguage,
-                            sessions = sessions,
+                            sessions = displaySessions,
                             currentSessionId = currentSessionId,
                             onHistoryItemClick = { sessionId ->
                                 scope.launch { drawerState.close() }
@@ -199,7 +221,14 @@ fun MainScreen(
                             onUpdateCoreMemories = onUpdateCoreMemories,
                             onTriggerManualMemorySummary = onTriggerManualMemorySummary,
                             onRenameSession = onRenameSession,
-                            onRegenerateSessionTitle = onRegenerateSessionTitle
+                            onRegenerateSessionTitle = onRegenerateSessionTitle,
+                            characterCardList = characterCardList,
+                            filterCharacterId = filterCharacterId,
+                            filterCounts = filterCounts,
+                            onFilterCharacterSelect = onFilterCharacterSelect,
+                            onTogglePin = onTogglePin,
+                            onCloneSession = onCloneSession,
+                            onRestartSession = onRestartSession
                         )
                     }
                 }
@@ -276,7 +305,15 @@ fun SidebarContent(
     onTriggerManualMemorySummary: (String) -> Boolean = { false },
     onRenameSession: (String, String) -> Unit = { _, _ -> },
     onRegenerateSessionTitle: (String) -> Unit = {},
-    onCloseDrawer: () -> Unit = {}
+    onCloseDrawer: () -> Unit = {},
+    // B2：角色卡列表（用于过滤 chip 名称）、角色过滤状态与操作回调
+    characterCardList: List<CharacterCard> = emptyList(),
+    filterCharacterId: String? = null,
+    filterCounts: Map<String, Int> = emptyMap(),
+    onFilterCharacterSelect: (String?) -> Unit = {},
+    onTogglePin: (String) -> Unit = {},
+    onCloneSession: (String, String) -> Unit = { _, _ -> },
+    onRestartSession: (String) -> Unit = {}
 ) {
     val isEn = appLanguage == "en"
     var sessionToDelete by remember { mutableStateOf<String?>(null) }
@@ -286,6 +323,11 @@ fun SidebarContent(
     // 会话重命名对话框状态：sessionToRename 非空时弹出
     var sessionToRename by remember { mutableStateOf<String?>(null) }
     var renameText by remember { mutableStateOf("") }
+    // B2：克隆会话对话框状态（sessionToClone 非空时弹出）→ onCloneSession
+    var sessionToClone by remember { mutableStateOf<String?>(null) }
+    var cloneName by remember { mutableStateOf("") }
+    // B2：重启聊天二次确认状态（sessionToRestart 非空时弹出）→ onRestartSession
+    var sessionToRestart by remember { mutableStateOf<String?>(null) }
     val historyGroups = remember(sessions, appLanguage) {
         val todayList = mutableListOf<ChatSession>()
         val yesterdayList = mutableListOf<ChatSession>()
@@ -556,6 +598,16 @@ fun SidebarContent(
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(12.dp))
+                    // B2：置顶会话列表条目前显示图钉标识
+                    if (session.isPinned) {
+                        Icon(
+                            imageVector = Icons.Default.PushPin,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                    }
                     Text(
                         text = session.title,
                         fontSize = 14.sp,
@@ -606,6 +658,34 @@ fun SidebarContent(
                                     onRegenerateSessionTitle(session.id)
                                 }
                             )
+                            // B2：置顶 / 取消置顶
+                            DropdownMenuItem(
+                                text = { Text(if (session.isPinned) (if (isEn) "Unpin" else "取消置顶") else (if (isEn) "Pin" else "置顶"), fontSize = 13.sp) },
+                                leadingIcon = { Icon(Icons.Default.PushPin, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onTogglePin(session.id)
+                                }
+                            )
+                            // B2：克隆会话（弹输入名对话框）
+                            DropdownMenuItem(
+                                text = { Text(if (isEn) "Clone session" else "克隆会话", fontSize = 13.sp) },
+                                leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                                onClick = {
+                                    menuExpanded = false
+                                    sessionToClone = session.id
+                                    cloneName = "副本-" + session.title
+                                }
+                            )
+                            // B2：重启聊天（二次确认）
+                            DropdownMenuItem(
+                                text = { Text(if (isEn) "Restart chat" else "重启聊天", fontSize = 13.sp) },
+                                leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                                onClick = {
+                                    menuExpanded = false
+                                    sessionToRestart = session.id
+                                }
+                            )
                             DropdownMenuItem(
                                 text = { Text("删除会话", color = MaterialTheme.colorScheme.error, fontSize = 13.sp) },
                                 leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp)) },
@@ -629,6 +709,16 @@ fun SidebarContent(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item { UserInfoBar() }
+            // B2：角色过滤 chip 组（含"全部"）
+            item {
+                CharacterFilterRow(
+                    counts = filterCounts,
+                    characterCardList = characterCardList,
+                    selectedId = filterCharacterId,
+                    onFilterSelect = onFilterCharacterSelect,
+                    isEn = isEn
+                )
+            }
             renderHistoryItems()
             item { BottomControlPanel() }
         }
@@ -640,6 +730,15 @@ fun SidebarContent(
         ) {
             UserInfoBar()
             Spacer(modifier = Modifier.height(16.dp))
+            // B2：角色过滤 chip 组（含"全部"）
+            CharacterFilterRow(
+                counts = filterCounts,
+                characterCardList = characterCardList,
+                selectedId = filterCharacterId,
+                onFilterSelect = onFilterCharacterSelect,
+                isEn = isEn
+            )
+            Spacer(modifier = Modifier.height(8.dp))
             LazyColumn(
                 modifier = Modifier
                     .weight(1f)
@@ -784,6 +883,104 @@ fun SidebarContent(
         )
     }
 
+    // B2：克隆会话弹窗（输入新会话名）
+    if (sessionToClone != null) {
+        val targetSessionId = sessionToClone!!
+        AlertDialog(
+            onDismissRequest = { sessionToClone = null },
+            title = {
+                Text(
+                    text = if (isEn) "Clone session" else "克隆会话",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp
+                )
+            },
+            text = {
+                Column {
+                    Text(
+                        text = if (isEn) "Create a full copy of this conversation." else "将完整复制此会话及其历史记录，输入新副本的名称：",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    OutlinedTextField(
+                        value = cloneName,
+                        onValueChange = { cloneName = it.take(50) },
+                        label = { Text(if (isEn) "New name" else "新名称") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onCloneSession(targetSessionId, cloneName)
+                        sessionToClone = null
+                        cloneName = ""
+                    },
+                    enabled = cloneName.trim().isNotBlank()
+                ) {
+                    Text(text = if (isEn) "Clone" else "克隆")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { sessionToClone = null }) {
+                    Text(
+                        text = if (isEn) "Cancel" else "取消",
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                }
+            },
+            shape = RoundedCornerShape(16.dp),
+            containerColor = MaterialTheme.colorScheme.surface
+        )
+    }
+
+    // B2：重启聊天二次确认弹窗
+    if (sessionToRestart != null) {
+        val targetSessionId = sessionToRestart!!
+        AlertDialog(
+            onDismissRequest = { sessionToRestart = null },
+            title = {
+                Text(
+                    text = if (isEn) "Restart chat?" else "确认重启聊天？",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp
+                )
+            },
+            text = {
+                Text(
+                    text = if (isEn) "This will clear all messages in this conversation. This cannot be undone." else "此操作将清空本会话的全部聊天记录，且无法撤销。",
+                    fontSize = 14.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onRestartSession(targetSessionId)
+                        sessionToRestart = null
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text(text = if (isEn) "Restart" else "重启")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { sessionToRestart = null }) {
+                    Text(
+                        text = if (isEn) "Cancel" else "取消",
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                }
+            },
+            shape = RoundedCornerShape(16.dp),
+            containerColor = MaterialTheme.colorScheme.surface
+        )
+    }
+
     // 核心事实记忆 Dialog
     activeMemorySessionId?.let { sessionId ->
         val memorySession = sessions.find { it.id == sessionId }
@@ -803,6 +1000,44 @@ data class HistoryGroup(
     val timeLabel: String,
     val items: List<ChatSession>
 )
+
+// B2：会话列表顶部角色过滤 chip 组（含"全部"），横向可滚动；选中即过滤会话列表
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CharacterFilterRow(
+    counts: Map<String, Int>,
+    characterCardList: List<CharacterCard>,
+    selectedId: String?,
+    onFilterSelect: (String?) -> Unit,
+    isEn: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val total = counts.values.sum()
+    LazyRow(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(vertical = 4.dp)
+    ) {
+        item {
+            FilterChip(
+                selected = selectedId == null,
+                onClick = { onFilterSelect(null) },
+                label = { Text(if (isEn) "All ($total)" else "全部 ($total)", fontSize = 12.sp) }
+            )
+        }
+        counts.forEach { (characterId, count) ->
+            item {
+                val name = characterCardList.firstOrNull { it.id == characterId }?.name
+                    ?: if (characterId.isBlank()) (if (isEn) "Unnamed" else "未命名") else characterId
+                FilterChip(
+                    selected = selectedId == characterId,
+                    onClick = { onFilterSelect(characterId) },
+                    label = { Text("$name ($count)", fontSize = 12.sp) }
+                )
+            }
+        }
+    }
+}
 
 @Preview(showBackground = true)
 @Composable
