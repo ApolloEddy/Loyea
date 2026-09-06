@@ -86,6 +86,9 @@ data class LlmChatMessage(
 /** 生图失败（携带可展示给用户的真实原因：HTTP 状态 / 服务商错误体 / 网络异常） */
 class ImageGenException(message: String) : Exception(message)
 
+/** 生图结果：远程 URL（需下载）或 base64 编码图片（直接解码落盘）二选一。 */
+data class ImageGenResult(val remoteUrl: String?, val base64Png: String?)
+
 class LlmClient {
     @Volatile
     var lastAsrError: String? = null
@@ -1659,7 +1662,7 @@ class LlmClient {
         config: com.loyea.ui.settings.ApiConfig,
         prompt: String,
         model: String
-    ): String? = withContext(Dispatchers.IO) {
+    ): ImageGenResult = withContext(Dispatchers.IO) {
         if (config.apiKey.isBlank()) throw ImageGenException("生图 API Key 未配置 / image API key is missing")
         try {
             val url = resolveImagesGenerationsUrl(config)
@@ -1690,14 +1693,22 @@ class LlmClient {
                     throw ImageGenException("HTTP ${response.code}" + (errBody?.let { " - $it" } ?: ""))
                 }
                 val resBody = response.body?.string() ?: ""
-                val jsonObj = gson.fromJson(resBody, JsonObject::class.java)
+                val jsonObj = runCatching { gson.fromJson(resBody, JsonObject::class.java) }.getOrNull()
+                    ?: throw ImageGenException("响应不是有效 JSON / response is not valid JSON")
                 val dataArray = jsonObj.getAsJsonArray("data")
                 if (dataArray != null && dataArray.size() > 0) {
-                    return@withContext dataArray.get(0).asJsonObject.get("url")?.asString
+                    val first = dataArray.get(0).asJsonObject
+                    val url = first.get("url")?.takeIf { it.isJsonPrimitive }?.asString
+                    if (!url.isNullOrBlank()) return@withContext ImageGenResult(remoteUrl = url, base64Png = null)
+                    val b64 = first.get("b64_json")?.takeIf { it.isJsonPrimitive }?.asString
+                    if (!b64.isNullOrBlank()) return@withContext ImageGenResult(remoteUrl = null, base64Png = b64)
+                    throw ImageGenException("响应缺少 url / b64_json 字段 / no url or b64_json field in response")
                 }
                 throw ImageGenException("响应中没有图片数据 / no image data in response")
             }
         } catch (e: ImageGenException) {
+            throw e
+        } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
             e.printStackTrace()

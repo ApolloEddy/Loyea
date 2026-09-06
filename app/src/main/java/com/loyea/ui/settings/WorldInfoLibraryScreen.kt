@@ -519,7 +519,8 @@ private fun BookRow(
                             text = { Text(if (isEn) "Unset global active" else "取消全局生效", fontSize = 13.sp) },
                             onClick = { menuOpen = false; onUnsetGlobalActive() }
                         )
-                    } else {
+                    } else if (!summary.sourceDeleted) {
+                        // 死卡书不可解析（设了也无人受益，还会挤占唯一全局名额）——不展示该项
                         DropdownMenuItem(
                             text = { Text(if (isEn) "Set as global active" else "设为全局生效", fontSize = 13.sp) },
                             onClick = { menuOpen = false; onSetGlobalActive() }

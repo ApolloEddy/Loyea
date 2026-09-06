@@ -228,6 +228,28 @@ class ChatStorageManagerTest {
     }
 
     @Test
+    fun testDeleteSessionKeepsGlobalActiveOwnedBook() = runBlocking {
+        // 裁定1（2026-09-07）：会话与会话书解耦——独占绑定的 owned 书同时是全局生效书时，
+        // 删除会话仅解绑不删书（全局生效是书级状态，不随会话消亡）
+        val sessionId = "sess_g"
+        seedLegacySources(
+            "[]",
+            legacySessionBookJson("""[{"id":"e1","keywords":["k"],"content":"C"}]"""),
+            sessionId
+        )
+        val library = storageManager.worldInfoLibrary
+        val owned = library.loadAllBooks().first { it.sessionIds.contains(sessionId) }
+        library.setGlobalActive(owned.id)
+
+        storageManager.deleteSession(sessionId)
+
+        val after = library.loadBook(owned.id)
+        assertNotNull(after)
+        assertTrue(after!!.isGlobalActive)
+        assertTrue(sessionId !in after.sessionIds)
+    }
+
+    @Test
     fun testLegacyMissingFieldsGetDefaultsThroughMigration() = runBlocking {
         // v0.5.1 时代只有 12 字段的旧条目：经迁移路径 selfHeal 兜底
         // （String/List 缺失 → ?: 生效；原始类型缺失 → JVM 默认，概率/递归保守禁用）

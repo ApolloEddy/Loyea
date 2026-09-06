@@ -3950,8 +3950,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 activeApiConfig.value
             }
-            val remoteUrl = llmClient.generateImage(targetGenConfig, prompt, imageGenModel.value)
-                ?: return@withContext null
+            val genResult = llmClient.generateImage(targetGenConfig, prompt, imageGenModel.value)
+            if (genResult.base64Png != null) {
+                // b64_json 形态：直接解码落盘，无需下载
+                val localFile = File(context.filesDir, "images/img_${System.currentTimeMillis()}_${java.util.UUID.randomUUID()}.png")
+                localFile.parentFile?.mkdirs()
+                val bytes = runCatching { java.util.Base64.getDecoder().decode(genResult.base64Png) }.getOrNull()
+                    ?: throw ImageGenException("b64_json 解码失败 / base64 decode failed")
+                if (bytes.isEmpty()) throw ImageGenException("b64_json 解码为空 / empty image data")
+                localFile.outputStream().use { output -> output.write(bytes) }
+                return@withContext localFile.absolutePath
+            }
+            val remoteUrl = genResult.remoteUrl
+                ?: throw ImageGenException("响应中没有图片数据 / no image payload")
             // 先写临时文件再重命名：下载中断不留半截图片；UUID 后缀规避并发同名覆盖
             val tmpFile = File(context.filesDir, "images/img_${System.currentTimeMillis()}_${java.util.UUID.randomUUID()}.tmp")
             tmpFile.parentFile?.mkdirs()
@@ -4106,17 +4117,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-            // 3. 调用生图
-            val genCfgId = imageGenConfigId.value
-            val targetGenConfig = if (genCfgId.isNotBlank()) {
-                apiConfigList.value.find { it.id == genCfgId } ?: activeApiConfig.value
-            } else {
-                activeApiConfig.value
-            }
-            val modelName = imageGenModel.value
+            // 3. 调用生图并落地本地（/draw 与 generate_image 工具共用核心；支持 url 与 b64_json 两种响应）
             var imageFailReason: String? = null
-            val imageUrl = try {
-                llmClient.generateImage(targetGenConfig, prompt, modelName)
+            val imagePath = try {
+                generateAndStoreImage(prompt)
             } catch (e: ImageGenException) {
                 imageFailReason = e.message
                 null
@@ -4124,59 +4128,29 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             withContext(Dispatchers.Main) {
                 isThinking.value = false
-                if (imageUrl != null) {
-                    // 异步下载到本地以便离线查看
-                    viewModelScope.launch(Dispatchers.IO) {
-                        // 临时文件 + 重命名：下载中断不留半截图片
-                        val tmpFile = File(context.filesDir, "images/img_${System.currentTimeMillis()}_${java.util.UUID.randomUUID()}.tmp")
-                        tmpFile.parentFile?.mkdirs()
-                        try {
-                            val request = okhttp3.Request.Builder().url(imageUrl).build()
-                            okhttp3.OkHttpClient().newCall(request).execute().use { response ->
-                                if (response.isSuccessful) {
-                                    response.body?.byteStream()?.use { input ->
-                                        tmpFile.outputStream().use { output ->
-                                            input.copyTo(output)
-                                        }
-                                    }
-                                }
-                            }
-                        } catch (e: java.lang.Exception) {
-                            e.printStackTrace()
-                        }
-                        val localImageFile = File(context.filesDir, "images/img_${System.currentTimeMillis()}.png")
-                        if (tmpFile.exists() && tmpFile.length() > 0L) {
-                            if (!tmpFile.renameTo(localImageFile)) tmpFile.copyTo(localImageFile, overwrite = true)
-                        }
-                        tmpFile.delete()
-
-                        // 落盘以目标会话为准：生图期间切走会话时从磁盘读回该会话、只更新生图占位一条
-                        // （messages.value 已是新会话列表，直接拿去保存会把新会话消息并进旧会话文件）
-                        // UI 仅在本会话前台时更新
-                        withContext(Dispatchers.Main) {
-                            val updatedContent = if (appLanguage.value == "en") "AI has generated an image. Prompt: \"$prompt\""
-                            else "AI 已为您生成图像，提示词：\"$prompt\""
-                            val base = if (currentSessionId.value == sessionId) messages.value
-                                else runCatching { storageManager.loadSessionMessages(sessionId) }.getOrDefault(emptyList())
-                            val currentList = base.map { msg ->
-                                if (msg.id == aiMessageId) {
-                                    msg.copy(
-                                        content = updatedContent,
-                                        isStillThinking = false,
-                                        imageUrl = if (localImageFile.exists()) localImageFile.absolutePath else imageUrl
-                                    )
-                                } else {
-                                    msg
-                                }
-                            }
-                            if (currentSessionId.value == sessionId) {
-                                messages.value = currentList
-                            }
-                            saveMessagesAsync(sessionId, currentList)
+                if (imagePath != null) {
+                    // 将最终图片和消息更新（会话守卫：生图期间用户可能已切走，UI 仅在本会话前台时更新；
+                    // 落盘从磁盘读回目标会话，只更新生图占位一条，杜绝跨会话写污染）
+                    val updatedContent = if (appLanguage.value == "en") "AI has generated an image. Prompt: \"$prompt\""
+                    else "AI 已为您生成图像，提示词：\"$prompt\""
+                    val base = if (currentSessionId.value == sessionId) messages.value
+                        else runCatching { storageManager.loadSessionMessages(sessionId) }.getOrDefault(emptyList())
+                    val currentList = base.map { msg ->
+                        if (msg.id == aiMessageId) {
+                            msg.copy(
+                                content = updatedContent,
+                                isStillThinking = false,
+                                imageUrl = imagePath
+                            )
+                        } else {
+                            msg
                         }
                     }
+                    if (currentSessionId.value == sessionId) {
+                        messages.value = currentList
+                    }
+                    saveMessagesAsync(sessionId, currentList)
                 } else {
-                    // 生图失败（会话守卫同成功分支）
                     val isEnImg = appLanguage.value == "en"
                     val base = if (currentSessionId.value == sessionId) messages.value
                         else runCatching { storageManager.loadSessionMessages(sessionId) }.getOrDefault(emptyList())

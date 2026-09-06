@@ -339,7 +339,15 @@ class ChatStorageManager(private val context: Context) {
                                         )
                                     }
                                 } else if (remaining.isEmpty()) {
-                                    worldInfoLibrary.deleteBook(book.id)
+                                    // 会话与会话书解耦（用户裁定 2026-09-07）：独占绑定的 owned 书
+                                    // 若同时是全局生效书，仅解绑不删——全局生效是书级状态，不随会话消亡
+                                    if (book.isGlobalActive) {
+                                        worldInfoLibrary.saveBook(
+                                            book.copy(sessionIds = remaining, updatedAt = System.currentTimeMillis())
+                                        )
+                                    } else {
+                                        worldInfoLibrary.deleteBook(book.id)
+                                    }
                                 } else {
                                     worldInfoLibrary.saveBook(
                                         book.copy(sessionIds = remaining, updatedAt = System.currentTimeMillis())

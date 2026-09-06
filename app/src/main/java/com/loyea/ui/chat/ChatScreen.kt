@@ -2319,8 +2319,11 @@ private fun ActiveBookPanel(
                 androidx.compose.material3.OutlinedButton(
                     onClick = {
                         scope.launch {
-                            val books = runCatching { viewModel.worldInfoLibrary.loadAllBooks() }
+                            // 来源卡已删除的死卡书不列出（解析层已拒绝其生效）
+                            val books = runCatching { viewModel.worldInfoLibrary.bookSummaries() }
                                 .getOrDefault(emptyList())
+                                .filter { !it.sourceDeleted }
+                                .map { it.book }
                             pickingBooks = books
                             picking = true
                         }
