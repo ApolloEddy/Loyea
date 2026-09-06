@@ -38,7 +38,8 @@ import java.util.Locale
 fun TokenUsageMenuHeader(
     session: ChatSession?,
     modelName: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isEn: Boolean = false
 ) {
     val promptTokens = session?.promptTokens ?: 0L
     val completionTokens = session?.completionTokens ?: 0L
@@ -54,7 +55,7 @@ fun TokenUsageMenuHeader(
             TokenDonut(promptTokens = promptTokens, completionTokens = completionTokens, size = 16.dp, strokeWidth = 3.dp)
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = "本会话已用",
+                text = if (isEn) "This session" else "本会话已用",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -67,7 +68,7 @@ fun TokenUsageMenuHeader(
         }
         Spacer(modifier = Modifier.height(8.dp))
         TokenUsageRow(label = "Prompt", tokens = promptTokens, color = MaterialTheme.colorScheme.primary)
-        TokenUsageRow(label = "回复", tokens = completionTokens, color = MaterialTheme.colorScheme.tertiary)
+        TokenUsageRow(label = if (isEn) "Reply" else "回复", tokens = completionTokens, color = MaterialTheme.colorScheme.tertiary)
         // DeepSeek 前缀缓存命中率（累计 hit / (hit+miss)）；无缓存数据时不渲染
         val cacheHit = session?.promptCacheHitTokens ?: 0L
         val cacheMiss = session?.promptCacheMissTokens ?: 0L
@@ -83,7 +84,7 @@ fun TokenUsageMenuHeader(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "缓存命中 ${String.format(Locale.US, "%.1f%%", rate)}",
+                    text = (if (isEn) "Cache hit " else "缓存命中 ") + String.format(Locale.US, "%.1f%%", rate),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f)
@@ -105,7 +106,7 @@ fun TokenUsageMenuHeader(
         )
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = "上下文 ${formatTokens(contextUsed)} / ${formatTokens(contextLimit)}",
+            text = (if (isEn) "Context " else "上下文 ") + "${formatTokens(contextUsed)} / ${formatTokens(contextLimit)}",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )

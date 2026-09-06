@@ -299,8 +299,10 @@ fun MessageContentWithPanels(
     raw: String,
     collapseKeyPrefix: String,
     color: Color,
-    displayRegexRules: List<com.loyea.character.core.regex.RegexRule> = emptyList()
+    displayRegexRules: List<com.loyea.character.core.regex.RegexRule> = emptyList(),
+    appLanguage: String = "zh"
 ) {
+    val isEn = appLanguage == "en"
     val collapseState = remember(collapseKeyPrefix) { mutableStateOf(mutableMapOf<String, Boolean>()) }
     // P5 显示阶段（Spec §8）：从原文每次重新派生显示内容，规则变更即失效；raw 不改写
     val displayRaw = remember(raw, displayRegexRules) {
@@ -345,7 +347,11 @@ fun MessageContentWithPanels(
                         .padding(horizontal = 10.dp, vertical = 6.dp)
                 ) {
                     Text(
-                        text = "嵌入内容 · " + segment.text.count { it == '\n' }.let { "${it + 1} 行" } + " · 点击" + (if (codeOpen) "收起" else "展开"),
+                        text = if (isEn) {
+                            "Embedded content · ${segment.text.count { it == '\n' } + 1} lines · Tap to " + (if (codeOpen) "collapse" else "expand")
+                        } else {
+                            "嵌入内容 · " + segment.text.count { it == '\n' }.let { "${it + 1} 行" } + " · 点击" + (if (codeOpen) "收起" else "展开")
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
                     )
@@ -380,7 +386,7 @@ fun MessageContentWithPanels(
                             .padding(horizontal = 12.dp, vertical = 8.dp)
                     ) {
                         Text(
-                            text = "状态面板生成中…",
+                            text = if (isEn) "Status panel generating…" else "状态面板生成中…",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                         )
@@ -389,7 +395,8 @@ fun MessageContentWithPanels(
                     HtmlPanelBody(
                         panel = parsed,
                         collapseKey = "$collapseKeyPrefix:panel$index",
-                        collapseState = collapseState
+                        collapseState = collapseState,
+                        isEn = isEn
                     )
                 }
             }
@@ -407,7 +414,8 @@ fun HtmlPanelBody(
     panel: ParsedPanel,
     collapseKey: String,
     collapseState: MutableState<MutableMap<String, Boolean>>,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isEn: Boolean = false
 ) {
     val outline = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
     val container = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
@@ -434,7 +442,7 @@ fun HtmlPanelBody(
         ) {
             Icon(
                 imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                contentDescription = if (expanded) "折叠" else "展开",
+                contentDescription = if (expanded) (if (isEn) "Collapse" else "折叠") else (if (isEn) "Expand" else "展开"),
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(18.dp)
             )
@@ -449,7 +457,7 @@ fun HtmlPanelBody(
         AnimatedVisibility(visible = expanded) {
             Column {
                 panel.children.forEachIndexed { index, block ->
-                    RenderPanelBlock(block, "$collapseKey:body$index", collapseState)
+                    RenderPanelBlock(block, "$collapseKey:body$index", collapseState, isEn)
                 }
             }
         }
@@ -460,7 +468,8 @@ fun HtmlPanelBody(
 private fun RenderPanelBlock(
     block: PanelBlock,
     key: String,
-    collapseState: MutableState<MutableMap<String, Boolean>>
+    collapseState: MutableState<MutableMap<String, Boolean>>,
+    isEn: Boolean = false
 ) {
     when (block) {
         is PanelBlock.Paragraph -> {
@@ -483,7 +492,7 @@ private fun RenderPanelBlock(
             ) {
                 Icon(
                     imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                    contentDescription = if (expanded) "折叠" else "展开",
+                    contentDescription = if (expanded) (if (isEn) "Collapse" else "折叠") else (if (isEn) "Expand" else "展开"),
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(18.dp)
                 )
@@ -498,7 +507,7 @@ private fun RenderPanelBlock(
             AnimatedVisibility(visible = expanded) {
                 Column {
                     block.children.forEachIndexed { i, child ->
-                        RenderPanelBlock(child, "$key:c$i", collapseState)
+                        RenderPanelBlock(child, "$key:c$i", collapseState, isEn)
                     }
                 }
             }

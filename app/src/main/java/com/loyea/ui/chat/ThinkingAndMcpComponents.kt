@@ -27,7 +27,8 @@ import kotlinx.coroutines.delay
 @Composable
 fun McpCallItem(
     mcpCall: McpCall,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isEn: Boolean = false
 ) {
     var isExpanded by remember { mutableStateOf(mcpCall.status == McpStatus.RUNNING) }
     var hasUserInteracted by remember { mutableStateOf(false) }
@@ -167,7 +168,7 @@ fun McpCallItem(
                 if (mcpCall.input.isNotBlank() && mcpCall.input != "{}") {
                     Column {
                         Text(
-                            text = "参数详情",
+                            text = if (isEn) "Arguments" else "参数详情",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
@@ -191,7 +192,7 @@ fun McpCallItem(
                 if (mcpCall.output.isNotBlank()) {
                     Column {
                         Text(
-                            text = "执行结果",
+                            text = if (isEn) "Result" else "执行结果",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)

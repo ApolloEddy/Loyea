@@ -39,6 +39,8 @@ class MemoryConsolidationWorker(
     private fun createForegroundInfo(): ForegroundInfo {
         val channelId = "loyea_consolidation"
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val isEn = context.getSharedPreferences("loyea_prefs", Context.MODE_PRIVATE)
+            .getString("app_language", "zh") == "en"
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
@@ -52,7 +54,7 @@ class MemoryConsolidationWorker(
         val notification = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("Loyea")
-            .setContentText("正在整理记忆思绪中...")
+            .setContentText(if (isEn) "Consolidating memories..." else "正在整理记忆思绪中...")
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .build()

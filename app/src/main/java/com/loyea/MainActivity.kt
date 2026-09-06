@@ -51,7 +51,8 @@ class MainActivity : ComponentActivity() {
         PermissionController.createRequestPermissionResultContract()
     ) { granted ->
         if (granted.isNotEmpty()) {
-            Toast.makeText(this, "健康授权已更新", Toast.LENGTH_SHORT).show()
+            val isEn = ::chatViewModel.isInitialized && chatViewModel.appLanguage.value == "en"
+            Toast.makeText(this, if (isEn) "Health permissions updated" else "健康授权已更新", Toast.LENGTH_SHORT).show()
         }
         // 授权返回后刷新配对状态，让设置页面板立即反映最新权限
         if (::chatViewModel.isInitialized) {
@@ -271,7 +272,8 @@ class MainActivity : ComponentActivity() {
                                         Log.d("MainActivity", "Health Connect SDK Status: $sdkStatus")
                                         
                                         if (sdkStatus == HealthConnectClient.SDK_UNAVAILABLE) {
-                                            Toast.makeText(this@MainActivity, "您的设备未安装或不支持健康连接", Toast.LENGTH_LONG).show()
+                                            val isEn = chatViewModel.appLanguage.value == "en"
+                                            Toast.makeText(this@MainActivity, if (isEn) "Health Connect is not installed or not supported on this device" else "您的设备未安装或不支持健康连接", Toast.LENGTH_LONG).show()
                                             try {
                                                 val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("market://details?id=com.google.android.apps.healthdata"))
                                                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -281,7 +283,8 @@ class MainActivity : ComponentActivity() {
                                                 startActivity(intent)
                                             }
                                         } else if (sdkStatus == HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED) {
-                                            Toast.makeText(this@MainActivity, "健康连接需要更新", Toast.LENGTH_LONG).show()
+                                            val isEn = chatViewModel.appLanguage.value == "en"
+                                            Toast.makeText(this@MainActivity, if (isEn) "Health Connect needs an update" else "健康连接需要更新", Toast.LENGTH_LONG).show()
                                             try {
                                                 val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("market://details?id=com.google.android.apps.healthdata"))
                                                 startActivity(intent)
@@ -295,13 +298,15 @@ class MainActivity : ComponentActivity() {
                                                 try {
                                                     startActivity(Intent("android.settings.HEALTH_CONNECT_SETTINGS"))
                                                 } catch (e2: Exception) {
-                                                    Toast.makeText(this@MainActivity, "无法打开授权界面，请手动设置", Toast.LENGTH_SHORT).show()
+                                                    val isEn = chatViewModel.appLanguage.value == "en"
+                                                    Toast.makeText(this@MainActivity, if (isEn) "Couldn't open the permissions screen. Please set it up manually" else "无法打开授权界面，请手动设置", Toast.LENGTH_SHORT).show()
                                                 }
                                             }
                                         }
                                     } catch (e: Exception) {
                                         Log.e("MainActivity", "onHealthConnectClick Error", e)
-                                        Toast.makeText(this@MainActivity, "异常: ${e.message}", Toast.LENGTH_LONG).show()
+                                        val isEn = chatViewModel.appLanguage.value == "en"
+                                        Toast.makeText(this@MainActivity, if (isEn) "Error: ${e.message}" else "异常: ${e.message}", Toast.LENGTH_LONG).show()
                                     }
                                 },
                                 onBackClick = { navController.popBackStack() },

@@ -4555,25 +4555,25 @@ fun MultimodalSettingsLayout(
 // ---------- 多模态通用组件 ----------
 
 /** 预置选项：value 为实际值，name 为显示名 */
-private data class PresetOption(val value: String, val name: String)
+private data class PresetOption(val value: String, val name: String, val nameEn: String = name)
 
 private val sttModelPresets = listOf(
-    PresetOption("mimo-v2.5-asr", "MiMo 语音转写 (v2.5)"),
+    PresetOption("mimo-v2.5-asr", "MiMo 语音转写 (v2.5)", "MiMo STT (v2.5)"),
     PresetOption("whisper-1", "OpenAI Whisper-1"),
     PresetOption("gpt-4o-transcribe", "OpenAI GPT-4o Transcribe"),
-    PresetOption("paraformer-realtime-v2", "阿里 Paraformer (实时)")
+    PresetOption("paraformer-realtime-v2", "阿里 Paraformer (实时)", "Alibaba Paraformer (Real-time)")
 )
 
 private val visionModelPresets = listOf(
     PresetOption("gpt-4o-mini", "GPT-4o mini"),
     PresetOption("gpt-4o", "GPT-4o"),
-    PresetOption("qwen-vl-max", "通义千问 qwen-vl-max"),
-    PresetOption("glm-4v-plus", "智谱 GLM-4V-Plus"),
+    PresetOption("qwen-vl-max", "通义千问 qwen-vl-max", "Qwen qwen-vl-max"),
+    PresetOption("glm-4v-plus", "智谱 GLM-4V-Plus", "Zhipu GLM-4V-Plus"),
     PresetOption("claude-3-5-sonnet", "Claude 3.5 Sonnet")
 )
 
 private val imageGenModelPresets = listOf(
-    PresetOption("mimo-v2.5-images", "MiMo 图像生成 (v2.5)"),
+    PresetOption("mimo-v2.5-images", "MiMo 图像生成 (v2.5)", "MiMo Image Generation (v2.5)"),
     PresetOption("dall-e-3", "OpenAI DALL-E 3"),
     PresetOption("dall-e-2", "OpenAI DALL-E 2"),
     PresetOption("stable-diffusion-xl", "Stable Diffusion XL")
@@ -4677,7 +4677,7 @@ private fun PresetSelector(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                     Text(
-                        text = matched?.name ?: value,
+                        text = (if (isEn) matched?.nameEn else matched?.name) ?: value,
                         fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onBackground,
                         maxLines = 1,
@@ -4706,7 +4706,7 @@ private fun PresetSelector(
             ) {
                 presets.forEach { preset ->
                     DropdownMenuItem(
-                        text = { Text(preset.name, fontSize = 13.sp) },
+                        text = { Text(if (isEn) preset.nameEn else preset.name, fontSize = 13.sp) },
                         onClick = {
                             onValueChange(preset.value)
                             expanded = false

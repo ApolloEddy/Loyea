@@ -733,18 +733,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 withContext(Dispatchers.Main) {
                     characterCardList.value = cards
                     characterBookViews.value = newBooks
-                    val base = if (isUpdate) "已更新角色卡 [${doc.profile.name}]" else "成功导入角色卡 [${doc.profile.name}]"
-                    val hint = if (result.report.unsupported.isNotEmpty()) "（部分能力暂不支持，已保留原文）" else ""
+                    val isEn = appLanguage.value == "en"
+                    val base = if (isUpdate) {
+                        if (isEn) "Character card updated [${doc.profile.name}]" else "已更新角色卡 [${doc.profile.name}]"
+                    } else {
+                        if (isEn) "Character card imported [${doc.profile.name}]" else "成功导入角色卡 [${doc.profile.name}]"
+                    }
+                    val hint = if (result.report.unsupported.isNotEmpty()) {
+                        if (isEn) " (some capabilities are not supported yet; original text preserved)" else "（部分能力暂不支持，已保留原文）"
+                    } else ""
                     onResult(CharacterImportOutcome(true, base + hint))
                 }
             } catch (e: com.loyea.character.core.api.ImportFailure) {
                 withContext(Dispatchers.Main) {
-                    onResult(CharacterImportOutcome(false, e.message ?: "导入失败"))
+                    onResult(CharacterImportOutcome(false, e.message ?: if (appLanguage.value == "en") "Import failed" else "导入失败"))
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
                 withContext(Dispatchers.Main) {
-                    onResult(CharacterImportOutcome(false, "导入失败: ${e.localizedMessage}"))
+                    onResult(CharacterImportOutcome(false, if (appLanguage.value == "en") "Import failed: ${e.localizedMessage}" else "导入失败: ${e.localizedMessage}"))
                 }
             }
         }
@@ -877,7 +884,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         // 重入保护：AI 回复流式输出中禁止并发发起第二轮请求（文本/语音/音频理解路径统一拦截）
         if (responseJob?.isActive == true) {
-            android.widget.Toast.makeText(context, "AI 正在回复中，请稍候或点击停止", android.widget.Toast.LENGTH_SHORT).show()
+            android.widget.Toast.makeText(context, if (appLanguage.value == "en") "AI is replying. Please wait or tap stop" else "AI 正在回复中，请稍候或点击停止", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -936,7 +943,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun regenerateLastReply() {
         if (responseJob?.isActive == true) {
-            android.widget.Toast.makeText(context, "AI 正在回复中，请稍候或点击停止", android.widget.Toast.LENGTH_SHORT).show()
+            android.widget.Toast.makeText(context, if (appLanguage.value == "en") "AI is replying. Please wait or tap stop" else "AI 正在回复中，请稍候或点击停止", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
         val current = messages.value
@@ -1215,7 +1222,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun regenerateSessionTitle(sessionId: String) {
         if (titleGenerationInFlight.contains(sessionId)) {
-            android.widget.Toast.makeText(context, "标题生成中，请稍候", android.widget.Toast.LENGTH_SHORT).show()
+            android.widget.Toast.makeText(context, if (appLanguage.value == "en") "Generating title, please wait" else "标题生成中，请稍候", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
         viewModelScope.launch(Dispatchers.IO) {
@@ -1463,7 +1470,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         isThinking.value = false
                         android.widget.Toast.makeText(
                             context,
-                            "世界书常驻内容超出预算：请在世界书设置中增大 Token 预算或缩减条目后重试",
+                            if (appLanguage.value == "en") "World info constant content exceeds the token budget. Please increase the token budget or reduce entries in World Info settings, then retry"
+                            else "世界书常驻内容超出预算：请在世界书设置中增大 Token 预算或缩减条目后重试",
                             android.widget.Toast.LENGTH_LONG
                         ).show()
                     }
@@ -1574,7 +1582,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     withContext(Dispatchers.Main) {
                         android.widget.Toast.makeText(
                             context,
-                            "上下文整理失败，本轮发送包含更多历史；可重试以重新整理",
+                            if (appLanguage.value == "en") "Context consolidation failed; this turn sends more history. You can retry to consolidate again"
+                            else "上下文整理失败，本轮发送包含更多历史；可重试以重新整理",
                             android.widget.Toast.LENGTH_LONG
                         ).show()
                     }
@@ -1982,16 +1991,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                                     currentList = updateMcpCall(currentList, aiMessageId, displayCallId) {
                                                         it.copy(
                                                             status = McpStatus.FAILED,
-                                                            output = "[错误] 语音解析失败"
+                                                            output = if (appLanguage.value == "en") "[Error] Failed to parse the synthesized audio" else "[错误] 语音解析失败"
                                                         )
                                                     }
                                                 }
                                             } else {
-                                                val err = ttsResult.errorMsg ?: "未知错误"
+                                                val err = ttsResult.errorMsg ?: if (appLanguage.value == "en") "Unknown error" else "未知错误"
                                                 currentList = updateMcpCall(currentList, aiMessageId, displayCallId) {
                                                     it.copy(
                                                         status = McpStatus.FAILED,
-                                                        output = "[错误] 合成失败: $err"
+                                                        output = if (appLanguage.value == "en") "[Error] Synthesis failed: $err" else "[错误] 合成失败: $err"
                                                     )
                                                 }
                                             }
@@ -2038,7 +2047,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 else -> translateToolName(it.name, isEnNote)
                             }
                         }
-                        accumulatedThoughts += "\n\n💡 *（已在此处调用接口感知状态：$executedToolsStr）*\n\n"
+                        accumulatedThoughts += if (isEnNote) "\n\n💡 *(Perception APIs called here: $executedToolsStr)*\n\n"
+                        else "\n\n💡 *（已在此处调用接口感知状态：$executedToolsStr）*\n\n"
                         currentList = messages.value.map { msg ->
                             if (msg.id == aiMessageId) {
                                 msg.copy(thoughts = accumulatedThoughts)
@@ -2126,10 +2136,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             } catch (t: Throwable) {
                 if (t is kotlinx.coroutines.CancellationException) throw t
                 Log.e("ChatViewModel", "FATAL in startAiResponseStream", t)
+                val isEnErr = appLanguage.value == "en"
                 val errMsg = when (t) {
-                    is OutOfMemoryError -> "[崩溃防护] 内存不足，请重启应用"
-                    is StackOverflowError -> "[崩溃防护] 调用栈溢出"
-                    else -> "[错误] ${t.javaClass.simpleName}: ${t.message ?: "未知错误"}"
+                    is OutOfMemoryError -> if (isEnErr) "[Crash guard] Out of memory. Please restart the app" else "[崩溃防护] 内存不足，请重启应用"
+                    is StackOverflowError -> if (isEnErr) "[Crash guard] Stack overflow" else "[崩溃防护] 调用栈溢出"
+                    else -> if (isEnErr) "[Error] ${t.javaClass.simpleName}: ${t.message ?: "Unknown error"}" else "[错误] ${t.javaClass.simpleName}: ${t.message ?: "未知错误"}"
                 }
                 currentList = currentList.map { msg ->
                     if (msg.id == aiMessageId) {
@@ -3298,7 +3309,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 audioFile = null
                 if (isQuiet && file != null) {
                     try { file.delete() } catch (e: Exception) {}
-                    android.widget.Toast.makeText(context, "未检测到说话声音，请检查麦克风权限或设备硬件", android.widget.Toast.LENGTH_LONG).show()
+                    android.widget.Toast.makeText(context, if (appLanguage.value == "en") "No speech detected. Please check the microphone permission or device hardware" else "未检测到说话声音，请检查麦克风权限或设备硬件", android.widget.Toast.LENGTH_LONG).show()
                     onFinished(null, 0)
                 } else {
                     onFinished(file, durationSec)
@@ -3495,7 +3506,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 messages.value = messages.value.map { msg ->
                     if (msg.id == parentMessageId) {
                         msg.copy(mcpCalls = msg.mcpCalls.map { c ->
-                            if (c.id == mcpCallId) c.copy(status = McpStatus.RUNNING, output = "重新合成中...") else c
+                            if (c.id == mcpCallId) c.copy(status = McpStatus.RUNNING, output = if (appLanguage.value == "en") "Re-synthesizing..." else "重新合成中...") else c
                         })
                     } else {
                         msg
@@ -3539,7 +3550,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                     messages.value = messages.value.map { msg ->
                                         if (msg.id == parentMessageId) {
                                             msg.copy(mcpCalls = msg.mcpCalls.map { c ->
-                                                if (c.id == mcpCallId) c.copy(status = McpStatus.FAILED, output = "[错误] 语音解析失败") else c
+                                                if (c.id == mcpCallId) c.copy(status = McpStatus.FAILED, output = if (appLanguage.value == "en") "[Error] Failed to parse the synthesized audio" else "[错误] 语音解析失败") else c
                                             })
                                         } else {
                                             msg
@@ -3547,11 +3558,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                     }
                                 }
                             } else {
-                                val err = ttsResult.errorMsg ?: "未知错误"
+                                val err = ttsResult.errorMsg ?: if (appLanguage.value == "en") "Unknown error" else "未知错误"
                                 messages.value = messages.value.map { msg ->
                                     if (msg.id == parentMessageId) {
                                         msg.copy(mcpCalls = msg.mcpCalls.map { c ->
-                                            if (c.id == mcpCallId) c.copy(status = McpStatus.FAILED, output = "[错误] 重新合成失败: $err") else c
+                                            if (c.id == mcpCallId) c.copy(status = McpStatus.FAILED, output = if (appLanguage.value == "en") "[Error] Re-synthesis failed: $err" else "[错误] 重新合成失败: $err") else c
                                         })
                                     } else {
                                         msg
@@ -3563,11 +3574,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } else {
                 Log.e("ChatViewModel", "无法获取合成文本，文本内容为空")
-                android.widget.Toast.makeText(context, "无法获取该历史语音对应的原始文本", android.widget.Toast.LENGTH_SHORT).show()
+                android.widget.Toast.makeText(context, if (appLanguage.value == "en") "Couldn't retrieve the original text for this voice message" else "无法获取该历史语音对应的原始文本", android.widget.Toast.LENGTH_SHORT).show()
             }
         } else {
             Log.e("ChatViewModel", "无法找到对应的历史语音工具调用: $mcpCallId")
-            android.widget.Toast.makeText(context, "未找到该语音对应的历史记录", android.widget.Toast.LENGTH_SHORT).show()
+            android.widget.Toast.makeText(context, if (appLanguage.value == "en") "No history record found for this voice message" else "未找到该语音对应的历史记录", android.widget.Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -3606,7 +3617,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             resolveTtsConfig().provider.contains("mimo", ignoreCase = true)
         )
         if (cleanedText.isBlank()) {
-            android.widget.Toast.makeText(context, "文字内容为空，无法进行语音合成", android.widget.Toast.LENGTH_SHORT).show()
+            android.widget.Toast.makeText(context, if (appLanguage.value == "en") "Text is empty; nothing to synthesize" else "文字内容为空，无法进行语音合成", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -3651,12 +3662,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         saveMessagesAsync(sessionId, updatedMsgs)
                         playAudioFile(messageId, ttsFile)
                     } else {
-                        android.widget.Toast.makeText(context, "合成文件解析失败", android.widget.Toast.LENGTH_SHORT).show()
+                        android.widget.Toast.makeText(context, if (appLanguage.value == "en") "Failed to parse the synthesized audio file" else "合成文件解析失败", android.widget.Toast.LENGTH_SHORT).show()
                     }
                 } else {
-                    val err = ttsResult.errorMsg ?: "未知错误"
+                    val err = ttsResult.errorMsg ?: if (appLanguage.value == "en") "Unknown error" else "未知错误"
                     Log.e("ChatViewModel", "TTS generation failed: $err")
-                    android.widget.Toast.makeText(context, "语音合成失败: $err", android.widget.Toast.LENGTH_LONG).show()
+                    android.widget.Toast.makeText(context, if (appLanguage.value == "en") "Speech synthesis failed: $err" else "语音合成失败: $err", android.widget.Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -3709,7 +3720,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             playAudioFile(messageId, file)
         } else {
             Log.e("ChatViewModel", "Audio file not found: $audioUrl")
-            android.widget.Toast.makeText(context, "音频文件不存在或已损坏", android.widget.Toast.LENGTH_SHORT).show()
+            android.widget.Toast.makeText(context, if (appLanguage.value == "en") "Audio file is missing or corrupted" else "音频文件不存在或已损坏", android.widget.Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -3755,7 +3766,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
         } catch (e: Exception) {
             Log.e("ChatViewModel", "播放音频文件发生异常: ${e.message}", e)
-            android.widget.Toast.makeText(context, "音频播放失败: ${e.localizedMessage ?: e.message}", android.widget.Toast.LENGTH_SHORT).show()
+            android.widget.Toast.makeText(context, if (appLanguage.value == "en") "Audio playback failed: ${e.localizedMessage ?: e.message}" else "音频播放失败: ${e.localizedMessage ?: e.message}", android.widget.Toast.LENGTH_SHORT).show()
             stopAudio()
         }
     }
@@ -3943,7 +3954,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun transcribeAndSendAudio(file: File, duration: Int, onFailed: (String) -> Unit = {}) {
         // 重入拦截：AI 回复流式输出中禁止语音路径并发发起第二轮请求（转写耗时窗口内流可能仍在运行）
         if (responseJob?.isActive == true) {
-            onFailed("AI 正在回复中，请稍候再说话")
+            onFailed(if (appLanguage.value == "en") "AI is replying. Please wait a moment before speaking" else "AI 正在回复中，请稍候再说话")
             return
         }
         // 音频理解模式：仅当当前主模型支持音频输入（input_audio）时才直接发送语音，
@@ -3992,7 +4003,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     if (!cleanedText.isNullOrBlank()) {
                         sendMessage(cleanedText, null, file.absolutePath, duration)
                     } else {
-                        val errorReason = llmClient.lastAsrError ?: "未提取到有效文字"
+                        val errorReason = llmClient.lastAsrError ?: if (appLanguage.value == "en") "No valid speech recognized" else "未提取到有效文字"
                         onFailed(errorReason)
                     }
                 }
@@ -4001,7 +4012,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 Log.e("ChatViewModel", "ASR transcribe error", e)
                 withContext(Dispatchers.Main) {
                     isThinking.value = false
-                    onFailed(e.localizedMessage ?: "语音转写异常，请重试")
+                    onFailed(e.localizedMessage ?: if (appLanguage.value == "en") "Voice transcription failed. Please try again" else "语音转写异常，请重试")
                 }
             }
         }
@@ -4043,7 +4054,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val aiMessageId = newMessageId()
         val aiMsg = Message(
             id = aiMessageId,
-            content = "正在为您生成图像，请稍候...",
+            content = if (appLanguage.value == "en") "Generating your image, please wait..." else "正在为您生成图像，请稍候...",
             sender = Sender.AI,
             isStillThinking = true,
             characterId = activeCard.id
@@ -4098,7 +4109,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
                         // 将最终图片和消息更新（会话守卫：生图期间用户可能已切走，UI 仅在本会话前台时更新）
                         withContext(Dispatchers.Main) {
-                            val updatedContent = "AI 已为您生成图像，提示词：\"$prompt\""
+                            val updatedContent = if (appLanguage.value == "en") "AI has generated an image. Prompt: \"$prompt\""
+                            else "AI 已为您生成图像，提示词：\"$prompt\""
                             val currentList = messages.value.map { msg ->
                                 if (msg.id == aiMessageId) {
                                     msg.copy(
@@ -4118,10 +4130,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 } else {
                     // 生图失败（会话守卫同成功分支）
+                    val isEnImg = appLanguage.value == "en"
                     val currentList = messages.value.map { msg ->
                         if (msg.id == aiMessageId) {
                             msg.copy(
-                                content = "图像生成失败：${imageFailReason ?: "请检查您的生图 API 配置或网络连接"}",
+                                content = if (isEnImg) "Image generation failed: ${imageFailReason ?: "Please check your image generation API settings or network connection"}"
+                                else "图像生成失败：${imageFailReason ?: "请检查您的生图 API 配置或网络连接"}",
                                 isStillThinking = false,
                                 isError = true
                             )
@@ -4198,7 +4212,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun fetchTemplatesFromNetwork() {
         viewModelScope.launch(Dispatchers.IO) {
             isUpdatingTemplates.value = true
-            updateTemplatesStatus.value = "正在从云端拉取最新模板配置..."
+            updateTemplatesStatus.value = if (appLanguage.value == "en") "Fetching the latest template config from the cloud..." else "正在从云端拉取最新模板配置..."
             try {
                 val client = okhttp3.OkHttpClient.Builder()
                     .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
@@ -4225,14 +4239,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                     jsonResult = body
                                     success = true
                                 } else {
-                                    errors.add("响应数据为空或格式不匹配")
+                                    errors.add(if (appLanguage.value == "en") "Response was empty or in an unexpected format" else "响应数据为空或格式不匹配")
                                 }
                             } else {
-                                errors.add("HTTP 错误 ${response.code}")
+                                errors.add(if (appLanguage.value == "en") "HTTP error ${response.code}" else "HTTP 错误 ${response.code}")
                             }
                         }
                     } catch (e: Exception) {
-                        errors.add(e.localizedMessage ?: e.message ?: "网络超时")
+                        errors.add(e.localizedMessage ?: e.message ?: if (appLanguage.value == "en") "Network timeout" else "网络超时")
                     }
                 }
 
@@ -4240,16 +4254,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     prefs.edit().putString("multimodal_templates_json", jsonResult).apply()
                     withContext(Dispatchers.Main) {
                         loadTemplatesFromJson(jsonResult)
-                        updateTemplatesStatus.value = "更新成功！已同步云端最新模板配置"
+                        updateTemplatesStatus.value = if (appLanguage.value == "en") "Update succeeded! Synced the latest template config from the cloud" else "更新成功！已同步云端最新模板配置"
                     }
                 } else {
                     withContext(Dispatchers.Main) {
-                        updateTemplatesStatus.value = "更新失败（${errors.joinToString("；")}），已保留本地内置模板。请确认仓库根目录 assets/multimodal_templates.json 已推送到 GitHub"
+                        updateTemplatesStatus.value = if (appLanguage.value == "en")
+                            "Update failed (${errors.joinToString("; ")}). Local built-in templates kept. Please make sure assets/multimodal_templates.json at the repository root has been pushed to GitHub"
+                        else "更新失败（${errors.joinToString("；")}），已保留本地内置模板。请确认仓库根目录 assets/multimodal_templates.json 已推送到 GitHub"
                     }
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    updateTemplatesStatus.value = "更新失败: ${e.localizedMessage}，已为您保留本地内置模板"
+                    updateTemplatesStatus.value = if (appLanguage.value == "en") "Update failed: ${e.localizedMessage}. Local built-in templates kept"
+                    else "更新失败: ${e.localizedMessage}，已为您保留本地内置模板"
                 }
             } finally {
                 withContext(Dispatchers.Main) {

@@ -170,7 +170,7 @@ fun WorldInfoLibraryScreen(
                 return@rememberLauncherForActivityResult
             }
             scope.launch(Dispatchers.IO) {
-                runCatching { vm.worldInfoLibrary.createOwnedBook(name = "导入的世界书", entries = imported, imported = true) }
+                runCatching { vm.worldInfoLibrary.createOwnedBook(name = if (isEn) "Imported book" else "导入的世界书", entries = imported, imported = true) }
                 withContext(Dispatchers.Main) {
                     Toast.makeText(context, if (isEn) "Imported ${imported.size} entries" else "已导入 ${imported.size} 条条目", Toast.LENGTH_SHORT).show()
                     reload()
@@ -1012,7 +1012,7 @@ private fun WorldInfoBookDetailContent(
                 Spacer(modifier = Modifier.height(12.dp))
                 if (entry.keywords.isNotEmpty()) {
                     Text(
-                        text = (if (isEn) "Keywords: " else "关键词：") + entry.keywords.joinToString("、"),
+                        text = (if (isEn) "Keywords: " else "关键词：") + entry.keywords.joinToString(if (isEn) ", " else "、"),
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f)
                     )
@@ -1472,7 +1472,7 @@ private fun WorldInfoEditDialog(
                     value = keywordsInput,
                     onValueChange = { keywordsInput = it },
                     label = { Text(if (isEn) "Trigger keywords (comma separated)" else "触发关键词（逗号分隔）") },
-                    placeholder = { Text(if (isEn) "e.g. 学院, 魔法, school" else "例如：学院, 魔法, 咖啡") },
+                    placeholder = { Text(if (isEn) "e.g. school, magic, academy" else "例如：学院, 魔法, 咖啡") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )

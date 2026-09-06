@@ -208,8 +208,8 @@ fun TavernScreen(
                         TavernCardItem(
                             card = card,
                             appLanguage = appLanguage,
-                            onExportPng = { shareCharacterCardPng(context, card) },
-                            onExportJson = { shareCharacterCardJson(context, card) },
+                            onExportPng = { shareCharacterCardPng(context, card, isEn) },
+                            onExportJson = { shareCharacterCardJson(context, card, isEn) },
                             onEdit = { cardToEdit = card },
                             onDelete = { cardToDelete = card },
                             bookView = characterBooks[card.id],
@@ -227,8 +227,8 @@ fun TavernScreen(
                         TavernCardItem(
                             card = card,
                             appLanguage = appLanguage,
-                            onExportPng = { shareCharacterCardPng(context, card) },
-                            onExportJson = { shareCharacterCardJson(context, card) },
+                            onExportPng = { shareCharacterCardPng(context, card, isEn) },
+                            onExportJson = { shareCharacterCardJson(context, card, isEn) },
                             onEdit = { cardToEdit = card },
                             onDelete = { cardToDelete = card },
                             bookView = characterBooks[card.id],
@@ -418,7 +418,7 @@ fun TavernCardItem(
                 Divider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "System Prompt (核心人设):",
+                        text = if (isEn) "System Prompt:" else "System Prompt (核心人设):",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
@@ -437,7 +437,7 @@ fun TavernCardItem(
 
                     if (card.personality.isNotBlank()) {
                         Text(
-                            text = "Personality (性格特征):",
+                            text = if (isEn) "Personality:" else "Personality (性格特征):",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
@@ -457,7 +457,7 @@ fun TavernCardItem(
 
                     if (card.scenario.isNotBlank()) {
                         Text(
-                            text = "Scenario (对话场景):",
+                            text = if (isEn) "Scenario:" else "Scenario (对话场景):",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
@@ -477,7 +477,7 @@ fun TavernCardItem(
 
                     if (card.firstMessage.isNotBlank()) {
                         Text(
-                            text = "First Message (首句打招呼):",
+                            text = if (isEn) "Greeting:" else "First Message (首句打招呼):",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
@@ -500,7 +500,7 @@ fun TavernCardItem(
                         Text(
                             text = (if (isEn) "Embedded World Info: " else "内嵌世界书: ") +
                                 "${bookView.entries.size} " + (if (isEn) "entries" else "条") +
-                                (if (constantCount > 0) "（${constantCount} " + (if (isEn) "constant" else "常驻") + "）" else ""),
+                                (if (constantCount > 0) (if (isEn) " (${constantCount} constant)" else "（${constantCount} 常驻）") else ""),
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
@@ -509,9 +509,9 @@ fun TavernCardItem(
                             text = bookView.entries.joinToString("\n\n") { e ->
                                 buildString {
                                     val tag = when {
-                                        e.constant -> "[常驻]"
-                                        !e.enabled -> "[禁用]"
-                                        else -> "[条件]"
+                                        e.constant -> if (isEn) "[Constant]" else "[常驻]"
+                                        !e.enabled -> if (isEn) "[Disabled]" else "[禁用]"
+                                        else -> if (isEn) "[Conditional]" else "[条件]"
                                     }
                                     append(tag)
                                     if (e.keys.isNotEmpty()) append(" " + e.keys.joinToString("/"))
@@ -546,7 +546,7 @@ fun TavernCardItem(
 
                     if (card.chatExamples.isNotBlank()) {
                         Text(
-                            text = "Examples (少样本范例):",
+                            text = if (isEn) "Example Dialogues:" else "Examples (少样本范例):",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
@@ -1462,7 +1462,7 @@ fun injectTavernMetadata(pngBytes: ByteArray, jsonBase64: String): ByteArray {
 /**
  * 分享 PNG 隐写角色卡
  */
-fun shareCharacterCardPng(context: Context, card: CharacterCard) {
+fun shareCharacterCardPng(context: Context, card: CharacterCard, isEn: Boolean = false) {
     try {
         val jsonV2 = buildTavernValueV2Json(card)
         val base64Json = android.util.Base64.encodeToString(jsonV2.toByteArray(java.nio.charset.StandardCharsets.UTF_8), android.util.Base64.NO_WRAP)
@@ -1515,17 +1515,17 @@ fun shareCharacterCardPng(context: Context, card: CharacterCard) {
             putExtra(android.content.Intent.EXTRA_STREAM, fileUri)
             addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        context.startActivity(android.content.Intent.createChooser(intent, "分享 PNG 角色卡"))
+        context.startActivity(android.content.Intent.createChooser(intent, if (isEn) "Share PNG character card" else "分享 PNG 角色卡"))
     } catch (e: Exception) {
         e.printStackTrace()
-        Toast.makeText(context, "分享失败: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "${if (isEn) "Share failed" else "分享失败"}: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
     }
 }
 
 /**
  * 分享 JSON 配置文件
  */
-fun shareCharacterCardJson(context: Context, card: CharacterCard) {
+fun shareCharacterCardJson(context: Context, card: CharacterCard, isEn: Boolean = false) {
     try {
         val jsonV2 = buildTavernValueV2Json(card)
         val exportsDir = File(context.cacheDir, "exports")
@@ -1543,9 +1543,9 @@ fun shareCharacterCardJson(context: Context, card: CharacterCard) {
             putExtra(android.content.Intent.EXTRA_STREAM, fileUri)
             addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        context.startActivity(android.content.Intent.createChooser(intent, "分享 JSON 配置文件"))
+        context.startActivity(android.content.Intent.createChooser(intent, if (isEn) "Share JSON config" else "分享 JSON 配置文件"))
     } catch (e: Exception) {
         e.printStackTrace()
-        Toast.makeText(context, "分享失败: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "${if (isEn) "Share failed" else "分享失败"}: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
     }
 }
