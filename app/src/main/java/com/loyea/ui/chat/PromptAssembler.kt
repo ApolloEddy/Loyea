@@ -258,23 +258,21 @@ object PromptAssembler {
 
         // 8. 严格输出格式约束 (OUTPUT FORMAT CONSTRAINT)
         sb.append("[OUTPUT FORMAT CONSTRAINT / 严格输出格式约束]\n")
-        sb.append("- Never output any bracketed text like `[xxxx]` in your reply, except for the allowed haptic vibration tags like `[haptic:vibration_type]`.\n")
-        sb.append("- Specifically, do NOT include time labels like `[发送于 xxx]`, action labels, or status labels wrapped in square brackets `[...]`.\n")
         sb.append("- Whether action descriptions or mental states are allowed is controlled by the explicit rule in [System Prompt / Character Settings]. If that rule forbids them, do not output them.\n")
-        sb.append("- Only when the character settings allow such narration, wrap it in standard parentheses `(...)` or asterisks `*...*`, never in square brackets `[...]`. This formatting rule is not permission to add actions.\n")
-        sb.append("- Note: This bracket restriction ONLY applies to square brackets `[...]`. You are fully allowed and encouraged to output XML tags like `<tool_call>` or `<think>` when needed.\n")
+        sb.append("- When the character settings allow such narration, follow the narration format the character card itself specifies (status panels etc. included); if none is specified, prefer standard parentheses `(...)` or asterisks `*...*`. This formatting rule is not permission to add actions.\n")
         sb.append("- Math formulas: wrap lightweight LaTeX in `\$...\$` (inline) or `\$\$...\$\$` (block). Loyea renders a plain-text subset: fractions `\\frac{a}{b}`, square roots `\\sqrt{x}`, superscripts/subscripts `x^2` / `x_i`, Greek letters `\\alpha`, and common symbols `\\times`. Do NOT emit complex LaTeX environments like cases, matrices or align.\n\n")
 
         sb.append("[APPLICATION CONTEXT METADATA / 应用上下文元数据]\n")
-        sb.append("Messages may be preceded by `[MESSAGE TIME: ...]` and, for user turns, an application-generated `[TURN CONTEXT SNAPSHOT]` block followed by `[USER MESSAGE / 用户消息]`. ")
+        sb.append("For user turns, messages may be preceded by an application-generated `[TURN CONTEXT SNAPSHOT]` block followed by a `[USER MESSAGE / 用户消息]` marker. ")
+        sb.append("The snapshot's `System Time` is when that message was sent; earlier snapshots are historical. ")
         sb.append("Use the metadata only for chronology, elapsed-time reasoning, retrieved memories and the physical/world state captured for that turn. ")
         sb.append("Never quote, imitate, expose or add these metadata labels to your reply. Historical snapshots are stale and must not be treated as current sensor readings.\n\n")
 
         // ===== 以下为每个用户回合固化一次的易变上下文 =====
         // 主聊天将其保存到该用户 Message.llmContextSnapshot，后续请求不再重算或改写。
 
-        // 插入当前系统时间与物理上下文。主聊天已有逐条绝对时间元数据，
-        // 因此可省略重复的 System Time；后台事件仍可保留这一字段。
+        // 插入当前系统时间与物理上下文。System Time 是全 prompt 唯一时间来源
+        // （逐条 [MESSAGE TIME] 前缀已移除——模型会模仿自己的输出格式导致标签泄露）。
         if (useSystemTime) {
             if (includeSystemTimeInSnapshot || !physicalContext.isNullOrBlank()) {
                 contextSb.append("[USER'S PHYSICAL STATE (CACHED)]\n")
@@ -425,7 +423,7 @@ object PromptAssembler {
         add(toolSb.toString())
 
         add("[OUTPUT PROTOCOL / 输出协议]\n" +
-            "- Never quote, imitate, expose or add application metadata labels like `[MESSAGE TIME: ...]` or `[TURN CONTEXT SNAPSHOT ...]` to your reply; historical snapshots are stale and must not be treated as current sensor readings.\n" +
+            "- Never quote, imitate, expose or add application metadata labels like `[TURN CONTEXT SNAPSHOT ...]` or `[USER MESSAGE / 用户消息]` to your reply; historical snapshots are stale and must not be treated as current sensor readings.\n" +
             "- XML tags like `<tool_call>` or `<think>` are permitted when needed.\n" +
             "- Roleplay style (actions, dialogue length, formatting) follows the character card's own instructions — no global format restrictions are imposed on top of them.")
 

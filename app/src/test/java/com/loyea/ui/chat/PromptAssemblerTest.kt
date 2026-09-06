@@ -102,18 +102,22 @@ class PromptAssemblerTest {
     }
 
     @Test
-    fun messageTimestampCanReplaceRepeatedSystemTimeSnapshot() {
+    fun systemTimeLivesInTurnSnapshotNotPerMessageTags() {
+        // 时间元数据唯一来源 = 回合快照 System Time；逐条 [MESSAGE TIME] 前缀已退役
+        // （模型会模仿自己的输出格式导致标签复述泄露，2026-09-06 根治）
         val parts = PromptAssembler.assemblePromptParts(
             card = card(systemPrompt = "保持角色设定"),
             userName = "Eddy",
             useSystemTime = true,
-            includeSystemTimeInSnapshot = false,
+            includeSystemTimeInSnapshot = true,
             enableVoice = false,
             trustedCard = true
         )
 
-        assertFalse(parts.turnContextSnapshot.contains("System Time:"))
-        assertTrue(parts.stableSystemPrompt.contains("[MESSAGE TIME: ...]"))
+        assertTrue(parts.turnContextSnapshot.contains("System Time:"))
+        assertFalse(parts.stableSystemPrompt.contains("[MESSAGE TIME: ...]"))
+        // 全局方括号禁令已删除：卡片自定义格式（状态面板等）不再被宿主压制
+        assertFalse(parts.stableSystemPrompt.contains("Never output any bracketed text"))
     }
 
     private fun card(systemPrompt: String) = CharacterCard(

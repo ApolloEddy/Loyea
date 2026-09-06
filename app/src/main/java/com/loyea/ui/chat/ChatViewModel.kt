@@ -1476,7 +1476,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             physicalContext = physicalContextData,
                             graphMemory = if (enableGraphMemory.value) graphMemory else null,
                             useSystemTime = sessionUsesSystemTime,
-                            includeSystemTimeInSnapshot = false,
+                            includeSystemTimeInSnapshot = true,
                             snapshotTimeMillis = snapshotTime
                         )
                     } else ""
@@ -1489,7 +1489,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 card = characterCard,
                 userName = userName.value,
                 useSystemTime = sessionUsesSystemTime,
-                includeSystemTimeInSnapshot = false,
+                includeSystemTimeInSnapshot = true,
                 physicalContext = physicalContextData,
                 enableSearch = apiConfig.enableSearch,
                 coreMemories = activeSession.value?.coreMemories ?: emptyList(),
@@ -1581,7 +1581,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 includeVision = includeVision,
                 includeAudio = includeAudioInput,
                 compressedSummary = activeSession.value?.compressedSummary ?: "",
-                includeMessageTimestamps = sessionUsesSystemTime,
+                // 时间元数据只进回合快照（System Time），不再逐条加 [MESSAGE TIME] 前缀：
+                // 逐条标签让模型在模仿自己的输出格式，是标签复述泄露的根因（2026-09-06）
+                includeMessageTimestamps = false,
                 allowPhysicalContext = sessionUsesSystemTime,
                 allowGraphContext = enableGraphMemory.value,
                 postHistoryInstructions = compiledPrompt?.postHistoryBlock?.text ?: "",
