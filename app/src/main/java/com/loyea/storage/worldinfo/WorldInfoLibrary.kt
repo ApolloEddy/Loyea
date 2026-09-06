@@ -167,7 +167,7 @@ class WorldInfoLibrary(private val storageRoot: File) {
             return@withLock ActiveBookResolution(
                 source = source,
                 book = book,
-                entries = adapted.entries.filter { it.uid !in book.disabledUids },
+                entries = applyCardEntryOverrides(adapted.entries, book).filter { it.uid !in book.disabledUids },
                 // Spec §4.3：用户在书上的 config 覆盖 > 卡自带配置；未覆盖时沿用 0.7.1 语义
                 // （卡配置生效、recursionDepthCap 跟随用户全局默认）
                 config = book.config?.let { WorldInfoBridge.toCoreConfig(it) }
@@ -211,6 +211,46 @@ class WorldInfoLibrary(private val storageRoot: File) {
             )
             saveBookInternal(updated)
             updated
+        }
+
+    /**
+     * card 书条目内容编辑（override 层）：整条快照替换，原卡文件一字节不动
+     * （2026-09-06 用户决策）。enabled/disable 语义仍由卡内原生禁用 + disabledUids 决定。
+     */
+    suspend fun saveCardEntryOverride(bookId: String, uid: Int, entry: WorldInfoEntry): WorldInfoBookDocument? =
+        mutex.withLock {
+            val book = loadBookInternal(bookId)?.takeIf { !it.isOwned } ?: return@withLock null
+            val updated = book.copy(
+                entryOverrides = book.entryOverrides + (uid to entry.copy(uid = uid)),
+                updatedAt = System.currentTimeMillis()
+            )
+            saveBookInternal(updated)
+            updated
+        }
+
+    /** 恢复卡原文：清除该条内容 override（条目开关不受影响）。 */
+    suspend fun resetCardEntryOverride(bookId: String, uid: Int): WorldInfoBookDocument? =
+        mutex.withLock {
+            val book = loadBookInternal(bookId)?.takeIf { !it.isOwned } ?: return@withLock null
+            if (uid !in book.entryOverrides) return@withLock book
+            val updated = book.copy(
+                entryOverrides = book.entryOverrides - uid,
+                updatedAt = System.currentTimeMillis()
+            )
+            saveBookInternal(updated)
+            updated
+        }
+
+    /** 内容 override 应用到卡书 core 条目：按 uid 整条替换，enabled 取卡内原生值（开关另算）。 */
+    private fun applyCardEntryOverrides(
+        entries: List<com.loyea.character.core.worldinfo.WorldInfoEntry>,
+        book: WorldInfoBookDocument
+    ): List<com.loyea.character.core.worldinfo.WorldInfoEntry> =
+        if (book.entryOverrides.isEmpty()) entries
+        else entries.map { e ->
+            book.entryOverrides[e.uid]
+                ?.let { WorldInfoBridge.toCoreEntry(it.copy(id = e.id, uid = e.uid, enabled = e.enabled)) }
+                ?: e
         }
 
     /** 会话换书（Spec §4.1 层 1）：绑定后该会话最高优先用这本书。不降级全局标记——
@@ -290,7 +330,7 @@ class WorldInfoLibrary(private val storageRoot: File) {
         val doc = book.originCharacterId?.let { characterStore.load(it) } ?: return@withLock null
         val parsed = doc.embeddedBookJson?.let { CharacterCardCodec.parseCharacterBook(it) }
             ?: return@withLock null
-        CardBookAdapter.toWorldInfoBook(parsed, "view:${book.id}").entries.map { e ->
+        applyCardEntryOverrides(CardBookAdapter.toWorldInfoBook(parsed, "view:${book.id}").entries, book).map { e ->
             val userEnabled = e.uid !in book.disabledUids
             WorldInfoEntry(
                 id = "uid_${e.uid}",
@@ -372,7 +412,7 @@ class WorldInfoLibrary(private val storageRoot: File) {
             val entries = book.originCharacterId
                 ?.let { characterStore.load(it) }?.embeddedBookJson
                 ?.let { json -> CharacterCardCodec.parseCharacterBook(json) }
-                ?.let { parsed -> CardBookAdapter.toWorldInfoBook(parsed, "summary:${book.id}").entries }
+                ?.let { parsed -> applyCardEntryOverrides(CardBookAdapter.toWorldInfoBook(parsed, "summary:${book.id}").entries, book) }
             WorldInfoBookSummary(
                 book = book,
                 totalEntries = entries?.size ?: 0,

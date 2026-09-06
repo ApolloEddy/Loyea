@@ -234,6 +234,106 @@ class WorldInfoLibraryTest {
         assertEquals(2, fallen.entries.size) // 全局书 2 条
     }
 
+    // ---------- 卡书内容 override（2026-09-06 用户决策：卡书条目可编辑，原卡文件不动） ----------
+
+    private fun editedUid2() = WorldInfoEntry(
+        id = "uid_2",
+        keywords = listOf("诊所", "复诊"),
+        content = "被用户改写的诊所设定",
+        enabled = true,
+        uid = 2,
+        constant = true
+    )
+
+    @Test
+    fun `card entry content override reaches resolution detail and counts while card file stays untouched`() = runBlocking {
+        val root = makeRoot()
+        seedLegacyData(root)
+        val cardFile = File(root, "characters/char_lin.json")
+        val before = cardFile.readBytes()
+        val library = WorldInfoLibrary(root)
+        library.migrateIfNeeded()
+        val cardBook = library.loadAllBooks().first { it.origin == WorldInfoBookOrigin.CARD }
+
+        library.saveCardEntryOverride(cardBook.id, uid = 2, entry = editedUid2())
+
+        // 详情视图：内容/关键词被替换，uid 不变
+        val view = library.loadCardBookEntries(cardBook.id)!!
+        val e2 = view.first { it.uid == 2 }
+        assertEquals("被用户改写的诊所设定", e2.content)
+        assertEquals(listOf("诊所", "复诊"), e2.keywords)
+        assertTrue(e2.constant)
+
+        // 摘要计数随 override（常驻 1 → 2）
+        assertEquals(2, library.bookOverview(cardBook.id)!!.constantEntries)
+
+        // 解析（无绑定的林芷柔会话 CARD_FOLLOW）：ID 前缀不变、内容生效
+        val resolution = library.resolveActiveBook("s9", "char_lin", defaultConfig())
+        assertEquals(ActiveBookSource.CARD_FOLLOW, resolution.source)
+        val resolved = resolution.entries.first { it.uid == 2 }
+        assertEquals("被用户改写的诊所设定", resolved.content)
+        assertTrue(resolved.id.startsWith("book:${cardBook.id}"))
+
+        // 原卡文件一字节未动
+        assertTrue(before.contentEquals(cardFile.readBytes()))
+    }
+
+    @Test
+    fun `reset card entry override restores original content`() = runBlocking {
+        val root = makeRoot()
+        seedLegacyData(root)
+        val library = WorldInfoLibrary(root)
+        library.migrateIfNeeded()
+        val cardBook = library.loadAllBooks().first { it.origin == WorldInfoBookOrigin.CARD }
+
+        library.saveCardEntryOverride(cardBook.id, uid = 2, entry = editedUid2())
+        library.resetCardEntryOverride(cardBook.id, uid = 2)
+
+        val view = library.loadCardBookEntries(cardBook.id)!!
+        assertEquals("诊所条件设定", view.first { it.uid == 2 }.content)
+        assertTrue(library.loadBook(cardBook.id)!!.entryOverrides.isEmpty())
+    }
+
+    @Test
+    fun `card entry overrides persist across library reload`() = runBlocking {
+        val root = makeRoot()
+        seedLegacyData(root)
+        val library = WorldInfoLibrary(root)
+        library.migrateIfNeeded()
+        val cardBook = library.loadAllBooks().first { it.origin == WorldInfoBookOrigin.CARD }
+
+        library.saveCardEntryOverride(cardBook.id, uid = 2, entry = editedUid2())
+
+        val reloaded = WorldInfoLibrary(root)
+        val view = reloaded.loadCardBookEntries(cardBook.id)!!
+        assertEquals("被用户改写的诊所设定", view.first { it.uid == 2 }.content)
+    }
+
+    @Test
+    fun `content override and disable toggle stay orthogonal`() = runBlocking {
+        val root = makeRoot()
+        seedLegacyData(root)
+        val library = WorldInfoLibrary(root)
+        library.migrateIfNeeded()
+        val cardBook = library.loadAllBooks().first { it.origin == WorldInfoBookOrigin.CARD }
+
+        library.saveCardEntryOverride(cardBook.id, uid = 2, entry = editedUid2())
+        // 开关关掉 → 解析排除该条
+        library.setCardEntryOverride(cardBook.id, uid = 2, enabled = false)
+        assertTrue(library.resolveActiveBook("s9", "char_lin", defaultConfig()).entries.none { it.uid == 2 })
+
+        // 重新打开 → 内容 override 仍在
+        library.setCardEntryOverride(cardBook.id, uid = 2, enabled = true)
+        val resolved = library.resolveActiveBook("s9", "char_lin", defaultConfig()).entries.first { it.uid == 2 }
+        assertEquals("被用户改写的诊所设定", resolved.content)
+
+        // 重置内容不影响开关
+        library.resetCardEntryOverride(cardBook.id, uid = 2)
+        val afterReset = library.resolveActiveBook("s9", "char_lin", defaultConfig()).entries.first { it.uid == 2 }
+        assertEquals("诊所条件设定", afterReset.content)
+        assertFalse(library.loadBook(cardBook.id)!!.disabledUids.contains(2))
+    }
+
     @Test
     fun `owned book resolution filters disabled entries and applies book config`() = runBlocking {
         val root = makeRoot()

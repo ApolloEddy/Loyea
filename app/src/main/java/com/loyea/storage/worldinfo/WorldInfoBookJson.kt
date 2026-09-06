@@ -36,6 +36,11 @@ object WorldInfoBookJson {
         root.addProperty("isGlobalActive", book.isGlobalActive)
         root.add("entries", gson.toJsonTree(book.entries).asJsonArray)
         root.add("disabledUids", JsonArray().apply { book.disabledUids.forEach(::add) })
+        if (book.entryOverrides.isNotEmpty()) {
+            root.add("entryOverrides", JsonObject().apply {
+                book.entryOverrides.forEach { (uid, entry) -> add(uid.toString(), gson.toJsonTree(entry)) }
+            })
+        }
         book.config?.let {
             root.add("config", JsonParser.parseString(WorldInfoConfigStorage.toJson(it)))
         }
@@ -64,6 +69,14 @@ object WorldInfoBookJson {
             disabledUids = root.arrayOrNull("disabledUids")?.mapNotNull { element ->
                 element.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asInt
             } ?: emptyList(),
+            entryOverrides = root.objectOrNull("entryOverrides")?.let { obj ->
+                buildMap {
+                    obj.entrySet().forEach { (key, value) ->
+                        val uid = key.toIntOrNull() ?: return@forEach
+                        (value as? JsonObject)?.let { o -> readEntry(o)?.let { put(uid, it) } }
+                    }
+                }
+            } ?: emptyMap(),
             config = root.objectOrNull("config")?.toString()
                 ?.let { WorldInfoConfigStorage.fromJson(it) }
         )
@@ -105,6 +118,10 @@ object WorldInfoBookJson {
     private fun readEntries(array: JsonArray): List<WorldInfoEntry> = runCatching {
         selfHealEntries(gson.fromJson(array, Array<WorldInfoEntry>::class.java).toList())
     }.getOrDefault(emptyList())
+
+    private fun readEntry(obj: JsonObject): WorldInfoEntry? = runCatching {
+        selfHealEntries(listOf(gson.fromJson(obj, WorldInfoEntry::class.java))).first()
+    }.getOrNull()
 
     private fun JsonObject.objectOrNull(name: String): JsonObject? =
         get(name)?.takeIf { it.isJsonObject }?.asJsonObject

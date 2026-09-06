@@ -963,13 +963,14 @@ private fun WorldInfoBookDetailContent(
                             WorldInfoEntryCard(
                                 entry = entry,
                                 isEn = isEn,
-                                showEdit = false,
+                                showEdit = true,
                                 showDelete = false,
                                 toggleEnabled = !entry.disable,
                                 disabledHint = if (entry.disable) {
                                     if (isEn) "(disabled in card)" else "（卡内已禁用）"
                                 } else null,
-                                onEdit = {},
+                                editedInPlace = currentBook?.entryOverrides?.containsKey(entry.uid) == true,
+                                onEdit = { editingEntry = entry; showEntryEditor = true },
                                 onToggle = { enabled ->
                                     val vm = viewModel ?: return@WorldInfoEntryCard
                                     scope.launch(Dispatchers.IO) {
@@ -987,19 +988,42 @@ private fun WorldInfoBookDetailContent(
     }
 
     // ===== 详情页弹窗 =====
-    if (showEntryEditor && currentBook?.isOwned == true) {
+    if (showEntryEditor && currentBook != null) {
+        val targetBook = currentBook
         WorldInfoEditDialog(
             editingEntry = editingEntry,
             isEn = isEn,
+            entryOverridden = editingEntry?.let { targetBook.entryOverrides.containsKey(it.uid) } == true,
+            onResetOverride = {
+                val uid = editingEntry?.uid
+                if (uid != null) {
+                    showEntryEditor = false
+                    scope.launch(Dispatchers.IO) {
+                        runCatching { viewModel?.worldInfoLibrary?.resetCardEntryOverride(targetBook.id, uid) }
+                        withContext(Dispatchers.Main) { reloadDetail(); onBookMutated() }
+                    }
+                }
+            },
             onSave = { saved ->
                 showEntryEditor = false
-                mutateBook { b ->
-                    val newEntries = if (b.entries.any { it.id == saved.id }) {
-                        b.entries.map { if (it.id == saved.id) saved else it }
-                    } else {
-                        b.entries + saved
+                if (targetBook.isOwned) {
+                    mutateBook { b ->
+                        val newEntries = if (b.entries.any { it.id == saved.id }) {
+                            b.entries.map { if (it.id == saved.id) saved else it }
+                        } else {
+                            b.entries + saved
+                        }
+                        b.copy(entries = newEntries, updatedAt = System.currentTimeMillis())
                     }
-                    b.copy(entries = newEntries, updatedAt = System.currentTimeMillis())
+                } else {
+                    // 卡书：内容改动存 override 层，原卡文件不动
+                    val uid = editingEntry?.uid
+                    if (uid != null) {
+                        scope.launch(Dispatchers.IO) {
+                            runCatching { viewModel?.worldInfoLibrary?.saveCardEntryOverride(targetBook.id, uid, saved) }
+                            withContext(Dispatchers.Main) { reloadDetail(); onBookMutated() }
+                        }
+                    }
                 }
             },
             onDismiss = { showEntryEditor = false }
@@ -1178,7 +1202,8 @@ private fun WorldInfoEntryCard(
     showEdit: Boolean = true,
     showDelete: Boolean = true,
     toggleEnabled: Boolean = true,
-    disabledHint: String? = null
+    disabledHint: String? = null,
+    editedInPlace: Boolean = false
 ) {
     val scrollState = rememberScrollState()
     Card(
@@ -1227,13 +1252,15 @@ private fun WorldInfoEntryCard(
                 Spacer(modifier = Modifier.height(6.dp))
             }
 
-            // 内容预览
+            // 内容（点击展开/收起全文；自建书与卡书一致）
+            var expanded by remember { mutableStateOf(false) }
             Text(
                 text = entry.content,
                 fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis
+                maxLines = if (expanded) Int.MAX_VALUE else 3,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.clickable { expanded = !expanded }
             )
 
             // 元信息行：ST 兼容字段摘要（含 ST v2 高级字段）
@@ -1249,6 +1276,7 @@ private fun WorldInfoEntryCard(
                 if (entry.excludeRecursion) add(if (isEn) "no-recursion" else "禁递归")
                 if (entry.keysContainedIn != "chat") add("src:${entry.keysContainedIn}")
                 if (entry.comment.isNotBlank()) add(if (isEn) "comment: ${entry.comment}" else "备注: ${entry.comment}")
+                if (editedInPlace) add(if (isEn) "edited" else "已改")
                 disabledHint?.let { add(it) }
             }
             if (metaParts.isNotEmpty()) {
@@ -1316,6 +1344,8 @@ private fun WorldInfoEntryCard(
 private fun WorldInfoEditDialog(
     editingEntry: WorldInfoEntry?,
     isEn: Boolean,
+    entryOverridden: Boolean = false,
+    onResetOverride: (() -> Unit)? = null,
     onSave: (WorldInfoEntry) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -1567,6 +1597,11 @@ private fun WorldInfoEditDialog(
                 }
             ) {
                 Text(if (isEn) "Save" else "保存")
+            }
+            if (entryOverridden) {
+                TextButton(onClick = { onResetOverride?.invoke() }) {
+                    Text(if (isEn) "Reset" else "恢复原文")
+                }
             }
         },
         dismissButton = {

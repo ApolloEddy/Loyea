@@ -30,8 +30,9 @@ enum class ActiveBookSource { SESSION_BOUND, CARD_FOLLOW, GLOBAL_ACTIVE, NONE }
  * 书库文档（worldinfo/books/<bookId>.json 的 typed 映射，Spec §3.2）。
  *
  * - owned 书（CREATED/IMPORTED）：entries 为可编辑条目；
- * - card 书（CARD）：entries 恒空，内容实时读 originCharacterId 的 embeddedBookJson，
- *   disabledUids 是唯一可变状态（条目开关 override，不修改卡原文）。
+ * - card 书（CARD）：entries 恒空，内容实时读 originCharacterId 的 embeddedBookJson；
+ *   disabledUids（条目开关）与 entryOverrides（内容编辑快照）是可变状态，
+ *   全部存 override 层，不修改卡原文（2026-09-06 用户决策，修订 Spec「卡书只读」）。
  */
 data class WorldInfoBookDocument(
     val id: String,
@@ -45,6 +46,8 @@ data class WorldInfoBookDocument(
     val isGlobalActive: Boolean = false,
     val entries: List<WorldInfoEntry> = emptyList(),
     val disabledUids: List<Int> = emptyList(),
+    /** 卡书条目内容编辑快照（uid → 用户改后的 app 格式条目）；开关语义仍由 disabledUids 决定。 */
+    val entryOverrides: Map<Int, WorldInfoEntry> = emptyMap(),
     /** null = 继承全局默认配置（Spec §4.3）。 */
     val config: WorldInfoConfig? = null
 ) {
