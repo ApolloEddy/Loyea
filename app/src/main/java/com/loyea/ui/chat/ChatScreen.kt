@@ -183,6 +183,24 @@ fun ChatScreen(
         }
     }
 
+    // 回到底部气泡：追踪用户是否在列表底部 + 离底期间的新消息数
+    val isAtBottom by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull() ?: return@derivedStateOf true
+            last.index >= info.totalItemsCount - 1 && last.offset + last.size <= info.viewportEndOffset + 200
+        }
+    }
+    var unseenBottomCount by remember { mutableIntStateOf(0) }
+    var lastSeenListSize by remember { mutableStateOf(messages.size) }
+    LaunchedEffect(messages.size, isAtBottom) {
+        if (messages.size > lastSeenListSize && !isAtBottom) {
+            unseenBottomCount += messages.size - lastSeenListSize
+        }
+        lastSeenListSize = messages.size
+        if (isAtBottom) unseenBottomCount = 0
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
         topBar = {
@@ -193,7 +211,8 @@ fun ChatScreen(
                         selectedModelName = apiConfig.name,
                         apiConfigList = apiConfigList,
                         onActiveConfigChange = onActiveConfigChange,
-                        session = viewModel?.activeSession?.value
+                        session = viewModel?.activeSession?.value,
+                        appLanguage = appLanguage
                     )
                 },
                 navigationIcon = {
@@ -274,12 +293,12 @@ fun ChatScreen(
                     }
                 )
         ) {
-            // 消息流
+            // 消息流（Box 供"回到底部"气泡悬浮）
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
                 state = listState,
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
+                    .fillMaxSize()
                     .padding(horizontal = 16.dp)
                     // 用户触摸列表 → 停止自动置顶滚动，尊重用户意图
                     .pointerInput(Unit) {
@@ -339,26 +358,26 @@ fun ChatScreen(
                             if (!audioPath.isNullOrBlank() && viewModel != null) {
                                 val audioFile = File(audioPath)
                                 if (audioFile.exists()) {
-                                    Toast.makeText(context, "正在重新转写语音...", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, if (isEn) "Re-transcribing voice..." else "正在重新转写语音...", Toast.LENGTH_SHORT).show()
                                     coroutineScope.launch {
                                         val transcribedText = viewModel.transcribeAudio(audioFile)
                                         if (transcribedText != null) {
                                             viewModel.updateMessageContent(msg.id, transcribedText)
-                                            Toast.makeText(context, "转写成功", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, if (isEn) "Transcription successful" else "转写成功", Toast.LENGTH_SHORT).show()
                                         } else {
                                             val rawError = viewModel.lastAsrError ?: ""
                                             val formatted = when {
-                                                rawError.contains("429") -> "服务商额度已耗尽或被限流 (HTTP 429)，请检查余额"
-                                                rawError.contains("401") -> "API Key 无效或过期 (HTTP 401)"
-                                                rawError.contains("400") -> "接口参数错误 (HTTP 400)，请确保模型名称可用"
+                                                rawError.contains("429") -> if (isEn) "Provider quota exhausted or rate limited (HTTP 429). Please check your balance" else "服务商额度已耗尽或被限流 (HTTP 429)，请检查余额"
+                                                rawError.contains("401") -> if (isEn) "Invalid or expired API key (HTTP 401)" else "API Key 无效或过期 (HTTP 401)"
+                                                rawError.contains("400") -> if (isEn) "Invalid request parameters (HTTP 400). Please make sure the model name is available" else "接口参数错误 (HTTP 400)，请确保模型名称可用"
                                                 rawError.isNotBlank() -> rawError
-                                                else -> "请稍后重试"
+                                                else -> if (isEn) "Please try again later" else "请稍后重试"
                                             }
-                                            Toast.makeText(context, "转写失败：$formatted", Toast.LENGTH_LONG).show()
+                                            Toast.makeText(context, if (isEn) "Transcription failed: $formatted" else "转写失败：$formatted", Toast.LENGTH_LONG).show()
                                         }
                                     }
                                 } else {
-                                    Toast.makeText(context, "语音文件已丢失，无法转写", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, if (isEn) "The voice file is missing and cannot be transcribed" else "语音文件已丢失，无法转写", Toast.LENGTH_SHORT).show()
                                 }
                             }
                         },
@@ -379,6 +398,50 @@ fun ChatScreen(
 
                 // 占位，防止贴底
                 item { Spacer(modifier = Modifier.height(16.dp)) }
+            }
+
+            // 回到底部气泡（主流 AI Chat 交互：离开底部浮现，点击回最新消息；离底期间新消息攒未读数）
+            if (!isAtBottom) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 16.dp, bottom = 8.dp)
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.background)
+                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), CircleShape)
+                        .clickable {
+                            unseenBottomCount = 0
+                            autoPinActive = true
+                            coroutineScope.launch { listState.animateScrollToItem(messages.size) }
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowDown,
+                        contentDescription = if (isEn) "Scroll to bottom" else "回到底部",
+                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                        modifier = Modifier.size(22.dp)
+                    )
+                    if (unseenBottomCount > 0) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .offset(x = 6.dp, y = (-6).dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary)
+                                .padding(horizontal = 5.dp, vertical = 1.dp)
+                        ) {
+                            Text(
+                                text = if (unseenBottomCount > 99) "99+" else unseenBottomCount.toString(),
+                                color = MaterialTheme.colorScheme.background,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
             }
 
             // 1. 已选图片预览卡片
@@ -548,9 +611,9 @@ fun ChatScreen(
                                         if (file != null && duration > 0) {
                                             viewModel.transcribeAndSendAudio(file, duration) { errorMsg ->
                                                 val formatted = when {
-                                                    errorMsg.contains("429") -> "服务商额度已耗尽或被限流 (HTTP 429)，请检查余额"
-                                                    errorMsg.contains("401") -> "API Key 无效或过期 (HTTP 401)"
-                                                    errorMsg.contains("400") -> "接口参数错误 (HTTP 400)，请确保模型名称可用"
+                                                    errorMsg.contains("429") -> if (isEn) "Provider quota exhausted or rate limited (HTTP 429). Please check your balance" else "服务商额度已耗尽或被限流 (HTTP 429)，请检查余额"
+                                                    errorMsg.contains("401") -> if (isEn) "Invalid or expired API key (HTTP 401)" else "API Key 无效或过期 (HTTP 401)"
+                                                    errorMsg.contains("400") -> if (isEn) "Invalid request parameters (HTTP 400). Please make sure the model name is available" else "接口参数错误 (HTTP 400)，请确保模型名称可用"
                                                     else -> errorMsg
                                                 }
                                                 Toast.makeText(context, if (isEn) "Speech recognition failed: $formatted" else "语音识别失败：$formatted", Toast.LENGTH_LONG).show()
@@ -647,11 +710,11 @@ fun ChatScreen(
                                     if (file != null) {
                                         try { file.delete() } catch (e: Exception) {}
                                     }
-                                    Toast.makeText(context, "录音已取消", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, if (isEn) "Recording cancelled" else "录音已取消", Toast.LENGTH_SHORT).show()
                                 }
                             }
                             "TRANSCRIBE" -> {
-                                Toast.makeText(context, "正在转写并发送...", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, if (isEn) "Transcribing and sending..." else "正在转写并发送...", Toast.LENGTH_SHORT).show()
                                 viewModel.stopRecording { file, _ ->
                                     if (file != null) {
                                         coroutineScope.launch {
@@ -661,13 +724,13 @@ fun ChatScreen(
                                             } else {
                                                 val errorReason = viewModel.lastAsrError ?: ""
                                                 val formatted = when {
-                                                    errorReason.contains("429") -> "服务商额度已耗尽或被限流 (HTTP 429)，请检查余额"
-                                                    errorReason.contains("401") -> "API Key 无效或过期 (HTTP 401)"
-                                                    errorReason.contains("400") -> "接口参数错误 (HTTP 400)，请确保模型名称可用"
+                                                    errorReason.contains("429") -> if (isEn) "Provider quota exhausted or rate limited (HTTP 429). Please check your balance" else "服务商额度已耗尽或被限流 (HTTP 429)，请检查余额"
+                                                    errorReason.contains("401") -> if (isEn) "Invalid or expired API key (HTTP 401)" else "API Key 无效或过期 (HTTP 401)"
+                                                    errorReason.contains("400") -> if (isEn) "Invalid request parameters (HTTP 400). Please make sure the model name is available" else "接口参数错误 (HTTP 400)，请确保模型名称可用"
                                                     errorReason.isNotBlank() -> errorReason
-                                                    else -> "未提取到有效文字"
+                                                    else -> if (isEn) "No recognizable speech detected" else "未提取到有效文字"
                                                 }
-                                                Toast.makeText(context, "转写失败：$formatted", Toast.LENGTH_LONG).show()
+                                                Toast.makeText(context, if (isEn) "Transcription failed: $formatted" else "转写失败：$formatted", Toast.LENGTH_LONG).show()
                                             }
                                         }
                                     }
@@ -760,7 +823,8 @@ fun ChatScreen(
     if (viewModel?.isRecording?.value == true) {
         RecordingOverlay(
             dragState = recordDragState,
-            amplitude = viewModel.recordingAmplitude.value
+            amplitude = viewModel.recordingAmplitude.value,
+            appLanguage = appLanguage
         )
     }
 } // 闭合 Box
@@ -773,8 +837,10 @@ fun ModelSelector(
     selectedModelName: String,
     apiConfigList: List<com.loyea.ui.settings.ApiConfig>,
     onActiveConfigChange: (String) -> Unit,
-    session: ChatSession? = null // 会话 Token 用量（显示在下拉列表顶部）
+    session: ChatSession? = null, // 会话 Token 用量（显示在下拉列表顶部）
+    appLanguage: String = "zh"
 ) {
+    val isEn = appLanguage == "en"
     var expanded by remember { mutableStateOf(false) }
     val enabledConfigs = remember(apiConfigList) {
         apiConfigList.filter { it.isEnabled }
@@ -849,7 +915,7 @@ fun ModelSelector(
                     color = MaterialTheme.colorScheme.onBackground
                 )
                 Text(
-                    text = selectedModelName.ifBlank { "无可用模型" },
+                    text = selectedModelName.ifBlank { if (isEn) "No model available" else "无可用模型" },
                     style = TextStyle(
                         fontWeight = FontWeight.Normal,
                         fontSize = 11.sp
@@ -882,7 +948,8 @@ fun ModelSelector(
                     TokenUsageMenuHeader(
                         session = session,
                         modelName = selectedModelName,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        isEn = isEn
                     )
                     HorizontalDivider(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -1091,6 +1158,7 @@ fun MessageItem(
     onSwitchVersion: (Int) -> Unit = {},
     displayRegexRules: List<com.loyea.character.core.regex.RegexRule> = emptyList()
 ) {
+    val isEn = appLanguage == "en"
     val isUser = message.sender == Sender.USER
 
     var showTranscribedText by remember { mutableStateOf(false) }
@@ -1362,7 +1430,7 @@ fun MessageItem(
                                 },
                                 colors = ButtonDefaults.textButtonColors(contentColor = bubbleTextColor.copy(alpha = 0.7f))
                             ) {
-                                Text("取消", fontSize = 13.sp)
+                                Text(if (isEn) "Cancel" else "取消", fontSize = 13.sp)
                             }
                             Spacer(modifier = Modifier.width(8.dp))
                             Button(
@@ -1381,7 +1449,7 @@ fun MessageItem(
                                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                                 modifier = Modifier.height(32.dp)
                             ) {
-                                Text("保存并回溯", fontSize = 13.sp)
+                                Text(if (isEn) "Save & rewind" else "保存并回溯", fontSize = 13.sp)
                             }
                         }
                     }
@@ -1507,7 +1575,7 @@ fun MessageItem(
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         message.mcpCalls.forEach { call ->
                             if (!isVoiceReplyTool(call.toolName)) {
-                                McpCallItem(mcpCall = call)
+                                McpCallItem(mcpCall = call, isEn = isEn)
                             }
                         }
                     }
@@ -1561,7 +1629,7 @@ fun MessageItem(
                                     strokeWidth = 2.5.dp
                                 )
                                 Text(
-                                    text = "AI 正在绘制/加载图片...",
+                                    text = if (isEn) "AI is generating the image..." else "AI 正在绘制/加载图片...",
                                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
                                     fontSize = 12.sp
                                 )
@@ -1639,7 +1707,7 @@ fun MessageItem(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "语音回复合成中...",
+                            text = if (isEn) "Synthesizing voice reply..." else "语音回复合成中...",
                             color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
                             style = MaterialTheme.typography.bodyMedium
                         )
@@ -1656,7 +1724,8 @@ fun MessageItem(
                                     MessageContentWithPanels(
                                         raw = segment.text,
                                         collapseKeyPrefix = "${message.id}:seg",
-                                        color = MaterialTheme.colorScheme.onBackground
+                                        color = MaterialTheme.colorScheme.onBackground,
+                                        appLanguage = appLanguage
                                     )
                                 }
                             }
@@ -1668,10 +1737,11 @@ fun MessageItem(
                                             call = call,
                                             currentlyPlayingAudioId = currentlyPlayingAudioId,
                                             currentlyPlayingAudioProgress = currentlyPlayingAudioProgress,
-                                            onPlayClick = onMcpVoicePlay
+                                            onPlayClick = onMcpVoicePlay,
+                                            appLanguage = appLanguage
                                         )
                                     } else {
-                                        McpCallItem(mcpCall = call)
+                                        McpCallItem(mcpCall = call, isEn = isEn)
                                     }
                                 }
                             }
@@ -1684,7 +1754,8 @@ fun MessageItem(
                             raw = message.content,
                             collapseKeyPrefix = message.id,
                             color = MaterialTheme.colorScheme.onBackground,
-                            displayRegexRules = displayRegexRules
+                            displayRegexRules = displayRegexRules,
+                            appLanguage = appLanguage
                         )
                     }
                 }
@@ -1699,7 +1770,8 @@ fun MessageItem(
                                     call = call,
                                     currentlyPlayingAudioId = currentlyPlayingAudioId,
                                     currentlyPlayingAudioProgress = currentlyPlayingAudioProgress,
-                                    onPlayClick = onMcpVoicePlay
+                                    onPlayClick = onMcpVoicePlay,
+                                    appLanguage = appLanguage
                                 )
                             }
                         }
@@ -1921,7 +1993,11 @@ fun ChatInputBar(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = if (isPressed) "松开 发送" else "按住 说话",
+                        text = if (isPressed) {
+                            if (isEn) "Release to send" else "松开 发送"
+                        } else {
+                            if (isEn) "Hold to talk" else "按住 说话"
+                        },
                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
                         style = MaterialTheme.typography.bodyLarge.copy(
                             fontWeight = FontWeight.Bold,
@@ -2406,8 +2482,10 @@ fun McpVoiceReplyItem(
     currentlyPlayingAudioId: String?,
     currentlyPlayingAudioProgress: Float = 0f,
     onPlayClick: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    appLanguage: String = "zh"
 ) {
+    val isEn = appLanguage == "en"
     val context = LocalContext.current
     val isPlaying = currentlyPlayingAudioId == call.id
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
@@ -2452,7 +2530,7 @@ fun McpVoiceReplyItem(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "语音合成中...",
+                    text = if (isEn) "Synthesizing voice..." else "语音合成中...",
                     color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
                     style = MaterialTheme.typography.bodyMedium
                 )
@@ -2547,7 +2625,7 @@ fun McpVoiceReplyItem(
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.KeyboardArrowDown,
-                                    contentDescription = if (isTextExpanded) "折叠文本" else "展开文本",
+                                    contentDescription = if (isTextExpanded) (if (isEn) "Collapse text" else "折叠文本") else (if (isEn) "Expand text" else "展开文本"),
                                     tint = claudeSubText,
                                     modifier = Modifier
                                         .size(20.dp)
@@ -2618,7 +2696,7 @@ fun McpVoiceReplyItem(
                                             .background(claudePrimaryBg.copy(alpha = 0.6f))
                                             .clickable {
                                                 clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(cleanedText))
-                                                android.widget.Toast.makeText(context, "已复制语音文本", android.widget.Toast.LENGTH_SHORT).show()
+                                                android.widget.Toast.makeText(context, if (isEn) "Voice text copied" else "已复制语音文本", android.widget.Toast.LENGTH_SHORT).show()
                                             }
                                             .padding(horizontal = 8.dp, vertical = 4.dp),
                                         verticalAlignment = Alignment.CenterVertically,
@@ -2631,7 +2709,7 @@ fun McpVoiceReplyItem(
                                             modifier = Modifier.size(11.dp)
                                         )
                                         Text(
-                                            text = "复制",
+                                            text = if (isEn) "Copy" else "复制",
                                             color = claudePrimary,
                                             style = MaterialTheme.typography.labelSmall.copy(
                                                 fontSize = 11.sp,
@@ -2664,7 +2742,7 @@ fun McpVoiceReplyItem(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "语音加载中...",
+                        text = if (isEn) "Loading voice..." else "语音加载中...",
                         color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
                         style = MaterialTheme.typography.bodyMedium
                     )
@@ -2672,7 +2750,7 @@ fun McpVoiceReplyItem(
             }
         }
         McpStatus.FAILED -> {
-            McpCallItem(mcpCall = call, modifier = modifier)
+            McpCallItem(mcpCall = call, modifier = modifier, isEn = isEn)
         }
     }
 }
@@ -2774,8 +2852,10 @@ private fun formatTimeGapLabel(timestamp: Long, appLanguage: String): String =
 fun RecordingOverlay(
     dragState: String,
     amplitude: Float,
+    appLanguage: String = "zh",
     modifier: Modifier = Modifier
 ) {
+    val isEn = appLanguage == "en"
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -2807,7 +2887,7 @@ fun RecordingOverlay(
                     )
                     Spacer(modifier = Modifier.height(14.dp))
                     Text(
-                        text = "松开手指 取消发送",
+                        text = if (isEn) "Release to cancel" else "松开手指 取消发送",
                         color = Color.White.copy(alpha = 0.9f),
                         style = MaterialTheme.typography.bodyMedium.copy(
                             fontSize = 12.sp,
@@ -2825,7 +2905,7 @@ fun RecordingOverlay(
                     )
                     Spacer(modifier = Modifier.height(14.dp))
                     Text(
-                        text = "松开手指 转写发送",
+                        text = if (isEn) "Release to transcribe & send" else "松开手指 转写发送",
                         color = Color.White.copy(alpha = 0.9f),
                         style = MaterialTheme.typography.bodyMedium.copy(
                             fontSize = 12.sp,
@@ -2864,7 +2944,7 @@ fun RecordingOverlay(
                     }
                     Spacer(modifier = Modifier.height(18.dp))
                     Text(
-                        text = "手指上滑取消，右滑转文字",
+                        text = if (isEn) "Slide up to cancel, slide right to transcribe" else "手指上滑取消，右滑转文字",
                         color = Color.White.copy(alpha = 0.8f),
                         style = MaterialTheme.typography.bodyMedium.copy(
                             fontSize = 11.sp,
