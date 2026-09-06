@@ -278,11 +278,13 @@ fun ThinkingProcessLayout(
         }
     }
     val sampledNow = remember(tick) { System.currentTimeMillis() }
-    val elapsedSec = when {
-        !isStillThinking -> durationSeconds
-        thinkingStartedAt > 0 -> ((sampledNow - thinkingStartedAt) / 1000).toInt()
-        else -> fallbackSec
-    }
+    val elapsedSec = ThinkingTimer.elapsedSeconds(
+        isStillThinking = isStillThinking,
+        finalDurationSeconds = durationSeconds,
+        startedAtMillis = thinkingStartedAt,
+        nowMillis = sampledNow,
+        fallbackSeconds = fallbackSec
+    )
 
     // 小箭头随折叠状态平滑旋转 0 到 90 度
     val arrowRotation by animateFloatAsState(

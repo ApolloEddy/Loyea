@@ -25,7 +25,7 @@ class MessageTimeFormatterTest {
     @Test
     fun olderDatesUseMonthDayThenYearWhenNeeded() {
         assertEquals("8月1日 上午 9:05", MessageTimeFormatter.format(time(2026, 8, 1, 9, 5), now, "zh", chinaTime))
-        assertEquals("2025年12月31日 下午 11:05", MessageTimeFormatter.format(time(2025, 12, 31, 23, 5), now, "zh", chinaTime))
+        assertEquals("2025年12月31日 深夜 11:05", MessageTimeFormatter.format(time(2025, 12, 31, 23, 5), now, "zh", chinaTime))
     }
 
     @Test
@@ -33,6 +33,15 @@ class MessageTimeFormatterTest {
         assertEquals("Yesterday 9:05 AM", MessageTimeFormatter.format(time(2026, 8, 20, 9, 5), now, "en", chinaTime))
         assertEquals("Aug 1, 3:20 PM", MessageTimeFormatter.format(time(2026, 8, 1, 15, 20), now, "en", chinaTime))
         assertEquals("Dec 31, 2025, 11:05 PM", MessageTimeFormatter.format(time(2025, 12, 31, 23, 5), now, "en", chinaTime))
+    }
+
+    @Test
+    fun chineseDayPartBucketsCoverAllPeriods() {
+        assertEquals("凌晨 2:15", MessageTimeFormatter.format(time(2026, 8, 21, 2, 15), now, "zh", chinaTime))
+        assertEquals("早上 7:30", MessageTimeFormatter.format(time(2026, 8, 21, 7, 30), now, "zh", chinaTime))
+        assertEquals("中午 12:30", MessageTimeFormatter.format(time(2026, 8, 21, 12, 30), now, "zh", chinaTime))
+        assertEquals("晚上 9:30", MessageTimeFormatter.format(time(2026, 8, 21, 21, 30), now, "zh", chinaTime))
+        assertEquals("深夜 11:45", MessageTimeFormatter.format(time(2026, 8, 21, 23, 45), now, "zh", chinaTime))
     }
 
     private fun time(year: Int, month: Int, day: Int, hour: Int, minute: Int): Long =

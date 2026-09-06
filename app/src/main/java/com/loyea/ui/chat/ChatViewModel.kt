@@ -602,6 +602,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         currentSessionId.value = sessionId
         currentVoiceEmotion.value = null // 清空临时情感缓存，防止信息混用污染
         prefs.edit().putString("current_session_id", sessionId).apply()
+        // 切换即清空旧列表：防止新会话消息加载完成前显示旧会话内容（也保证载入锚点只对新列表生效）
+        messages.value = emptyList()
         viewModelScope.launch(Dispatchers.IO) {
             val msgs = storageManager.loadSessionMessages(sessionId)
             // 世界书生效解析改为请求时经 WorldInfoLibrary（WorldInfo 2.0），切换会话无需预载

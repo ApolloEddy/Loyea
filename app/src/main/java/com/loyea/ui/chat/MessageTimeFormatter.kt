@@ -75,14 +75,26 @@ object MessageTimeFormatter {
     }
 
     private fun formatClock(calendar: Calendar, appLanguage: String): String {
+        val hour24 = calendar.get(Calendar.HOUR_OF_DAY)
         val hour = calendar.get(Calendar.HOUR).let { if (it == 0) 12 else it }
         val minute = calendar.get(Calendar.MINUTE)
         val clock = String.format(Locale.ROOT, "%d:%02d", hour, minute)
-        val period = if (calendar.get(Calendar.AM_PM) == Calendar.AM) {
-            if (appLanguage == "en") "AM" else "上午"
+        return if (appLanguage == "en") {
+            // 英语习惯以 AM/PM 表达时段，保持不变（更自然）
+            val period = if (calendar.get(Calendar.AM_PM) == Calendar.AM) "AM" else "PM"
+            "$clock $period"
         } else {
-            if (appLanguage == "en") "PM" else "下午"
+            // 中文按自然时间段细分（旧实现把 23 点标成"下午 11:05"的 bug 也一并修正）
+            val period = when (hour24) {
+                in 0..4 -> "凌晨"
+                in 5..7 -> "早上"
+                in 8..10 -> "上午"
+                in 11..12 -> "中午"
+                in 13..17 -> "下午"
+                in 18..22 -> "晚上"
+                else -> "深夜"
+            }
+            "$period $clock"
         }
-        return if (appLanguage == "en") "$clock $period" else "$period $clock"
     }
 }

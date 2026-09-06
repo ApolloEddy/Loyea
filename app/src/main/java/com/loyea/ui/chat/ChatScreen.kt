@@ -159,6 +159,8 @@ fun ChatScreen(
 
     // 自动滚动：思考中默认展开并滚动到「Thinking 标题顶到屏幕顶端即停」；用户触摸后完全交还控制权
     var autoPinActive by remember { mutableStateOf(true) }
+    // 已完成「定位到最后一次用户消息」的会话（每个会话只锚定一次；未锚定前自动滚动让位）
+    var anchoredSession by remember { mutableStateOf<String?>(null) }
 
     // 流式响应中的占位气泡（isThinking 每轮流前置位，工具执行期由 isMcpRunning 补位，覆盖整个多轮响应）
     val activeStreaming = isThinking || isMcpRunning
@@ -171,6 +173,8 @@ fun ChatScreen(
 
     LaunchedEffect(messages.lastOrNull(), isThinking, isMcpRunning) {
         if (messages.isEmpty()) return@LaunchedEffect
+        // 会话尚未锚定（刚切换/载入）时让位：先由锚点定位到最后一次用户消息处
+        if (anchoredSession != currentSessionId) return@LaunchedEffect
         val s = if (isThinking || isMcpRunning) messages.lastOrNull { it.sender == Sender.AI } else null
         when {
             // 用户已手动滚动/触摸 → 不再自动滚动
@@ -199,6 +203,19 @@ fun ChatScreen(
         }
         lastSeenListSize = messages.size
         if (isAtBottom) unseenBottomCount = 0
+    }
+
+    // 会话载入/切换：内容定位到用户最后一次发消息处（即时定位、略带上文；新回复开始时才恢复自动跟随）
+    LaunchedEffect(currentSessionId, messages.lastOrNull()?.id, messages.size) {
+        if (currentSessionId.isEmpty() || messages.isEmpty()) return@LaunchedEffect
+        if (anchoredSession == currentSessionId) return@LaunchedEffect
+        anchoredSession = currentSessionId
+        val lastUserIdx = messages.indexOfLast { it.sender == Sender.USER }
+        val targetListIndex = if (lastUserIdx >= 0) lastUserIdx + 1 else messages.size // 列表 0 位是占位 Spacer
+        autoPinActive = false // 抑制载入即滚到底，让位给锚点
+        listState.scrollToItem(targetListIndex, if (lastUserIdx >= 0) -120 else 0)
+        unseenBottomCount = 0
+        lastSeenListSize = messages.size
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
