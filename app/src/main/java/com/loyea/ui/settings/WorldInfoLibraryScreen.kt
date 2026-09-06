@@ -47,7 +47,9 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -619,6 +621,7 @@ private fun WorldInfoBookDetailContent(
     var loading by remember(bookId) { mutableStateOf(true) }
 
     var editingEntry by remember { mutableStateOf<WorldInfoEntry?>(null) }
+    var viewingEntry by remember { mutableStateOf<WorldInfoEntry?>(null) }
     var showEntryEditor by remember { mutableStateOf(false) }
     var showConfigOverride by remember { mutableStateOf(false) }
     var showBindDialog by remember { mutableStateOf(false) }
@@ -926,6 +929,7 @@ private fun WorldInfoBookDetailContent(
                             WorldInfoEntryCard(
                                 entry = entry,
                                 isEn = isEn,
+                                onView = { viewingEntry = entry },
                                 onEdit = { editingEntry = entry; showEntryEditor = true },
                                 onToggle = { enabled ->
                                     val vm = viewModel ?: return@WorldInfoEntryCard
@@ -970,6 +974,7 @@ private fun WorldInfoBookDetailContent(
                                     if (isEn) "(disabled in card)" else "（卡内已禁用）"
                                 } else null,
                                 editedInPlace = currentBook?.entryOverrides?.containsKey(entry.uid) == true,
+                                onView = { viewingEntry = entry },
                                 onEdit = { editingEntry = entry; showEntryEditor = true },
                                 onToggle = { enabled ->
                                     val vm = viewModel ?: return@WorldInfoEntryCard
@@ -988,6 +993,74 @@ private fun WorldInfoBookDetailContent(
     }
 
     // ===== 详情页弹窗 =====
+    if (viewingEntry != null) {
+        val entry = viewingEntry!!
+        ModalBottomSheet(onDismissRequest = { viewingEntry = null }) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 24.dp)
+            ) {
+                Text(
+                    text = entry.comment.ifBlank { if (isEn) "Entry" else "条目" },
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                if (entry.keywords.isNotEmpty()) {
+                    Text(
+                        text = (if (isEn) "Keywords: " else "关键词：") + entry.keywords.joinToString("、"),
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+                Text(
+                    text = entry.content,
+                    fontSize = 14.sp,
+                    lineHeight = 21.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f)
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                val meta = buildList {
+                    if (entry.constant) add(if (isEn) "constant" else "常驻")
+                    if (entry.keysecondary.isNotEmpty()) add("secondary:" + entry.keysecondary.size)
+                    if (entry.depth != 4) add("depth:" + entry.depth)
+                    if (entry.order != 100) add("order:" + entry.order)
+                    if (entry.comment.isNotBlank()) add(if (isEn) "comment: " + entry.comment else "备注: " + entry.comment)
+                    if (currentBook?.entryOverrides?.containsKey(entry.uid) == true) add(if (isEn) "edited" else "已改")
+                }
+                if (meta.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "· " + meta.joinToString(" · "),
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                    )
+                }
+                Spacer(modifier = Modifier.height(20.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = { viewingEntry = null }) {
+                        Text(if (isEn) "Close" else "关闭")
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(onClick = {
+                        viewingEntry = null
+                        editingEntry = entry
+                        showEntryEditor = true
+                    }) {
+                        Text(if (isEn) "Edit" else "编辑")
+                    }
+                }
+            }
+        }
+    }
     if (showEntryEditor && currentBook != null) {
         val targetBook = currentBook
         WorldInfoEditDialog(
@@ -1203,7 +1276,8 @@ private fun WorldInfoEntryCard(
     showDelete: Boolean = true,
     toggleEnabled: Boolean = true,
     disabledHint: String? = null,
-    editedInPlace: Boolean = false
+    editedInPlace: Boolean = false,
+    onView: () -> Unit = {}
 ) {
     val scrollState = rememberScrollState()
     Card(
@@ -1252,15 +1326,14 @@ private fun WorldInfoEntryCard(
                 Spacer(modifier = Modifier.height(6.dp))
             }
 
-            // 内容（点击展开/收起全文；自建书与卡书一致）
-            var expanded by remember { mutableStateOf(false) }
+            // 内容预览（点击弹窗查看全文）
             Text(
                 text = entry.content,
                 fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
-                maxLines = if (expanded) Int.MAX_VALUE else 3,
+                maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.clickable { expanded = !expanded }
+                modifier = Modifier.clickable(onClick = onView)
             )
 
             // 元信息行：ST 兼容字段摘要（含 ST v2 高级字段）
