@@ -263,7 +263,8 @@ fun ThinkingProcessLayout(
 ) {
     // 实时思考计时：以消息上的绝对开始时间戳为锚计算流逝秒数；
     // 重组、切后台、从其他页面切回来都按真实时间显示，不再归零重计。
-    // tick 仅作为每秒重组的驱动器；旧消息无锚点时退回相对累加（不比旧行为差）。
+    // tick 每秒递增并作为 remember 的 key 驱动取样——必须被组合读取才能触发重组
+    // （否则工具执行等无流事件的间隙里标题会冻结）；旧消息无锚点时退回相对累加。
     var tick by remember { mutableIntStateOf(0) }
     var fallbackSec by remember { mutableIntStateOf(0) }
     LaunchedEffect(isStillThinking) {
@@ -275,9 +276,10 @@ fun ThinkingProcessLayout(
             }
         }
     }
+    val sampledNow = remember(tick) { System.currentTimeMillis() }
     val elapsedSec = when {
         !isStillThinking -> durationSeconds
-        thinkingStartedAt > 0 -> ((System.currentTimeMillis() - thinkingStartedAt) / 1000).toInt()
+        thinkingStartedAt > 0 -> ((sampledNow - thinkingStartedAt) / 1000).toInt()
         else -> fallbackSec
     }
 
