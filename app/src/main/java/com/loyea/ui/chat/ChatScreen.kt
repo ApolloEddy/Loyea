@@ -40,7 +40,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.loyea.ui.theme.LoyeaTheme
 import com.loyea.ui.settings.ApiConfig
-import com.loyea.ui.settings.WorldInfoSettingsLayout
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
@@ -58,7 +57,6 @@ import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.draw.paint
 import androidx.compose.ui.layout.ContentScale
 import com.loyea.ui.chat.PromptAssembler
-import com.loyea.ui.chat.WorldInfoScope
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -72,6 +70,9 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.text.style.TextOverflow
 
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -118,9 +119,10 @@ fun ChatScreen(
 
     var inputText by remember { mutableStateOf(TextFieldValue("")) }
     var showPersonaSelector by remember { mutableStateOf(false) }
-    var showWorldInfoEditor by remember { mutableStateOf(false) }
-    // 世界书编辑器覆盖层打开时，系统返回键关闭编辑器（顶栏返回箭头在 WorldInfoSettingsLayout 内）
-    BackHandler(enabled = showWorldInfoEditor) { showWorldInfoEditor = false }
+    var showActiveBookPanel by remember { mutableStateOf(false) }
+    var showWorldInfoLibrary by remember { mutableStateOf(false) }
+    // 世界书库覆盖层打开时，系统返回键关闭（顶栏返回箭头在 WorldInfoLibraryScreen 内）
+    BackHandler(enabled = showWorldInfoLibrary) { showWorldInfoLibrary = false }
     var lastSessionId by remember { mutableStateOf(currentSessionId) }
 
     val selectedImagePath = remember { mutableStateOf<String?>(null) }
@@ -224,11 +226,11 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    // 本会话世界书入口（每会话独立配置；未配置回退全局书）
-                    IconButton(onClick = { showWorldInfoEditor = true }) {
+                    // 当前生效书入口（WorldInfo 2.0：查看/换书/跟随默认）
+                    IconButton(onClick = { showActiveBookPanel = true }) {
                         Icon(
                             imageVector = Icons.Default.MenuBook,
-                            contentDescription = if (isEn) "Session World Info" else "会话世界书",
+                            contentDescription = if (isEn) "Active World Book" else "当前世界书",
                             tint = MaterialTheme.colorScheme.onBackground,
                             modifier = Modifier.size(28.dp)
                         )
@@ -707,13 +709,26 @@ fun ChatScreen(
             }
         }
 
-        // 会话世界书全屏编辑器（SESSION scope：编辑本会话独立书，未配置回退全局书）
-        if (showWorldInfoEditor) {
-            WorldInfoSettingsLayout(
+        // 当前生效书面板（WorldInfo 2.0 Spec §6.4：查看 / 换书 / 跟随默认 / 查看书库）
+        if (showActiveBookPanel && viewModel != null) {
+            ActiveBookPanel(
+                viewModel = viewModel,
+                sessionId = currentSessionId,
+                isEn = isEn,
+                onDismiss = { showActiveBookPanel = false },
+                onOpenLibrary = {
+                    showActiveBookPanel = false
+                    showWorldInfoLibrary = true
+                }
+            )
+        }
+
+        // 世界书库全屏覆盖层（与旧会话编辑器同位复用；返回键已由 BackHandler 处理）
+        if (showWorldInfoLibrary && viewModel != null) {
+            com.loyea.ui.settings.WorldInfoLibraryScreen(
                 viewModel = viewModel,
                 appLanguage = appLanguage,
-                onBackClick = { showWorldInfoEditor = false },
-                scope = WorldInfoScope.SESSION
+                onBackClick = { showWorldInfoLibrary = false }
             )
         }
 
@@ -2091,6 +2106,222 @@ fun ChatInputBar(
                 }
             }
         }
+    }
+}
+
+// =================== WorldInfo 2.0：当前生效书面板（Spec §6.4） ===================
+
+/**
+ * 当前会话生效书底部面板：显示生效书与计数，支持换书（绑定）/跟随默认（解绑）/查看书库。
+ * 换书与解绑即时写库，下一轮请求生效（解析一次请求内冻结，Spec §4.1）。
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun ActiveBookPanel(
+    viewModel: ChatViewModel,
+    sessionId: String,
+    isEn: Boolean,
+    onDismiss: () -> Unit,
+    onOpenLibrary: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var info by remember { mutableStateOf<ChatViewModel.ActiveBookInfo?>(null) }
+    var picking by remember { mutableStateOf(false) }
+    var pickingBooks by remember { mutableStateOf<List<com.loyea.storage.worldinfo.WorldInfoBookDocument>>(emptyList()) }
+
+    fun refresh() {
+        scope.launch {
+            info = runCatching { viewModel.loadActiveBookInfo(sessionId) }.getOrNull()
+        }
+    }
+    LaunchedEffect(sessionId) { refresh() }
+
+    fun sourceLabel(source: com.loyea.storage.worldinfo.ActiveBookSource): String = when (source) {
+        com.loyea.storage.worldinfo.ActiveBookSource.SESSION_BOUND -> if (isEn) "Session bound" else "会话绑定"
+        com.loyea.storage.worldinfo.ActiveBookSource.CARD_FOLLOW -> if (isEn) "Follows character" else "随角色"
+        com.loyea.storage.worldinfo.ActiveBookSource.GLOBAL_ACTIVE -> if (isEn) "Global" else "全局生效"
+        com.loyea.storage.worldinfo.ActiveBookSource.NONE -> ""
+    }
+
+    androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 24.dp)
+        ) {
+            Text(
+                text = if (isEn) "Active World Book" else "当前生效书",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+
+            val current = info
+            when {
+                current == null -> androidx.compose.material3.CircularProgressIndicator(
+                    modifier = Modifier.size(24.dp), strokeWidth = 2.dp
+                )
+                current.source == com.loyea.storage.worldinfo.ActiveBookSource.NONE -> {
+                    Text(
+                        text = if (isEn) "This session is not using any world book." else "本会话未使用世界书。",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                    )
+                }
+                else -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "《${current.bookName}》",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.weight(1f, fill = false),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "[${sourceLabel(current.source)}]",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = buildString {
+                            append(if (isEn) "${current.totalEntries} entries" else "${current.totalEntries} 条")
+                            if (current.constantEntries > 0) {
+                                append(if (isEn) " · ${current.constantEntries} constant" else " · ${current.constantEntries} 常驻")
+                            }
+                            if (current.disabledEntries > 0) {
+                                append(if (isEn) " · ${current.disabledEntries} off" else " · ${current.disabledEntries} 已关")
+                            }
+                        },
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                    )
+                    if (current.sourceDeleted) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = if (isEn) "Source card deleted — will fall back on next turn" else "来源卡已删除——下一轮将回退默认解析",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.error.copy(alpha = 0.8f)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                androidx.compose.material3.OutlinedButton(
+                    onClick = {
+                        scope.launch {
+                            val books = runCatching { viewModel.worldInfoLibrary.loadAllBooks() }
+                                .getOrDefault(emptyList())
+                            pickingBooks = books
+                            picking = true
+                        }
+                    },
+                    enabled = info != null
+                ) { Text(if (isEn) "Change book" else "更换本书") }
+                if (info?.source == com.loyea.storage.worldinfo.ActiveBookSource.SESSION_BOUND) {
+                    androidx.compose.material3.OutlinedButton(onClick = {
+                        scope.launch {
+                            runCatching { viewModel.worldInfoLibrary.unbindSession(sessionId) }
+                            refresh()
+                        }
+                    }) { Text(if (isEn) "Follow default" else "跟随默认") }
+                }
+                androidx.compose.material3.OutlinedButton(onClick = onOpenLibrary) {
+                    Text(if (isEn) "Open library" else "查看书库")
+                }
+            }
+            if (info?.source == com.loyea.storage.worldinfo.ActiveBookSource.SESSION_BOUND) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = if (isEn) "\"Follow default\" unbinds this session (character card / global takes over)." else "「跟随默认」解除本会话绑定，回到随角色 / 全局的自动解析。",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                )
+            }
+        }
+    }
+
+    // 换书选择列表
+    if (picking) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { picking = false },
+            title = { Text(if (isEn) "Choose a book" else "选择一本书", fontSize = 16.sp, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                        .heightIn(max = 420.dp)
+                ) {
+                    if (pickingBooks.isEmpty()) {
+                        Text(
+                            text = if (isEn) "No books in library" else "书库为空",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                        )
+                    }
+                    val currentBookId = info?.bookId
+                    pickingBooks.forEach { book ->
+                        val selected = book.id == currentBookId
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(
+                                    if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                    else androidx.compose.ui.graphics.Color.Transparent
+                                )
+                                .clickable {
+                                    picking = false
+                                    scope.launch {
+                                        runCatching { viewModel.worldInfoLibrary.bindBookToSession(book.id, sessionId) }
+                                        refresh()
+                                    }
+                                }
+                                .padding(horizontal = 10.dp, vertical = 10.dp)
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = book.name,
+                                    fontSize = 14.sp,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground
+                                )
+                                Text(
+                                    text = when {
+                                        book.origin == com.loyea.storage.worldinfo.WorldInfoBookOrigin.CARD -> if (isEn) "Card" else "角色卡"
+                                        book.isGlobalActive -> if (isEn) "Global active" else "全局生效"
+                                        book.sessionIds.isNotEmpty() -> if (isEn) "${book.sessionIds.size} session(s)" else "绑定 ${book.sessionIds.size} 会话"
+                                        else -> if (isEn) "Inactive" else "未生效"
+                                    },
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                                )
+                            }
+                            if (selected) {
+                                Text(
+                                    text = if (isEn) "current" else "当前",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { picking = false }) {
+                    Text(if (isEn) "Cancel" else "取消")
+                }
+            }
+        )
     }
 }
 

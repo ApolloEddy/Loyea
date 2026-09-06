@@ -76,7 +76,8 @@ fun TavernScreen(
     appLanguage: String,
     onBackClick: () -> Unit,
     onImportCardBytes: (ByteArray) -> Unit = {},
-    characterBooks: Map<String, ChatViewModel.WorldBookView> = emptyMap()
+    characterBooks: Map<String, ChatViewModel.WorldBookView> = emptyMap(),
+    onManageBookInLibrary: ((characterId: String) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val contentResolver = context.contentResolver
@@ -210,7 +211,9 @@ fun TavernScreen(
                             onExportPng = { shareCharacterCardPng(context, card) },
                             onExportJson = { shareCharacterCardJson(context, card) },
                             onEdit = { cardToEdit = card },
-                            onDelete = { cardToDelete = card }
+                            onDelete = { cardToDelete = card },
+                            bookView = characterBooks[card.id],
+                            onManageBook = onManageBookInLibrary?.let { cb -> { cb(card.id) } }
                         )
                     }
                 }
@@ -228,7 +231,8 @@ fun TavernScreen(
                             onExportJson = { shareCharacterCardJson(context, card) },
                             onEdit = { cardToEdit = card },
                             onDelete = { cardToDelete = card },
-                            bookView = characterBooks[card.id]
+                            bookView = characterBooks[card.id],
+                            onManageBook = onManageBookInLibrary?.let { cb -> { cb(card.id) } }
                         )
                     }
                 }
@@ -311,7 +315,8 @@ fun TavernCardItem(
     onExportJson: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
-    bookView: ChatViewModel.WorldBookView? = null
+    bookView: ChatViewModel.WorldBookView? = null,
+    onManageBook: (() -> Unit)? = null
 ) {
     val isEn = appLanguage == "en"
     val avatarBitmap = rememberAvatarPainter(card.avatarUri)
@@ -524,6 +529,18 @@ fun TavernCardItem(
                                 .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f))
                                 .padding(8.dp)
                         )
+                        // WorldInfo 2.0：跳书库管理该书（条目开关/绑定/导出）
+                        if (onManageBook != null) {
+                            TextButton(
+                                onClick = onManageBook,
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                            ) {
+                                Text(
+                                    text = if (isEn) "Manage in library →" else "在书库中管理 →",
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
                     }
                     }
 

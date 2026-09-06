@@ -2538,6 +2538,47 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * 当前会话生效书预览（W4 聊天页面板，Spec §6.4）。
+     * 计数为书级全量（含被关条目），与书库页展示一致。
+     */
+    data class ActiveBookInfo(
+        val source: com.loyea.storage.worldinfo.ActiveBookSource,
+        val bookId: String?,
+        val bookName: String,
+        val isOwned: Boolean,
+        val totalEntries: Int,
+        val constantEntries: Int,
+        val disabledEntries: Int,
+        val sourceDeleted: Boolean = false
+    )
+
+    /** 解析某会话当前的生效书摘要（书库解析 + 书级计数）。 */
+    suspend fun loadActiveBookInfo(sessionId: String): ActiveBookInfo = withContext(Dispatchers.IO) {
+        val resolution = storageManager.worldInfoLibrary.resolveActiveBook(
+            sessionId = sessionId,
+            characterId = activeCharacterCard.value?.id,
+            defaultConfig = worldInfoConfig.value
+        )
+        val book = resolution.book
+        if (book == null) {
+            return@withContext ActiveBookInfo(resolution.source, null, "", false, 0, 0, 0)
+        }
+        val overview = runCatching {
+            storageManager.worldInfoLibrary.bookOverview(book.id)
+        }.getOrNull()
+        ActiveBookInfo(
+            source = resolution.source,
+            bookId = book.id,
+            bookName = book.name,
+            isOwned = book.isOwned,
+            totalEntries = overview?.totalEntries ?: 0,
+            constantEntries = overview?.constantEntries ?: 0,
+            disabledEntries = overview?.disabledEntries ?: 0,
+            sourceDeleted = overview?.sourceDeleted ?: false
+        )
+    }
+
+    /**
      * 世界观关键词匹配并拼接注入块（WorldInfo 2.0：单一生效书，Spec §4.2）。
      * - 条目与配置来自 [WorldInfoLibrary.resolveActiveBook]（core 格式，已应用 override 过滤），
      *   匹配内核仍走 character-core WorldInfoMatcher（父 Spec §10 单一实现）

@@ -9,11 +9,15 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.ActivityResultLauncher
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -307,22 +311,37 @@ class MainActivity : ComponentActivity() {
                         composable("tavern") {
                             val characterCardList by chatViewModel.characterCardList
                             val appLanguage by chatViewModel.appLanguage
-                            TavernScreen(
-                                characterCardList = characterCardList,
-                                onCharacterCardListSave = { chatViewModel.saveCharacterCardList(it) },
-                                appLanguage = appLanguage,
-                                onBackClick = { navController.popBackStack() },
-                                onImportCardBytes = { bytes ->
-                                    chatViewModel.importCharacterCard(bytes) { outcome ->
-                                        Toast.makeText(
-                                            this@MainActivity,
-                                            outcome.message,
-                                            if (outcome.success) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
-                                        ).show()
+                            // WorldInfo 2.0：角色卡预览「在书库中管理」覆盖层（focus = char:<characterId>）
+                            var libraryFocus by remember { mutableStateOf<String?>(null) }
+                            Box(modifier = Modifier.fillMaxSize()) {
+                                TavernScreen(
+                                    characterCardList = characterCardList,
+                                    onCharacterCardListSave = { chatViewModel.saveCharacterCardList(it) },
+                                    appLanguage = appLanguage,
+                                    onBackClick = { navController.popBackStack() },
+                                    onImportCardBytes = { bytes ->
+                                        chatViewModel.importCharacterCard(bytes) { outcome ->
+                                            Toast.makeText(
+                                                this@MainActivity,
+                                                outcome.message,
+                                                if (outcome.success) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
+                                            ).show()
+                                        }
+                                    },
+                                    characterBooks = chatViewModel.characterBookViews.value,
+                                    onManageBookInLibrary = { characterId ->
+                                        libraryFocus = "char:$characterId"
                                     }
-                                },
-                                characterBooks = chatViewModel.characterBookViews.value
-                            )
+                                )
+                                if (libraryFocus != null) {
+                                    com.loyea.ui.settings.WorldInfoLibraryScreen(
+                                        viewModel = chatViewModel,
+                                        appLanguage = appLanguage,
+                                        onBackClick = { libraryFocus = null },
+                                        initialFocus = libraryFocus
+                                    )
+                                }
+                            }
                         }
                     }
                 }
