@@ -2,10 +2,11 @@ package com.loyea.ui.chat
 
 import android.content.Context
 import com.google.gson.Gson
-import com.google.gson.JsonObject
 import com.google.gson.reflect.TypeToken
 import com.loyea.storage.CharacterDocumentStore
 import com.loyea.storage.RebuildStorageMigrator
+import com.loyea.storage.worldinfo.WorldInfoBookDocument
+import com.loyea.storage.worldinfo.WorldInfoLibrary
 import java.io.File
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -92,22 +93,32 @@ class ChatStorageManager(private val context: Context) {
     private val sessionsDir get() = File(storageRoot, "sessions").apply { if (!exists()) mkdirs() }
     private val documentStore get() = CharacterDocumentStore(File(storageRoot, "characters"))
 
+    /** 世界书 2.0 统一书库（W2 起匹配链路与旧 UI 双轨的共用底座）。 */
+    val worldInfoLibrary: WorldInfoLibrary by lazy { WorldInfoLibrary(storageRoot) }
+
     companion object {
         private val sessionsMutex = Mutex()
         private val messagesMutex = Mutex()
         private val cardsMutex = Mutex()
-        private val worldInfoMutex = Mutex()
         private val migrationMutex = Mutex()
     }
 
     /** 所有读写前串行调用：确保迁移完成（幂等、进程内唯一）后才访问新存储根。 */
     private suspend fun ensureMigrated() {
         // manifest 已存在时只付一次 exists() 的代价；迁移本身由 migrator 幂等保证
-        if (File(storageRoot, "manifest.json").exists()) return
+        if (File(storageRoot, "manifest.json").exists()) {
+            // 世界书 2.0 书库迁移（根迁移完成后的独立一步，manifest 短路，Spec §5）
+            if (!File(storageRoot, "worldinfo/manifest.json").exists()) {
+                runCatching { worldInfoLibrary.migrateIfNeeded() }.onFailure { it.printStackTrace() }
+            }
+            return
+        }
         migrationMutex.withLock {
             runCatching { RebuildStorageMigrator.ensureMigrated(context.filesDir) }
                 .onFailure { it.printStackTrace() }
         }
+        // 根迁移刚完成：顺带完成书库迁移（同一首启内完成，幂等可重试）
+        runCatching { worldInfoLibrary.migrateIfNeeded() }.onFailure { it.printStackTrace() }
     }
 
     private fun saveSessionListInternal(sessions: List<ChatSession>) {
@@ -319,11 +330,13 @@ class ChatStorageManager(private val context: Context) {
                     if (file.exists()) {
                         file.delete()
                     }
-                    // 1.1 删除会话专属世界书（如有）
+                    // 1.1 删除会话专属世界书遗留文件（迁移前残留；书库数据见 1.2）
                     val wiFile = File(sessionsDir, "world_info_$sessionId.json")
                     if (wiFile.exists()) {
                         wiFile.delete()
                     }
+                    // 1.2 删除书库中绑定该会话的世界书（WorldInfo 2.0 Spec §6.5）
+                    runCatching { deleteSessionWorldInfo(sessionId) }.onFailure { it.printStackTrace() }
                     // 2. 从会话列表中移除并重新保存元数据
                     val currentSessions = loadSessionListInternal().filter { it.id != sessionId }
                     saveSessionListInternal(currentSessions)
@@ -334,75 +347,39 @@ class ChatStorageManager(private val context: Context) {
         }
     }
 
-    private val worldInfoFile get() = File(storageRoot, "global_world_info.json")
+    // ---------- 世界书（W2 双轨 shim：旧接口由统一书库支撑，WorldInfo 2.0 Spec §4.2） ----------
+    // 全局条目 ↔ 全局生效 owned 书；会话条目 ↔ 绑定该会话的 owned 书。
+    // 旧 world_info 文件迁移后不再读写（本层随 W5 旧 UI 一并退役）。
+
+    /** 全局生效的 owned 书（旧 UI 只管理 owned 全局书；全局生效若是卡书则旧 UI 视为空）。 */
+    private suspend fun globalOwnedBook(): WorldInfoBookDocument? =
+        worldInfoLibrary.loadAllBooks().firstOrNull { it.isGlobalActive && it.isOwned }
 
     /**
-     * 保存全局世界观条目列表
+     * 保存全局世界观条目列表（无全局书则建书并设为全局生效）
      */
     suspend fun saveWorldInfo(entries: List<WorldInfoEntry>) {
         ensureMigrated()
-        worldInfoMutex.withLock {
-            try {
-                atomicWrite(worldInfoFile, gson.toJson(entries))
-            } catch (e: Exception) {
-                e.printStackTrace()
+        runCatching {
+            val existing = globalOwnedBook()
+            if (existing != null) {
+                worldInfoLibrary.saveBook(
+                    existing.copy(entries = entries, updatedAt = System.currentTimeMillis())
+                )
+            } else {
+                worldInfoLibrary.createOwnedBook(
+                    name = "全局世界书", entries = entries, setGlobalActive = true
+                )
             }
-        }
+        }.onFailure { it.printStackTrace() }
     }
-
-    /**
-     * 自愈式清洗：Gson 反射对缺失字段不触发 Kotlin 默认值，逐字段兜底。
-     * 原始类型（Int/Boolean）缺失时 Gson 保持 JVM 默认（0/false），
-     * 此时 probability 会退化为 0、allowRecursion 退化为 false ——
-     * 均与 v0.5.1 旧行为（无概率、无递归）等价，属保守兼容。
-     */
-    private fun selfHealWorldInfo(rawList: List<WorldInfoEntry>): List<WorldInfoEntry> =
-        rawList.map { raw ->
-            WorldInfoEntry(
-                id = raw.id ?: System.currentTimeMillis().toString(),
-                keywords = raw.keywords ?: emptyList(),
-                content = raw.content ?: "",
-                enabled = raw.enabled ?: true,
-                uid = raw.uid ?: 0,
-                keysecondary = raw.keysecondary ?: emptyList(),
-                constant = raw.constant ?: false,
-                order = raw.order ?: 100,
-                depth = raw.depth ?: 4,
-                comment = raw.comment ?: "",
-                selective = raw.selective ?: false,
-                disable = raw.disable ?: false,
-                selectiveLogic = raw.selectiveLogic ?: 0,
-                group = raw.group ?: "",
-                probability = raw.probability ?: 100,
-                useProbability = raw.useProbability ?: false,
-                delayUntilRecursion = raw.delayUntilRecursion ?: 0,
-                preventRecursion = raw.preventRecursion ?: false,
-                allowRecursion = raw.allowRecursion ?: true,
-                excludeRecursion = raw.excludeRecursion ?: false,
-                keysContainedIn = raw.keysContainedIn ?: "chat",
-                position = raw.position ?: 0,
-                weight = raw.weight ?: 0
-            )
-        }
 
     /**
      * 读取全局世界观条目列表（不存在则返回空列表）
      */
     suspend fun loadWorldInfo(): List<WorldInfoEntry> {
         ensureMigrated()
-        return worldInfoMutex.withLock {
-            if (!worldInfoFile.exists()) return@withLock emptyList()
-            try {
-                val json = worldInfoFile.readText()
-                val type = object : TypeToken<List<WorldInfoEntry>>() {}.type
-                val rawList = gson.fromJson<List<WorldInfoEntry>>(json, type) ?: emptyList()
-                selfHealWorldInfo(rawList)
-            } catch (e: Exception) {
-                e.printStackTrace()
-                backupCorruptFile(worldInfoFile)
-                emptyList()
-            }
-        }
+        return runCatching { globalOwnedBook()?.entries ?: emptyList() }.getOrDefault(emptyList())
     }
 
     /**
@@ -410,99 +387,73 @@ class ChatStorageManager(private val context: Context) {
      */
     suspend fun updateWorldInfo(updateBlock: (List<WorldInfoEntry>) -> List<WorldInfoEntry>) {
         ensureMigrated()
-        worldInfoMutex.withLock {
-            val current = if (worldInfoFile.exists()) {
-                try {
-                    val json = worldInfoFile.readText()
-                    val type = object : TypeToken<List<WorldInfoEntry>>() {}.type
-                    selfHealWorldInfo(gson.fromJson<List<WorldInfoEntry>>(json, type) ?: emptyList())
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                    backupCorruptFile(worldInfoFile)
-                    emptyList()
-                }
-            } else {
-                emptyList()
-            }
-            val updated = updateBlock(current)
-            try {
-                atomicWrite(worldInfoFile, gson.toJson(updated))
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
+        runCatching {
+            val current = globalOwnedBook()?.entries ?: emptyList()
+            saveWorldInfo(updateBlock(current))
+        }.onFailure { it.printStackTrace() }
     }
 
-    /**
-     * 某会话专属世界书文件路径（文件存在 = 该会话自定义书，替代全局书）。
-     */
-    private fun sessionWorldInfoFile(sessionId: String): File = File(sessionsDir, "world_info_$sessionId.json")
+    /** 绑定某会话的 owned 书（旧 UI 只管理 owned 会话书；卡书绑定走 W4 面板语义）。 */
+    private suspend fun sessionOwnedBook(sessionId: String): WorldInfoBookDocument? =
+        worldInfoLibrary.loadAllBooks().firstOrNull { sessionId in it.sessionIds && it.isOwned }
 
     /**
-     * 读取某会话专属世界书；文件不存在返回 null（调用方回退全局书）。
+     * 读取某会话专属世界书；未绑定返回 null（调用方回退全局书，行为同 0.7.1）。
      */
     suspend fun loadSessionWorldInfo(sessionId: String): WorldInfoBook? {
         ensureMigrated()
-        return worldInfoMutex.withLock {
-            val file = sessionWorldInfoFile(sessionId)
-            if (!file.exists()) return@withLock null
-            try {
-                val obj = gson.fromJson(file.readText(), JsonObject::class.java)
-                val entries = if (obj.has("entries")) {
-                    val type = object : TypeToken<List<WorldInfoEntry>>() {}.type
-                    selfHealWorldInfo(gson.fromJson<List<WorldInfoEntry>>(obj.getAsJsonArray("entries"), type) ?: emptyList())
-                } else {
-                    emptyList()
-                }
-                val config = if (obj.has("config")) {
-                    WorldInfoConfigStorage.fromJson(obj.get("config").toString())
-                } else {
-                    WorldInfoConfig()
-                }
-                WorldInfoBook(entries = entries, config = config)
-            } catch (e: Exception) {
-                e.printStackTrace()
-                backupCorruptFile(file)
-                null
+        return runCatching {
+            sessionOwnedBook(sessionId)?.let { book ->
+                WorldInfoBook(entries = book.entries, config = book.config ?: WorldInfoConfig())
             }
-        }
+        }.getOrNull()
     }
 
     /**
-     * 保存某会话专属世界书（写入即建立"自定义书"，匹配时完全替代全局书）。
+     * 保存某会话专属世界书（写入即建立绑定，匹配时最高优先于默认解析）。
      */
     suspend fun saveSessionWorldInfo(sessionId: String, book: WorldInfoBook) {
         ensureMigrated()
-        worldInfoMutex.withLock {
-            try {
-                val obj = JsonObject()
-                obj.add("entries", gson.toJsonTree(book.entries))
-                obj.add(
-                    "config",
-                    gson.fromJson(WorldInfoConfigStorage.toJson(book.config), JsonObject::class.java)
+        runCatching {
+            val existing = sessionOwnedBook(sessionId)
+            if (existing != null) {
+                worldInfoLibrary.saveBook(
+                    existing.copy(
+                        entries = book.entries,
+                        config = book.config,
+                        updatedAt = System.currentTimeMillis()
+                    )
                 )
-                atomicWrite(sessionWorldInfoFile(sessionId), obj.toString())
-            } catch (e: Exception) {
-                e.printStackTrace()
+            } else {
+                worldInfoLibrary.createOwnedBook(
+                    name = "会话书 · ${sessionId.takeLast(6)}",
+                    entries = book.entries,
+                    sessionIds = listOf(sessionId),
+                    config = book.config
+                )
             }
-        }
+        }.onFailure { it.printStackTrace() }
     }
 
     /**
-     * 删除某会话专属世界书（该会话恢复回退全局书）。
+     * 删除某会话专属世界书：仅绑定该会话的书整本删除，多会话共享的书只解绑。
      */
     suspend fun deleteSessionWorldInfo(sessionId: String) {
         ensureMigrated()
-        worldInfoMutex.withLock {
-            try {
-                val file = sessionWorldInfoFile(sessionId)
-                if (file.exists()) {
-                    file.delete()
+        runCatching {
+            worldInfoLibrary.loadAllBooks()
+                .filter { sessionId in it.sessionIds && it.isOwned }
+                .forEach { book ->
+                    val remaining = book.sessionIds - sessionId
+                    if (remaining.isEmpty()) {
+                        worldInfoLibrary.deleteBook(book.id)
+                    } else {
+                        worldInfoLibrary.saveBook(
+                            book.copy(sessionIds = remaining, updatedAt = System.currentTimeMillis())
+                        )
+                    }
                 }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
+        }.onFailure { it.printStackTrace() }
     }
 
     /**

@@ -1431,7 +1431,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val worldInfo = if (useCompiledPath) {
                 null
             } else if (needsTurnSnapshot || worldInfoPosition == "top") {
-                buildWorldInfoBlock(history)
+                buildWorldInfoBlock(sessionId, history)
             } else {
                 null
             }
@@ -1443,6 +1443,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val compiled = buildCompiledTurn(
                     document = characterDocument!!,
                     card = characterCard,
+                    sessionId = sessionId,
                     history = history,
                     promptRegexRules = promptRegexRules,
                     compiledPatterns = compiledPatterns,
@@ -2529,38 +2530,41 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 解析匹配时使用的世界书：会话已配置专属书 → 用它；否则回退全局书。
-     */
-    private fun resolveWorldInfoBook(): WorldInfoBook =
-        sessionWorldInfo.value ?: WorldInfoBook(worldInfoEntries.value, worldInfoConfig.value)
-
-    /**
-     * 世界观关键词匹配并拼接注入块（委托 WorldInfoMatcher 纯函数，语义对齐 SillyTavern v2）。
+     * 世界观关键词匹配并拼接注入块（WorldInfo 2.0：单一生效书，Spec §4.2）。
+     * - 条目与配置来自 [WorldInfoLibrary.resolveActiveBook]（core 格式，已应用 override 过滤），
+     *   匹配内核仍走 character-core WorldInfoMatcher（父 Spec §10 单一实现）
      * - "system" 关键词扫描源使用角色卡 systemPrompt（persona）近似系统设定
      * - 概率随机源用「会话 id + 最后一条用户消息」稳定种子：同轮重试可复现同一注入集合 → 保前缀缓存
      */
-    private fun buildWorldInfoBlock(history: List<Message>): String? {
-        val seedKey = (activeSession.value?.id ?: "") + "|" +
+    private suspend fun buildWorldInfoBlock(sessionId: String, history: List<Message>): String? {
+        val seedKey = sessionId + "|" +
             history.lastOrNull { it.sender == Sender.USER }?.content.orEmpty()
-        val book = resolveWorldInfoBook()
-        return WorldInfoBridge.blockFor(
-            entries = book.entries,
+        val resolution = storageManager.worldInfoLibrary.resolveActiveBook(
+            sessionId = sessionId,
+            characterId = activeCharacterCard.value?.id,
+            defaultConfig = worldInfoConfig.value
+        )
+        if (resolution.entries.isEmpty()) return null
+        return com.loyea.character.core.worldinfo.WorldInfoMatcher.worldInfoBlockFor(
+            entries = resolution.entries,
             historyContents = history.map { it.content },
             userName = userName.value,
             systemPrompt = activeCharacterCard.value?.systemPrompt.orEmpty(),
-            config = book.config,
+            config = resolution.config,
             random = kotlin.random.Random(seedKey.hashCode().toLong())
         )
     }
 
     /**
-     * 导入卡编译路径（Spec §5.1）：角色书 + 全局/会话书组合匹配后，
-     * 由 CharacterCompiler 按固定顺序产出结构化提示词。
+     * 导入卡编译路径（Spec §5.1）：单一生效书匹配后，
+     * 由 CharacterCompiler 按固定顺序产出结构化提示词（WorldInfo 2.0 Spec §4.2：
+     * 替代"卡书 + legacy 桶并行"合流，条目与配置来自 [WorldInfoLibrary.resolveActiveBook]）。
      * 配置优先级（Spec §6.1）：卡/书显式设置 > Loyea 默认；递归轮次上限沿用用户设置。
      */
-    private fun buildCompiledTurn(
+    private suspend fun buildCompiledTurn(
         document: com.loyea.character.core.api.CharacterDocument,
         card: CharacterCard,
+        sessionId: String,
         history: List<Message>,
         promptRegexRules: List<com.loyea.character.core.regex.RegexRule> = emptyList(),
         compiledPatterns: Map<String, com.google.re2j.Pattern> = emptyMap(),
@@ -2574,27 +2578,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         snapshotTime: Long
     ): com.loyea.character.core.prompt.CharacterCompiler.PreparedCharacterTurn {
         val profile = document.profile
-        val seedKey = (activeSession.value?.id ?: "") + "|" +
+        val seedKey = sessionId + "|" +
             history.lastOrNull { it.sender == Sender.USER }?.content.orEmpty()
 
-        // —— 条目组合：角色书（before_char/after_char）+ 旧版书（legacy 桶）——
-        val entries = ArrayList<com.loyea.character.core.worldinfo.WorldInfoEntry>()
-        var bookConfig: com.loyea.character.core.worldinfo.WorldInfoConfig? = null
-        document.embeddedBookJson?.let { bookJson ->
-            com.loyea.character.core.codec.CharacterCardCodec.parseCharacterBook(bookJson)?.let { parsed ->
-                val adapted = com.loyea.character.core.codec.CardBookAdapter.toWorldInfoBook(
-                    parsed, "charbook:${profile.id}"
-                )
-                entries += adapted.entries
-                bookConfig = adapted.config
-            }
-        }
-        val legacyBook = resolveWorldInfoBook()
-        entries += WorldInfoBridge.toCoreEntries(legacyBook.entries)
-
-        val userCoreConfig = WorldInfoBridge.toCoreConfig(legacyBook.config)
-        val combinedConfig = bookConfig?.copy(recursionDepthCap = userCoreConfig.recursionDepthCap)
-            ?: userCoreConfig
+        // —— 单一生效书（WorldInfo 2.0）：条目已应用 override 过滤，配置已按书覆盖合并 ——
+        val resolution = storageManager.worldInfoLibrary.resolveActiveBook(
+            sessionId = sessionId,
+            characterId = profile.id,
+            defaultConfig = worldInfoConfig.value
+        )
+        val entries = resolution.entries
+        val combinedConfig = resolution.config
 
         val hostBlocks = PromptAssembler.buildHostProtocolBlocks(
             userName = userName.value,
