@@ -43,6 +43,10 @@ android {
     }
 
     buildTypes {
+        debug {
+            // 重启开发期使用独立包名，避免在真实用户数据上启动（Spec §9）
+            applicationIdSuffix = ".rebuild.debug"
+        }
         release {
             isMinifyEnabled = false
             signingConfig = signingConfigs.getByName("release")

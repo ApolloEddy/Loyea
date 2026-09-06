@@ -44,4 +44,16 @@ dump.rdb
 
 # Local agent state
 .gemini/
+.agents/
 server/data/vector_store/
+
+# Dev-only artifacts (never publish to the source tree)
+logcat.txt
+logcat_utf8.txt
+diff_chatscreen.txt
+
+# Development specs (kept locally; not part of the public repo docs)
+docs/physical_perception_spec.md
+docs/tavern_plugin_refactor.md
+docs/tavo_parity_plan.md
+docs/Loyea-Rebuild-Spec-*.md
