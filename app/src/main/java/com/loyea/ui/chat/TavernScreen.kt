@@ -1438,7 +1438,7 @@ fun shareCharacterCardPng(context: Context, card: CharacterCard) {
         }
 
         // 4. 分享
-        val fileUri = FileProvider.getUriForFile(context, "com.loyea.fileprovider", outFile)
+        val fileUri = FileProvider.getUriForFile(context, context.packageName + ".fileprovider", outFile)
         val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
             type = "image/png"
             putExtra(android.content.Intent.EXTRA_STREAM, fileUri)
@@ -1466,7 +1466,7 @@ fun shareCharacterCardJson(context: Context, card: CharacterCard) {
             fos.write(jsonV2.toByteArray(java.nio.charset.StandardCharsets.UTF_8))
         }
 
-        val fileUri = FileProvider.getUriForFile(context, "com.loyea.fileprovider", outFile)
+        val fileUri = FileProvider.getUriForFile(context, context.packageName + ".fileprovider", outFile)
         val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
             type = "application/json"
             putExtra(android.content.Intent.EXTRA_STREAM, fileUri)

@@ -22,8 +22,9 @@ android {
         applicationId = "com.loyea"
         minSdk = 26
         targetSdk = 34
-        versionCode = 11
-        versionName = "0.5.5"
+        // 重启版版本线（Spec §9）：versionCode 至少 14（高于已发 11/13），release 包名继续 com.loyea
+        versionCode = 14
+        versionName = "0.7.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
