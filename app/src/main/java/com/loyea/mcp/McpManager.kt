@@ -341,6 +341,10 @@ class McpManager(private val context: Context) {
         perceptionServer.webPageFetcher = provider
     }
 
+    fun registerImageGenerationProvider(provider: suspend (String) -> String) {
+        perceptionServer.imageGenerationProvider = provider
+    }
+
     internal fun registerClientForTest(id: String, client: McpClient) {
         activeClients[id] = client
     }

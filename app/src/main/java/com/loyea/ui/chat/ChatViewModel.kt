@@ -337,6 +337,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         loadAllData()
+        mcpManager.registerImageGenerationProvider { prompt ->
+            generateAndStoreImage(prompt) ?: "Error: Image generation failed. Check the ImageGen API configuration."
+        }
+
         mcpManager.registerWebSearchProvider { query ->
             val activeConfig = activeApiConfig.value
             // 搜索凭据解析（全局优先）：设置页「联网搜索 API（全局）」配置一次全模型共用；
@@ -1448,6 +1452,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     enableSearch = apiConfig.enableSearch,
                     enableHaptic = toolAuthHaptic.value,
                     enableVoice = hasTtsCapability(),
+                    enableImageGen = enableImageGen.value && hasImageGenCapability(),
                     enableAdultContent = enableAdultContent.value,
                     graphMemory = graphMemory,
                     snapshotTime = snapshotTime
@@ -1498,6 +1503,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 worldInfoPosition = worldInfoPosition,
                 enableHaptic = toolAuthHaptic.value,
                 enableVoice = hasTtsCapability(),
+                enableImageGen = enableImageGen.value && hasImageGenCapability(),
                 enableAdultContent = enableAdultContent.value,
                 trustedCard = characterCard.isBuiltIn,
                 snapshotTimeMillis = snapshotTime
@@ -1606,6 +1612,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         when {
                             lowName.contains("web_search") || lowName.contains("read_url") -> apiConfig.enableSearch
                             lowName.contains("send_voice_reply") -> hasTtsCapability()
+                            lowName.contains("generate_image") -> enableImageGen.value && hasImageGenCapability()
                             lowName.contains("location") -> toolAuthLocation.value
                             lowName.contains("weather") || lowName.contains("forecast") -> toolAuthWeather.value
                             lowName.contains("light") || lowName.contains("noise") -> toolAuthEnvironment.value
@@ -1837,6 +1844,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                                toolCall.name.endsWith("__send_voice_reply", ignoreCase = true) || 
                                                toolCall.name.endsWith(".send_voice_reply", ignoreCase = true)
 
+                            val isImageGenTool = toolCall.name.equals("generate_image", ignoreCase = true) ||
+                                               toolCall.name.endsWith("__generate_image", ignoreCase = true) ||
+                                               toolCall.name.endsWith(".generate_image", ignoreCase = true)
+
                             // 检查是否重复调用了相同参数的工具以防陷入死循环
                             val toolSignature = "${toolCall.name}::${toolCall.argumentsJson.trim()}"
                             val isDuplicate = executedToolsSignature.contains(toolSignature)
@@ -1860,6 +1871,32 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 executedToolsSignature.add(toolSignature)
                                 toolOutput = "语音回复已发送"
                                 success = true
+                            } else if (isImageGenTool) {
+                                executedToolsSignature.add(toolSignature)
+                                if (!enableImageGen.value || !hasImageGenCapability()) {
+                                    toolOutput = "Permission Denied: Image generation is disabled or not configured by the user."
+                                    success = false
+                                } else {
+                                    val imagePrompt = parsedArgs["prompt"]?.toString() ?: ""
+                                    if (imagePrompt.isBlank()) {
+                                        toolOutput = "Error: Image prompt cannot be empty."
+                                        success = false
+                                    } else {
+                                        val imagePath = generateAndStoreImage(imagePrompt)
+                                        if (imagePath == null) {
+                                            toolOutput = "[生图失败] 生成请求失败，请检查生图 API 配置或稍后再试。"
+                                            success = false
+                                        } else {
+                                            // 图片直接落到当前回复气泡内展示（骨架占位 → 圆角大图，点击看原图）
+                                            currentList = updateAiMessage(currentList, aiMessageId) {
+                                                it.copy(imageUrl = imagePath)
+                                            }
+                                            messages.value = currentList
+                                            toolOutput = "图像已生成并展示给用户。请用一两句话自然地向用户描述你画了什么；不要输出链接、路径或 Markdown 图片语法。"
+                                            success = true
+                                        }
+                                    }
+                                }
                             } else if (!useSystemTime && !isWebSearch && !isReadUrl) {
                                 toolOutput = "Permission Denied: Physical perception is globally disabled by the user."
                                 success = false
@@ -2533,6 +2570,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         enableSearch: Boolean,
         enableHaptic: Boolean,
         enableVoice: Boolean,
+        enableImageGen: Boolean,
         enableAdultContent: Boolean,
         graphMemory: String?,
         snapshotTime: Long
@@ -2557,6 +2595,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             enableSearch = enableSearch,
             enableHaptic = enableHaptic,
             enableVoice = enableVoice,
+            enableImageGen = enableImageGen,
             enableAdultContent = enableAdultContent,
             trustedCard = card.isBuiltIn
         ).mapIndexed { index, block ->
@@ -3777,6 +3816,47 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             provider.contains("alibaba") || provider.contains("volcengine")) return true
         return apiConfigList.value.any { it.provider.equals("MiMo", ignoreCase = true) }
     }
+
+    /** 生图能力：专用生图配置有 Key，或主配置有 Key（MiMo 免专用配置）。 */
+    private fun hasImageGenCapability(): Boolean {
+        val genCfgId = imageGenConfigId.value
+        if (genCfgId.isNotBlank()) {
+            return apiConfigList.value.any { it.id == genCfgId && it.apiKey.isNotBlank() }
+        }
+        return activeApiConfig.value.apiKey.isNotBlank() ||
+            apiConfigList.value.any { it.provider.equals("MiMo", ignoreCase = true) }
+    }
+
+    /**
+     * 生图核心（/draw 指令与 generate_image 工具共用）：调用生图 API 并下载到本地，
+     * 返回本地展示路径（离线可看）；生成失败返回 null。
+     */
+    private suspend fun generateAndStoreImage(prompt: String): String? =
+        withContext(Dispatchers.IO) {
+            val genCfgId = imageGenConfigId.value
+            val targetGenConfig = if (genCfgId.isNotBlank()) {
+                apiConfigList.value.find { it.id == genCfgId } ?: activeApiConfig.value
+            } else {
+                activeApiConfig.value
+            }
+            val remoteUrl = llmClient.generateImage(targetGenConfig, prompt, imageGenModel.value)
+                ?: return@withContext null
+            val localFile = File(context.filesDir, "images/img_${System.currentTimeMillis()}.png")
+            localFile.parentFile?.mkdirs()
+            try {
+                val request = okhttp3.Request.Builder().url(remoteUrl).build()
+                okhttp3.OkHttpClient().newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        response.body?.byteStream()?.use { input ->
+                            localFile.outputStream().use { output -> input.copyTo(output) }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            if (localFile.exists()) localFile.absolutePath else remoteUrl
+        }
 
     suspend fun transcribeAudio(file: File): String? {
         val targetSttConfig = resolveSttConfig()

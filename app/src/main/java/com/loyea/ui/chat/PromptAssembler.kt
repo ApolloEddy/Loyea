@@ -44,6 +44,7 @@ object PromptAssembler {
         worldInfoPosition: String = "bottom", // "bottom"=易变尾最末尾（保前缀缓存）；"top"=web-search 之后、角色名之前
         enableHaptic: Boolean = true,
         enableVoice: Boolean = true,
+        enableImageGen: Boolean = false,
         enableAdultContent: Boolean = false,
         trustedCard: Boolean = false
     ): String = assemblePromptParts(
@@ -58,6 +59,7 @@ object PromptAssembler {
         worldInfoPosition = worldInfoPosition,
         enableHaptic = enableHaptic,
         enableVoice = enableVoice,
+        enableImageGen = enableImageGen,
         enableAdultContent = enableAdultContent,
         trustedCard = trustedCard
     ).combinedSystemPrompt()
@@ -79,6 +81,7 @@ object PromptAssembler {
         worldInfoPosition: String = "bottom",
         enableHaptic: Boolean = true,
         enableVoice: Boolean = true,
+        enableImageGen: Boolean = false,
         enableAdultContent: Boolean = false,
         trustedCard: Boolean = false,
         snapshotTimeMillis: Long = System.currentTimeMillis(),
@@ -248,6 +251,9 @@ object PromptAssembler {
             sb.append("- `BuiltinPerception__web_search`: Use this tool to query real-time news, current events, or search the web for facts.\n")
             sb.append("- `BuiltinPerception__read_url`: Use this tool to open a specific URL (e.g. an official website, documentation, or news article) and read its full page content, when the user names a site or you need details beyond search snippets.\n")
         }
+        if (enableImageGen) {
+            sb.append("- `generate_image`: Call this when the user asks you to draw, paint, or generate a picture/illustration/avatar/scene. Compose a detailed visual description (subject, action, style, composition, mood) into the `prompt` argument. The generated image is displayed to the user in the chat automatically — never output image links or markdown image syntax yourself.\n")
+        }
         sb.append("\nHow to trigger tools:\n")
         sb.append("1. **Standard Tool Calls**: If supported by your API, return the tool call structured fields natively.\n")
         sb.append("2. **Text-based XML Fallback**: If standard tool calling is not working, or if you prefer text invocation, you can trigger any tool by outputting the XML format directly in your response text. The system will parse and execute it behind the scenes, and the tag will NOT be shown to the user. Format: `<tool_call>ToolName(arg1=\"value1\", arg2=\"value2\")</tool_call>`.\n")
@@ -359,6 +365,7 @@ object PromptAssembler {
         enableSearch: Boolean,
         enableHaptic: Boolean,
         enableVoice: Boolean,
+        enableImageGen: Boolean = false,
         enableAdultContent: Boolean,
         trustedCard: Boolean
     ): List<PromptAssemblerBlock> {
@@ -419,6 +426,7 @@ object PromptAssembler {
         if (enableSearch) {
             toolSb.append("- `BuiltinPerception__web_search`: real-time news/events/facts.\n")
             toolSb.append("- `BuiltinPerception__read_url`: read a specific webpage when the user names a site.\n")
+        if (enableImageGen) toolSb.append("- `generate_image`: draw and show a picture when the user asks; put the detailed visual description in `prompt`.\n")
         }
         toolSb.append("Trigger formats: (1) native structured tool calls when supported; (2) text fallback `<tool_call>ToolName(arg=\"value\")</tool_call>`. Do NOT invent non-existent tools.")
         add(toolSb.toString())

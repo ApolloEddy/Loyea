@@ -1532,19 +1532,19 @@ fun MessageItem(
                             bitmap = imageBitmap,
                             contentDescription = "AI Generated Image",
                             modifier = Modifier
-                                .fillMaxWidth(0.7f)
-                                .heightIn(max = 200.dp)
+                                .fillMaxWidth(0.85f)
+                                .heightIn(max = 280.dp)
                                 .padding(vertical = 4.dp)
                                 .clip(RoundedCornerShape(20.dp))
                                 .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f), RoundedCornerShape(20.dp))
                                 .clickable { onImageClick(message.imageUrl) },
-                            contentScale = ContentScale.Crop
+                            contentScale = ContentScale.Fit
                         )
                     } else {
                         Box(
                             modifier = Modifier
-                                .fillMaxWidth(0.7f)
-                                .height(200.dp)
+                                .fillMaxWidth(0.85f)
+                                .height(280.dp)
                                 .padding(vertical = 4.dp)
                                 .clip(RoundedCornerShape(20.dp))
                                 .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.05f * shimmerAlpha))

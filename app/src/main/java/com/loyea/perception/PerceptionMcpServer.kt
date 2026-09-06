@@ -23,6 +23,7 @@ class PerceptionMcpServer(private val context: Context) {
 
     var webSearchProvider: (suspend (String) -> String)? = null
     var webPageFetcher: (suspend (String) -> String)? = null
+    var imageGenerationProvider: (suspend (String) -> String)? = null
 
     fun getTools(): List<McpTool> {
         return listOf(
@@ -104,6 +105,20 @@ class PerceptionMcpServer(private val context: Context) {
                         )
                     ),
                     "required" to listOf("text")
+                )
+            ),
+            McpTool(
+                name = "generate_image",
+                description = "生成一张图片并直接展示在聊天中。当用户要求你画画、生成图片、画一张插画/头像/场景图/表情包等创作图像请求时必须调用。在 prompt 中用详细的画面描述（主体、动作、风格、构图、氛围）表达你想画的内容。生图完成后图片会自动出现在聊天里，不要自己输出图片链接。",
+                inputSchema = mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "prompt" to mapOf(
+                            "type" to "string",
+                            "description" to "详细的画面描述：主体、动作、风格、构图、氛围等要素。"
+                        )
+                    ),
+                    "required" to listOf("prompt")
                 )
             ),
             McpTool(
@@ -207,6 +222,17 @@ class PerceptionMcpServer(private val context: Context) {
                         "Error: Voice reply text cannot be empty."
                     } else {
                         "Voice reply sent successfully: \"$text\""
+                    }
+                }
+                "generate_image" -> {
+                    // 主聊天代理循环会在 callTool 之前拦截本工具（需要把图片挂到当前气泡），
+                    // 走到这里说明在其他上下文路由，无法挂载图片展示
+                    val prompt = arguments?.get("prompt")?.toString() ?: ""
+                    if (prompt.isBlank()) {
+                        "Error: Image prompt cannot be empty."
+                    } else {
+                        imageGenerationProvider?.invoke(prompt)
+                            ?: "Error: Image generation is only available in the main chat session."
                     }
                 }
                 "web_search" -> {
