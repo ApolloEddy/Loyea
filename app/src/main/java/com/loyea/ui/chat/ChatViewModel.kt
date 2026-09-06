@@ -342,11 +342,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         loadAllData()
         mcpManager.registerWebSearchProvider { query ->
             val activeConfig = activeApiConfig.value
-            if (activeConfig.useIndependentSearch && activeConfig.searchApiKey.isNotBlank()) {
-                llmClient.performIndependentWebSearch(activeConfig, query)
-            } else {
-                // 如果没有配置独立检索 Key，自动切换至备用免 Key 公共检索 (DuckDuckGo HTML 解析)
-                llmClient.performFreeWebSearch(query)
+            // 搜索凭据解析（全局优先）：设置页「联网搜索 API（全局）」配置一次全模型共用；
+            // 未填时回落旧版行为（服务商原生 web_search 或免 Key 检索）
+            val globalProvider = prefs.getString("global_search_provider", "") ?: ""
+            val globalUrl = prefs.getString("global_search_api_url", "") ?: ""
+            val globalKey = prefs.getString("global_search_api_key", "") ?: ""
+            when {
+                globalKey.isNotBlank() -> llmClient.performIndependentWebSearch(
+                    globalProvider.ifBlank { "Tavily" },
+                    globalUrl.ifBlank { "https://api.tavily.com" },
+                    globalKey,
+                    query
+                )
+                activeConfig.useIndependentSearch && activeConfig.searchApiKey.isNotBlank() -> llmClient.performIndependentWebSearch(
+                    activeConfig.searchProvider, activeConfig.searchApiUrl, activeConfig.searchApiKey, query
+                )
+                else -> {
+                    // 如果没有配置独立检索 Key，自动切换至备用免 Key 公共检索 (DuckDuckGo HTML 解析)
+                    llmClient.performFreeWebSearch(query)
+                }
             }
         }
         // read_url：抓取指定网页正文（Agent 化浏览，模型自主抉择「搜索」还是「直接读官网」）

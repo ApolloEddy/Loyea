@@ -1,6 +1,9 @@
 package com.loyea.ui.settings
 
 import android.widget.Toast
+import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material3.CircularProgressIndicator
+import kotlinx.coroutines.launch
 import androidx.compose.animation.*
 import com.loyea.mcp.McpServerConfig
 import com.loyea.mcp.McpServerStatus
@@ -915,6 +918,10 @@ fun ApiConfigLayout(
                     .padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                // 全局联网搜索 API（单拎出来，不再每个模型配置一次）
+                item {
+                    GlobalSearchConfigCard(appLanguage = appLanguage)
+                }
                 if (apiConfigList.isEmpty()) {
                     item {
                         Box(
@@ -1076,6 +1083,128 @@ fun ApiConfigLayout(
     }
 }
 
+/**
+ * 全局联网搜索 API 配置卡片：凭据只配一次，所有模型配置共用（用户要求单拎出来）。
+ * 未填写时回落到旧版行为（服务商原生 web_search 或免 Key 检索）。
+ */
+@Composable
+fun GlobalSearchConfigCard(appLanguage: String) {
+    val isEn = appLanguage == "en"
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("loyea_prefs", android.content.Context.MODE_PRIVATE) }
+
+    var provider by remember { mutableStateOf(prefs.getString("global_search_provider", "Tavily") ?: "Tavily") }
+    var apiUrl by remember { mutableStateOf(prefs.getString("global_search_api_url", "https://api.tavily.com") ?: "https://api.tavily.com") }
+    var apiKey by remember { mutableStateOf(prefs.getString("global_search_api_key", "") ?: "") }
+    var showKey by remember { mutableStateOf(false) }
+    var dropdownExpanded by remember { mutableStateOf(false) }
+
+    fun persist() {
+        prefs.edit()
+            .putString("global_search_provider", provider)
+            .putString("global_search_api_url", apiUrl)
+            .putString("global_search_api_key", apiKey)
+            .apply()
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Default.CloudDownload,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = if (isEn) "Web Search API (Global)" else "联网搜索 API（全局）",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+        }
+        Text(
+            text = if (isEn) "Configured once, shared by every model. Leave empty to use the provider's built-in web search or keyless fallback." else "只需配置一次，所有模型共用。留空则使用服务商自带联网搜索或免 Key 检索。",
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+        )
+        Box(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                    .clickable { dropdownExpanded = true }
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(text = provider, fontSize = 13.sp, color = MaterialTheme.colorScheme.onBackground)
+                Spacer(modifier = Modifier.weight(1f))
+                Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f))
+            }
+            DropdownMenu(
+                expanded = dropdownExpanded,
+                onDismissRequest = { dropdownExpanded = false },
+                modifier = Modifier.fillMaxWidth(0.8f).background(MaterialTheme.colorScheme.surface)
+            ) {
+                listOf("Tavily", "Custom").forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(option, color = MaterialTheme.colorScheme.onBackground) },
+                        onClick = {
+                            provider = option
+                            if (option == "Tavily") apiUrl = "https://api.tavily.com"
+                            dropdownExpanded = false
+                            persist()
+                        }
+                    )
+                }
+            }
+        }
+        OutlinedTextField(
+            value = apiUrl,
+            onValueChange = { apiUrl = it; persist() },
+            singleLine = true,
+            label = { Text(if (isEn) "Search API Base URL" else "搜索 API 地址", fontSize = 12.sp) },
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                unfocusedBorderColor = MaterialTheme.colorScheme.outline
+            ),
+            textStyle = TextStyle(color = MaterialTheme.colorScheme.onBackground),
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = apiKey,
+            onValueChange = { apiKey = it; persist() },
+            singleLine = true,
+            label = { Text(if (isEn) "Search API Key" else "搜索 API Key", fontSize = 12.sp) },
+            visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = {
+                IconButton(onClick = { showKey = !showKey }) {
+                    Icon(
+                        imageVector = if (showKey) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                    )
+                }
+            },
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                unfocusedBorderColor = MaterialTheme.colorScheme.outline
+            ),
+            textStyle = TextStyle(color = MaterialTheme.colorScheme.onBackground),
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
 @Composable
 fun BadgeLabel(text: String) {
     Box(
@@ -1113,15 +1242,15 @@ fun AddOrEditSheet(
     var enableReasoning by remember { mutableStateOf(editingConfig?.enableReasoning ?: true) }
     var enableSmartRouting by remember { mutableStateOf(editingConfig?.enableSmartRouting ?: true) }
 
-    var useIndependentSearch by remember { mutableStateOf(editingConfig?.useIndependentSearch ?: false) }
-    var searchProvider by remember { mutableStateOf(editingConfig?.searchProvider ?: "Tavily") }
-    var searchApiUrlInput by remember { mutableStateOf(editingConfig?.searchApiUrl ?: "https://api.tavily.com") }
-    var searchApiKeyInput by remember { mutableStateOf(editingConfig?.searchApiKey ?: "") }
-    var searchProviderDropdownExpanded by remember { mutableStateOf(false) }
-    var showSearchApiKey by remember { mutableStateOf(false) }
 
     var showApiKey by remember { mutableStateOf(false) }
     var providerDropdownExpanded by remember { mutableStateOf(false) }
+
+    // 模型列表云端同步（GET /models，OpenAI 兼容约定）
+    val sheetScope = rememberCoroutineScope()
+    var fetchingModels by remember { mutableStateOf(false) }
+    var cloudModels by remember { mutableStateOf<List<String>>(emptyList()) }
+    var modelFetchMessage by remember { mutableStateOf<String?>(null) }
 
     val providersList = listOf(
         "DeepSeek", "OpenAI", 
@@ -1192,6 +1321,13 @@ fun AddOrEditSheet(
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
                 modifier = Modifier.padding(bottom = 6.dp)
             )
+        Text(
+            text = if (isEn) "CONNECTION" else "连接",
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+            modifier = Modifier.padding(top = 2.dp)
+        )
             OutlinedTextField(
                 value = nameInput,
                 onValueChange = { nameInput = it },
@@ -1285,6 +1421,13 @@ fun AddOrEditSheet(
             }
         }
 
+        Text(
+            text = if (isEn) "MODEL" else "模型",
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+            modifier = Modifier.padding(top = 2.dp)
+        )
         Column {
             Text(
                 text = "API BASE URL",
@@ -1352,7 +1495,41 @@ fun AddOrEditSheet(
                 value = modelInput,
                 onValueChange = { modelInput = it },
                 singleLine = true,
-                placeholder = { Text("e.g. deepseek-v4-pro", color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f)) },
+                trailingIcon = {
+                    IconButton(onClick = {
+                        if (apiUrlInput.isBlank() || apiKeyInput.isBlank()) {
+                            modelFetchMessage = if (isEn) "Fill API URL and Key first" else "请先填写 API 地址和 Key"
+                            return@IconButton
+                        }
+                        fetchingModels = true
+                        modelFetchMessage = null
+                        sheetScope.launch {
+                            ModelCatalogClient.fetchModels(apiUrlInput, apiKeyInput, selectedProvider)
+                                .onSuccess { models ->
+                                    fetchingModels = false
+                                    cloudModels = models
+                                    modelFetchMessage = if (models.isEmpty()) {
+                                        if (isEn) "Provider returned no models" else "服务商未返回模型列表"
+                                    } else null
+                                }
+                                .onFailure { e ->
+                                    fetchingModels = false
+                                    modelFetchMessage = (if (isEn) "Fetch failed: " else "获取失败：") + (e.message ?: "unknown")
+                                }
+                        }
+                    }) {
+                        if (fetchingModels) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.CloudDownload,
+                                contentDescription = if (isEn) "Sync model list" else "从服务商同步模型列表",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                },
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = MaterialTheme.colorScheme.primary,
                     unfocusedBorderColor = MaterialTheme.colorScheme.outline
@@ -1393,10 +1570,64 @@ fun AddOrEditSheet(
                     }
                 }
             }
+
+            // 云端同步的模型列表（来自服务商 GET /models）
+            modelFetchMessage?.let { msg ->
+                Text(
+                    text = msg,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
+                )
+            }
+            if (cloudModels.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = if (isEn) "Cloud models (${cloudModels.size})" else "云端模型（${cloudModels.size} 个）",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                ) {
+                    cloudModels.forEach { model ->
+                        val isSelected = modelInput == model
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                    else MaterialTheme.colorScheme.primary.copy(alpha = 0.05f)
+                                )
+                                .border(
+                                    1.dp,
+                                    if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                                    RoundedCornerShape(12.dp)
+                                )
+                                .clickable { modelInput = model }
+                                .padding(horizontal = 10.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = model,
+                                fontSize = 11.sp,
+                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         Spacer(modifier = Modifier.height(4.dp))
 
+        Text(
+            text = if (isEn) "CAPABILITIES" else "能力",
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+            modifier = Modifier.padding(top = 2.dp)
+        )
         // 联网搜索开关
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1424,161 +1655,6 @@ fun AddOrEditSheet(
                     checkedTrackColor = MaterialTheme.colorScheme.primary
                 )
             )
-        }
-
-        // 独立联网搜索配置模块
-        androidx.compose.animation.AnimatedVisibility(
-            visible = enableSearch,
-            enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
-            exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkVertically()
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f))
-                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
-                    .padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                // 开关：使用独立搜索 API
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = if (isEn) "Use Independent Search API" else "使用独立搜索 API",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
-                        Text(
-                            text = if (isEn) "Fetch search results via custom search API before sending to LLM" else "在发送大模型前，先通过自定义搜索 API 检索信息",
-                            fontSize = 10.sp,
-                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
-                        )
-                    }
-                    Switch(
-                        checked = useIndependentSearch,
-                        onCheckedChange = { useIndependentSearch = it },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = MaterialTheme.colorScheme.primary
-                        )
-                    )
-                }
-
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = useIndependentSearch,
-                    enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
-                    exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkVertically()
-                ) {
-                    Column(
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-
-                        // 搜索引擎 Provider 选择
-                        Column {
-                            Text(
-                                text = "SEARCH API PROVIDER",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
-                                modifier = Modifier.padding(bottom = 4.dp)
-                            )
-                            Box(modifier = Modifier.fillMaxWidth()) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(6.dp))
-                                        .clickable { searchProviderDropdownExpanded = true }
-                                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text(text = searchProvider, fontSize = 14.sp, color = MaterialTheme.colorScheme.onBackground)
-                                    Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, tint = MaterialTheme.colorScheme.onBackground)
-                                }
-
-                                DropdownMenu(
-                                    expanded = searchProviderDropdownExpanded,
-                                    onDismissRequest = { searchProviderDropdownExpanded = false },
-                                    modifier = Modifier.fillMaxWidth(0.8f).background(MaterialTheme.colorScheme.surface)
-                                ) {
-                                    listOf("Tavily", "Custom").forEach { prov ->
-                                        DropdownMenuItem(
-                                            text = { Text(prov, color = MaterialTheme.colorScheme.onBackground) },
-                                            onClick = {
-                                                searchProvider = prov
-                                                searchProviderDropdownExpanded = false
-                                                if (prov == "Tavily") {
-                                                    searchApiUrlInput = "https://api.tavily.com"
-                                                }
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        // Search API Base URL 输入框
-                        Column {
-                            Text(
-                                text = "SEARCH API BASE URL",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
-                                modifier = Modifier.padding(bottom = 4.dp)
-                            )
-                            OutlinedTextField(
-                                value = searchApiUrlInput,
-                                onValueChange = { searchApiUrlInput = it },
-                                singleLine = true,
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = MaterialTheme.colorScheme.primary,
-                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                                ),
-                                textStyle = TextStyle(color = MaterialTheme.colorScheme.onBackground, fontSize = 14.sp),
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
-
-                        // Search API Key 输入框
-                        Column {
-                            Text(
-                                text = "SEARCH API KEY",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
-                                modifier = Modifier.padding(bottom = 4.dp)
-                            )
-                            OutlinedTextField(
-                                value = searchApiKeyInput,
-                                onValueChange = { searchApiKeyInput = it },
-                                singleLine = true,
-                                visualTransformation = if (showSearchApiKey) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                                trailingIcon = {
-                                    val image = if (showSearchApiKey) Icons.Default.Visibility else Icons.Default.VisibilityOff
-                                    IconButton(onClick = { showSearchApiKey = !showSearchApiKey }) {
-                                        Icon(imageVector = image, contentDescription = null, tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f))
-                                    }
-                                },
-                                placeholder = { Text(text = "Enter Search API Key", color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f), fontSize = 14.sp) },
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = MaterialTheme.colorScheme.primary,
-                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                                ),
-                                textStyle = TextStyle(color = MaterialTheme.colorScheme.onBackground, fontSize = 14.sp),
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
-                    }
-                }
-            }
         }
 
         // 深度思考开关
@@ -1653,10 +1729,11 @@ fun AddOrEditSheet(
                     enableSearch = enableSearch,
                     enableReasoning = enableReasoning,
                     enableSmartRouting = enableSmartRouting,
-                    useIndependentSearch = useIndependentSearch,
-                    searchProvider = searchProvider,
-                    searchApiUrl = searchApiUrlInput,
-                    searchApiKey = searchApiKeyInput
+                    // 搜索 API 凭据已全局化（设置页「联网搜索」卡片）；旧字段原样保留以兼容历史数据
+                    useIndependentSearch = editingConfig?.useIndependentSearch ?: false,
+                    searchProvider = editingConfig?.searchProvider ?: "Tavily",
+                    searchApiUrl = editingConfig?.searchApiUrl ?: "https://api.tavily.com",
+                    searchApiKey = editingConfig?.searchApiKey ?: ""
                 )
                 onSave(newConfig)
             },

@@ -932,18 +932,18 @@ class LlmClient {
         }
     }
 
-    suspend fun performIndependentWebSearch(config: com.loyea.ui.settings.ApiConfig, query: String): String = withContext(Dispatchers.IO) {
-        if (config.searchApiKey.isBlank()) return@withContext "\n\n[联网搜索失败: 未配置搜索 API Key]\n\n"
+    suspend fun performIndependentWebSearch(searchProvider: String, searchApiUrl: String, searchApiKey: String, query: String): String = withContext(Dispatchers.IO) {
+        if (searchApiKey.isBlank()) return@withContext "\n\n[联网搜索失败: 未配置搜索 API Key]\n\n"
         
-        val baseUrl = config.searchApiUrl.trim().removeSuffix("/")
-        val finalUrl = if (config.searchProvider.equals("Tavily", ignoreCase = true)) {
+        val baseUrl = searchApiUrl.trim().removeSuffix("/")
+        val finalUrl = if (searchProvider.equals("Tavily", ignoreCase = true)) {
             "$baseUrl/search"
         } else {
             baseUrl
         }
 
         val requestJson = JsonObject().apply {
-            addProperty("api_key", config.searchApiKey)
+            addProperty("api_key", searchApiKey)
             addProperty("query", query)
             addProperty("search_depth", "basic")
             addProperty("include_answer", false)
