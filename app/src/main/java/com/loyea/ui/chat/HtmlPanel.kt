@@ -240,10 +240,20 @@ object HtmlDisplaySplitter {
 fun MessageContentWithPanels(
     raw: String,
     collapseKeyPrefix: String,
-    color: Color
+    color: Color,
+    displayRegexRules: List<com.loyea.character.core.regex.RegexRule> = emptyList()
 ) {
     val collapseState = remember(collapseKeyPrefix) { mutableStateOf(mutableMapOf<String, Boolean>()) }
-    val segments = remember(raw) { HtmlDisplaySplitter.split(raw) }
+    // P5 显示阶段（Spec §8）：从原文每次重新派生显示内容，规则变更即失效；raw 不改写
+    val displayRaw = remember(raw, displayRegexRules) {
+        if (displayRegexRules.isEmpty()) raw
+        else {
+            com.loyea.character.core.regex.BoundedRegexEngine.applyForStage(
+                raw, displayRegexRules, com.loyea.character.core.regex.RegexStage.DISPLAY_ASSISTANT
+            ).first
+        }
+    }
+    val segments = remember(displayRaw, displayRegexRules) { HtmlDisplaySplitter.split(displayRaw) }
     segments.forEachIndexed { index, segment ->
         when (segment) {
             is ContentSegment.Markdown -> if (segment.text.isNotBlank()) {

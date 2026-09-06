@@ -136,6 +136,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     // 8.3 当前会话专属世界书（null = 未配置，回退到全局书）
     var sessionWorldInfo = mutableStateOf<WorldInfoBook?>(null)
         private set
+    // P5 有限正则：当前角色的映射规则（显示阶段在渲染时按 DISPLAY_ASSISTANT 过滤应用）
+    var displayRegexRules = mutableStateOf<List<com.loyea.character.core.regex.RegexRule>>(emptyList())
+        private set
 
     val activeCharacterCard = derivedStateOf {
         val currentSession = sessions.value.find { it.id == currentSessionId.value }
@@ -565,11 +568,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val msgs = storageManager.loadSessionMessages(sessionId)
             // 会话专属世界书随会话切换重载（null = 未配置，回退全局书）
             val sessionBook = storageManager.loadSessionWorldInfo(sessionId)
+            // P5：随角色切换重载有限正则规则（来自卡 extensions.regex_scripts 白名单映射）
+            val characterId = activeSession.value?.characterId
+            val regexOutcome = characterId?.let { loadRegexRulesFor(it) }
             withContext(Dispatchers.Main) {
                 messages.value = msgs
                 sessionWorldInfo.value = sessionBook
+                displayRegexRules.value = regexOutcome?.rules ?: emptyList()
             }
         }
+    }
+
+    /** 加载角色的有限正则规则（映射失败的条目记日志，配置原文保留）。 */
+    private suspend fun loadRegexRulesFor(characterId: String): com.loyea.character.core.regex.RegexScriptAdapter.ImportOutcome? {
+        val doc = storageManager.loadCharacterDocument(characterId) ?: return null
+        val outcome = com.loyea.character.core.regex.RegexScriptAdapter.fromExtensionsJson(doc.extensionsJson)
+        if (outcome.rejections.isNotEmpty()) {
+            android.util.Log.i("BoundedRegex", "规则映射拒绝: ${outcome.rejections.joinToString { it.ruleId + ":" + it.reason }}")
+        }
+        return outcome
     }
 
     // --- 各种设置与配置修改方法 ---
@@ -1327,6 +1344,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             // 导入卡路径（Spec §5.1）：世界书由 CharacterCompiler 按位置注入 system，
             // 不再固化进回合快照——正确位置优先于缓存命中率（Spec §5.3）
             val characterDocument = storageManager.loadCharacterDocument(characterCard.id)
+            // P5 有限正则（Spec §8 处理顺序）：原始消息副本 → prompt stage 转换 → 世界书扫描 → 编译
+            val regexOutcome = characterDocument?.extensionsJson
+                ?.let { com.loyea.character.core.regex.RegexScriptAdapter.fromExtensionsJson(it) }
+            val promptRegexRules = regexOutcome?.rules ?: emptyList()
+            val compiledPatterns = promptRegexRules.mapNotNull { rule ->
+                when (val outcome = com.loyea.character.core.regex.BoundedRegexEngine.compile(rule)) {
+                    is com.loyea.character.core.regex.RegexCompileOutcome.Ok -> rule.id to outcome.pattern
+                    is com.loyea.character.core.regex.RegexCompileOutcome.Rejected -> null
+                }
+            }.toMap()
             val useCompiledPath = characterDocument != null && (
                 characterDocument.embeddedBookJson != null ||
                     characterDocument.profile.origin == com.loyea.character.core.api.CharacterOrigin.IMPORTED
@@ -1348,6 +1375,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     document = characterDocument!!,
                     card = characterCard,
                     history = history,
+                    promptRegexRules = promptRegexRules,
+                    compiledPatterns = compiledPatterns,
                     sessionUsesSystemTime = sessionUsesSystemTime,
                     physicalPerceptionEnabled = sessionUsesSystemTime,
                     enableSearch = apiConfig.enableSearch,
@@ -1434,6 +1463,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
 
+            // P5（Spec §8 处理顺序）：对消息副本按 prompt stage 应用有限正则，原文不动
+            val promptHistory = if (promptRegexRules.isEmpty()) {
+                requestHistory
+            } else {
+                requestHistory.map { msg ->
+                    val stage = if (msg.sender == Sender.USER) {
+                        com.loyea.character.core.regex.RegexStage.PROMPT_USER
+                    } else {
+                        com.loyea.character.core.regex.RegexStage.PROMPT_ASSISTANT
+                    }
+                    val (transformed, _) = com.loyea.character.core.regex.BoundedRegexEngine.applyForStage(
+                        msg.content, promptRegexRules, stage, compiledPatterns
+                    )
+                    msg.copy(content = transformed)
+                }
+            }
+
             // ===== 历史覆盖（Spec §7.3）：预算内连续后缀，被移出的消息必须已被摘要覆盖 =====
             // 未提供模型容量配置时的保守回退：8192 − 输出预留(1024+256) − system/摘要/输入占用
             val systemEstimate = estimateTokens(promptPartsFinal.stableSystemPrompt) +
@@ -1442,16 +1488,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 estimateTokens(requestUserMessage?.content ?: "")
             val historyBudget = (8192L - 1024L - 256L - systemEstimate).coerceAtLeast(256L)
             var selectedHistory: List<Message> =
-                LlmConversationBuilder.selectWithinBudget(requestHistory, historyBudget)
-            val excludedCount = requestHistory.size - selectedHistory.size
+                LlmConversationBuilder.selectWithinBudget(promptHistory, historyBudget)
+            val excludedCount = promptHistory.size - selectedHistory.size
             val coveredCount = activeSession.value?.compressedAtCount ?: 0
             if (excludedCount > coveredCount && sessionId.isNotBlank()) {
                 // 将被移出的消息尚未被摘要覆盖：先同步完成摘要（成功才允许移出）
                 val compressed = compressSessionPrefixNow(sessionId, excludedCount)
                 if (!compressed) {
                     // 摘要失败：coverage 不推进、不静默丢历史——改为只排除已覆盖前缀并提示可重试
-                    val keepFrom = minOf(coveredCount, requestHistory.size - 1)
-                    selectedHistory = requestHistory.subList(keepFrom, requestHistory.size)
+                    val keepFrom = minOf(coveredCount, promptHistory.size - 1)
+                    selectedHistory = promptHistory.subList(keepFrom, promptHistory.size)
                     withContext(Dispatchers.Main) {
                         android.widget.Toast.makeText(
                             context,
@@ -2446,6 +2492,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         document: com.loyea.character.core.api.CharacterDocument,
         card: CharacterCard,
         history: List<Message>,
+        promptRegexRules: List<com.loyea.character.core.regex.RegexRule> = emptyList(),
+        compiledPatterns: Map<String, com.google.re2j.Pattern> = emptyMap(),
         sessionUsesSystemTime: Boolean,
         physicalPerceptionEnabled: Boolean,
         enableSearch: Boolean,
@@ -2508,13 +2556,28 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
 
+        // Spec §8：世界书扫描在 prompt stage 正则转换之后进行
+        val turnContents = if (promptRegexRules.isEmpty()) {
+            history.map { it.content }
+        } else {
+            history.map { msg ->
+                val stage = if (msg.sender == Sender.USER) {
+                    com.loyea.character.core.regex.RegexStage.PROMPT_USER
+                } else {
+                    com.loyea.character.core.regex.RegexStage.PROMPT_ASSISTANT
+                }
+                com.loyea.character.core.regex.BoundedRegexEngine.applyForStage(
+                    msg.content, promptRegexRules, stage, compiledPatterns
+                ).first
+            }
+        }
         val turnInput = com.loyea.character.core.api.TurnInput(
             requestId = java.util.UUID.randomUUID().toString(),
             sessionId = activeSession.value?.id ?: "",
             bindingRevision = activeSession.value?.bindingRevision ?: 1L,
             characterRevision = profile.revision,
             generationKind = "normal",
-            historyContents = history.map { it.content },
+            historyContents = turnContents,
             userName = userName.value,
             worldInfoEntries = entries,
             worldInfoConfig = combinedConfig,

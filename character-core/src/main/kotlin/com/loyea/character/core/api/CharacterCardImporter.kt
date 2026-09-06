@@ -125,13 +125,30 @@ object CharacterCardImporter {
                 detail = "$entryCount entries"
             )
         }
-        // 已知但本轮不支持
+        // P5 有限正则：按白名单映射 regex_scripts；映射失败的条目单独报告
         if (extensionKeys().any { it == "regex_scripts" }) {
-            result += CharacterCapability(
-                field = "extensions.regex_scripts",
-                kind = CharacterCapability.KIND_UNSUPPORTED,
-                detail = "正则脚本将在有限正则阶段按白名单映射"
-            )
+            val outcome = com.loyea.character.core.regex.RegexScriptAdapter.fromExtensionsJson(card.data.extensionsJson)
+            if (outcome.rules.isNotEmpty()) {
+                result += CharacterCapability(
+                    field = "extensions.regex_scripts",
+                    kind = CharacterCapability.KIND_ACTIVE,
+                    detail = "${outcome.rules.size} 条规则按白名单映射（PROMPT_USER/PROMPT_ASSISTANT/DISPLAY_ASSISTANT）"
+                )
+            }
+            if (outcome.rejections.isNotEmpty()) {
+                result += CharacterCapability(
+                    field = "extensions.regex_scripts",
+                    kind = CharacterCapability.KIND_UNSUPPORTED,
+                    detail = "${outcome.rejections.size} 条规则不支持：${outcome.rejections.joinToString("；") { it.reason }}"
+                )
+            }
+            if (outcome.rules.isEmpty() && outcome.rejections.isEmpty()) {
+                result += CharacterCapability(
+                    field = "extensions.regex_scripts",
+                    kind = CharacterCapability.KIND_PRESERVED,
+                    detail = "空规则集，原文保留"
+                )
+            }
         }
         if (extensionKeys().any { it == "tavern_helper" || it == "scripts" }) {
             result += CharacterCapability(

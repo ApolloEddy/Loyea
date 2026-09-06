@@ -71,5 +71,7 @@ tasks.test {
 dependencies {
     // 与 app 相同版本的 Gson（纯 JVM，MIT），供角色卡 codec 使用
     implementation("com.google.code.gson:gson:2.10.1")
+    // P5 有限正则：RE2/J 1.7（Google，BSD 三条款许可，线性时间匹配，Spec §8）
+    implementation("com.google.re2j:re2j:1.7")
     testImplementation("junit:junit:4.13.2")
 }

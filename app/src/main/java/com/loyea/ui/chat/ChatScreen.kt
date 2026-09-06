@@ -306,6 +306,7 @@ fun ChatScreen(
                         message = message,
                         userBubbleColor = userBubbleColor,
                         appLanguage = appLanguage,
+                        displayRegexRules = viewModel?.displayRegexRules?.value ?: emptyList(),
                         currentlyPlayingAudioId = viewModel?.currentlyPlayingAudioId?.value,
                         currentlyPlayingAudioProgress = viewModel?.currentlyPlayingAudioProgress?.value ?: 0f,
                         onCopy = {
@@ -1072,7 +1073,8 @@ fun MessageItem(
     onImageClick: (String) -> Unit,
     onTranscribe: (Message) -> Unit,
     onRegenerate: () -> Unit = {},
-    onSwitchVersion: (Int) -> Unit = {}
+    onSwitchVersion: (Int) -> Unit = {},
+    displayRegexRules: List<com.loyea.character.core.regex.RegexRule> = emptyList()
 ) {
     val isUser = message.sender == Sender.USER
 
@@ -1665,7 +1667,8 @@ fun MessageItem(
                         MessageContentWithPanels(
                             raw = message.content,
                             collapseKeyPrefix = message.id,
-                            color = MaterialTheme.colorScheme.onBackground
+                            color = MaterialTheme.colorScheme.onBackground,
+                            displayRegexRules = displayRegexRules
                         )
                     }
                 }
