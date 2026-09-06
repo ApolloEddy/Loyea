@@ -1944,9 +1944,9 @@ fun ChatInputBar(
                         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                         minLines = 1,
                         maxLines = 5,
+                        // 恒定宽度：放大按钮改为悬浮覆盖，避免按钮出现瞬间文本重排导致光标视觉跳动
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(end = if (showExpandBtn) 36.dp else 0.dp)
                             .onPreviewKeyEvent { keyEvent ->
                                 if (keyEvent.key == Key.Enter) {
                                     if (isActive) {

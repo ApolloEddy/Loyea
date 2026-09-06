@@ -76,7 +76,7 @@ sealed class ContentSegment {
 object HtmlDisplaySplitter {
 
     private val DETAILS_BLOCK = Regex("<details[\\s\\S]*?</details\\s*>", RegexOption.IGNORE_CASE)
-    private val UNCLOSED_DETAILS = Regex("<details[\\s\\S]*$", RegexOption.IGNORE_CASE)
+    private val UNCLOSED_DETAILS = Regex("<details(?!\\s\\S]*</details>)", RegexOption.IGNORE_CASE)
     private val FENCE = Regex("```[\\s\\S]*?(?:```|$)")
 
     /** raw → 展示分段：围栏代码里的 details 不是面板；未闭合 details 展示稳定占位。 */
@@ -254,8 +254,10 @@ fun MessageContentWithPanels(
         }
     }
     val segments = remember(displayRaw, displayRegexRules) { HtmlDisplaySplitter.split(displayRaw) }
-    segments.forEachIndexed { index, segment ->
-        when (segment) {
+    // 关键：SelectionContainer 是 Box 语义（子级堆叠），多段内容必须显式包 Column 纵向排列
+    androidx.compose.foundation.layout.Column {
+        segments.forEachIndexed { index, segment ->
+            when (segment) {
             is ContentSegment.Markdown -> if (segment.text.isNotBlank()) {
                 val processed = remember(segment.text) {
                     segment.text
@@ -298,6 +300,7 @@ fun MessageContentWithPanels(
             }
         }
     }
+}
 }
 
 /**

@@ -140,6 +140,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     var displayRegexRules = mutableStateOf<List<com.loyea.character.core.regex.RegexRule>>(emptyList())
         private set
 
+    /** 角色内嵌世界书的只读视图（key = 角色卡 id），供角色列表/编辑页展示（Spec §4.7） */
+    data class WorldBookEntryView(
+        val keys: List<String>,
+        val secondaryKeys: List<String>,
+        val content: String,
+        val constant: Boolean,
+        val enabled: Boolean,
+        val position: String,
+        val comment: String
+    )
+
+    data class WorldBookView(
+        val name: String,
+        val entries: List<WorldBookEntryView>
+    )
+
+    var characterBookViews = mutableStateOf<Map<String, WorldBookView>>(emptyMap())
+        private set
+
     val activeCharacterCard = derivedStateOf {
         val currentSession = sessions.value.find { it.id == currentSessionId.value }
         val charId = currentSession?.characterId ?: "char_loyea_default"
@@ -436,8 +455,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // 移入协程加载挂起 API
         viewModelScope.launch(Dispatchers.IO) {
             val cards = storageManager.loadCharacterCards()
+            val bookViews = HashMap<String, WorldBookView>()
+            cards.forEach { card ->
+                storageManager.loadCharacterDocument(card.id)?.embeddedBookJson?.let { bookJson ->
+                    buildWorldBookView(bookJson)?.let { view -> bookViews[card.id] = view }
+                }
+            }
             withContext(Dispatchers.Main) {
                 characterCardList.value = cards
+                characterBookViews.value = bookViews
             }
             val worldInfo = storageManager.loadWorldInfo()
             withContext(Dispatchers.Main) {
@@ -579,6 +605,27 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** 解析内嵌世界书为只读视图；解析失败返回 null（UI 显示为无书）。 */
+    private fun buildWorldBookView(bookJson: String): WorldBookView? = runCatching {
+        val parsed = com.loyea.character.core.codec.CharacterCardCodec.parseCharacterBook(bookJson)
+            ?: return null
+        val adapted = com.loyea.character.core.codec.CardBookAdapter.toWorldInfoBook(parsed, "view")
+        WorldBookView(
+            name = parsed.name ?: "",
+            entries = adapted.entries.map { e ->
+                WorldBookEntryView(
+                    keys = e.keywords,
+                    secondaryKeys = e.keysecondary,
+                    content = e.content,
+                    constant = e.constant,
+                    enabled = e.enabled && !e.disable,
+                    position = e.positionType,
+                    comment = e.comment
+                )
+            }
+        )
+    }.getOrNull()
+
     /** 加载角色的有限正则规则（映射失败的条目记日志，配置原文保留）。 */
     private suspend fun loadRegexRulesFor(characterId: String): com.loyea.character.core.regex.RegexScriptAdapter.ImportOutcome? {
         val doc = storageManager.loadCharacterDocument(characterId) ?: return null
@@ -663,8 +710,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 storageManager.saveCharacterDocument(doc)
                 val cards = storageManager.loadCharacterCards()
+                // 同步刷新内嵌世界书视图（新导入/更新立即可见，无需重启）
+                val bookViews = characterBookViews.value.toMutableMap()
+                doc.embeddedBookJson?.let { bookJson ->
+                    buildWorldBookView(bookJson)?.let { view -> bookViews[doc.profile.id] = view }
+                } ?: run { bookViews.remove(doc.profile.id) }
+                val newBooks = bookViews.toMap()
                 withContext(Dispatchers.Main) {
                     characterCardList.value = cards
+                    characterBookViews.value = newBooks
                     val base = if (isUpdate) "已更新角色卡 [${doc.profile.name}]" else "成功导入角色卡 [${doc.profile.name}]"
                     val hint = if (result.report.unsupported.isNotEmpty()) "（部分能力暂不支持，已保留原文）" else ""
                     onResult(CharacterImportOutcome(true, base + hint))

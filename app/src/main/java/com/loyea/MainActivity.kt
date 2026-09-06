@@ -320,7 +320,8 @@ class MainActivity : ComponentActivity() {
                                             if (outcome.success) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
                                         ).show()
                                     }
-                                }
+                                },
+                                characterBooks = chatViewModel.characterBookViews.value
                             )
                         }
                     }

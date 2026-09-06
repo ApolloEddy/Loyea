@@ -75,7 +75,8 @@ fun TavernScreen(
     onCharacterCardListSave: (List<CharacterCard>) -> Unit,
     appLanguage: String,
     onBackClick: () -> Unit,
-    onImportCardBytes: (ByteArray) -> Unit = {}
+    onImportCardBytes: (ByteArray) -> Unit = {},
+    characterBooks: Map<String, ChatViewModel.WorldBookView> = emptyMap()
 ) {
     val context = LocalContext.current
     val contentResolver = context.contentResolver
@@ -308,7 +309,8 @@ fun TavernCardItem(
     onExportPng: () -> Unit,
     onExportJson: () -> Unit,
     onEdit: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    bookView: ChatViewModel.WorldBookView? = null
 ) {
     val isEn = appLanguage == "en"
     val avatarBitmap = rememberAvatarPainter(card.avatarUri)
@@ -421,6 +423,8 @@ fun TavernCardItem(
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                         modifier = Modifier
                             .fillMaxWidth()
+                            .heightIn(max = 160.dp)
+                            .verticalScroll(rememberScrollState())
                             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f))
                             .padding(8.dp)
                     )
@@ -438,6 +442,8 @@ fun TavernCardItem(
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .heightIn(max = 160.dp)
+                                .verticalScroll(rememberScrollState())
                                 .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f))
                                 .padding(8.dp)
                         )
@@ -456,6 +462,8 @@ fun TavernCardItem(
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .heightIn(max = 160.dp)
+                                .verticalScroll(rememberScrollState())
                                 .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f))
                                 .padding(8.dp)
                         )
@@ -474,9 +482,48 @@ fun TavernCardItem(
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .heightIn(max = 160.dp)
+                                .verticalScroll(rememberScrollState())
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f))
+                                .padding(8.dp)
+                    )
+
+                    // 内嵌世界书（随角色自动启用，Spec §6.1）：在预览区可见可读
+                    if (bookView != null && bookView.entries.isNotEmpty()) {
+                        val constantCount = bookView.entries.count { it.constant }
+                        Text(
+                            text = (if (isEn) "Embedded World Info: " else "内嵌世界书: ") +
+                                "${bookView.entries.size} " + (if (isEn) "entries" else "条") +
+                                (if (constantCount > 0) "（${constantCount} " + (if (isEn) "constant" else "常驻") + "）" else ""),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = bookView.entries.joinToString("\n\n") { e ->
+                                buildString {
+                                    val tag = when {
+                                        e.constant -> "[常驻]"
+                                        !e.enabled -> "[禁用]"
+                                        else -> "[条件]"
+                                    }
+                                    append(tag)
+                                    if (e.keys.isNotEmpty()) append(" " + e.keys.joinToString("/"))
+                                    append("\n")
+                                    append(e.content.take(200))
+                                    if (e.content.length > 200) append("…")
+                                }
+                            },
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 240.dp)
+                                .verticalScroll(rememberScrollState())
                                 .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f))
                                 .padding(8.dp)
                         )
+                    }
                     }
 
                     if (card.chatExamples.isNotBlank()) {
@@ -854,6 +901,7 @@ fun CreatePersonaDialog(
                         label = { Text(if (isEn) "First greeting message" else "首句欢迎词 / 打招呼语") },
                         minLines = 2,
                         modifier = Modifier.fillMaxWidth()
+                            .heightIn(max = 200.dp)
                     )
 
                     OutlinedTextField(
@@ -862,6 +910,7 @@ fun CreatePersonaDialog(
                         label = { Text(if (isEn) "System Prompt (Character Settings)" else "系统核心设定 / 人格 Prompt（必填）") },
                         minLines = 4,
                         modifier = Modifier.fillMaxWidth()
+                            .heightIn(max = 200.dp)
                     )
 
                     OutlinedTextField(
@@ -870,6 +919,7 @@ fun CreatePersonaDialog(
                         label = { Text(if (isEn) "Example Dialogs (use <START> to split)" else "少样本对话范例（多行，使用 <START> 划分对话片段）") },
                         minLines = 4,
                         modifier = Modifier.fillMaxWidth()
+                            .heightIn(max = 200.dp)
                     )
 
                     Spacer(modifier = Modifier.height(20.dp))
@@ -1179,6 +1229,7 @@ fun EditPersonaDialog(
                         label = { Text(if (isEn) "First greeting message" else "首句欢迎词 / 打招呼语") },
                         minLines = 2,
                         modifier = Modifier.fillMaxWidth()
+                            .heightIn(max = 200.dp)
                     )
 
                     OutlinedTextField(
@@ -1187,6 +1238,7 @@ fun EditPersonaDialog(
                         label = { Text(if (isEn) "System Prompt (Character Settings)" else "系统核心设定 / 人格 Prompt（必填）") },
                         minLines = 4,
                         modifier = Modifier.fillMaxWidth()
+                            .heightIn(max = 200.dp)
                     )
 
                     OutlinedTextField(
@@ -1195,6 +1247,7 @@ fun EditPersonaDialog(
                         label = { Text(if (isEn) "Example Dialogs (use <START> to split)" else "少样本对话范例（多行，使用 <START> 划分对话片段）") },
                         minLines = 4,
                         modifier = Modifier.fillMaxWidth()
+                            .heightIn(max = 200.dp)
                     )
 
                     Spacer(modifier = Modifier.height(20.dp))
