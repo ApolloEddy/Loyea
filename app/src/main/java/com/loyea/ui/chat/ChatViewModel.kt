@@ -3014,6 +3014,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun startRecording() {
         if (isRecording.value) return
+        // RECORD_AUDIO 启动时已申请；被拒后直录会 SecurityException，这里兜底守卫
+        if ( androidx.core.content.ContextCompat.checkSelfPermission(
+                getApplication<Application>(), android.Manifest.permission.RECORD_AUDIO
+            ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            isRecordingActive = false
+            return
+        }
         stopAudio() // 录音前停止正在播放的音频（含自动 TTS），防止回声循环
         isRecordingActive = true
         amplitudeList.clear()

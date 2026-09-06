@@ -118,12 +118,13 @@ object WatchBluetoothClient {
     }
 
     @Synchronized
+    @android.annotation.SuppressLint("MissingPermission") // device.name 访问由上一行 hasBtPermission 守卫
     private fun connectInternal(context: Context, device: BluetoothDevice, isRetry: Boolean) {
-        Log.d(TAG, "connectInternal: Initiating connection to ${device.name ?: "Unknown"} (isRetry=$isRetry)")
         if (!hasBtPermission(context)) {
             Log.e(TAG, "connectInternal: Missing BLUETOOTH_CONNECT permission")
             return
         }
+        Log.d(TAG, "connectInternal: Initiating connection to ${device.name ?: "Unknown"} (isRetry=$isRetry)")
 
         // 如果是全新连接（非重试），重置重连状态与用户标志
         if (!isRetry) {

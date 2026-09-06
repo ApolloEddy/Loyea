@@ -96,6 +96,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
     implementation("androidx.activity:activity-compose:1.8.2")
+    implementation("androidx.fragment:fragment-ktx:1.6.2") // 显式声明：ActivityResult lint 门禁要求 >= 1.3.0
     
     // Compose BOM
     val composeBom = platform("androidx.compose:compose-bom:2024.02.00")
