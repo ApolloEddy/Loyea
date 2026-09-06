@@ -249,7 +249,7 @@ class WorldInfoLibrary(private val storageRoot: File) {
         if (book.entryOverrides.isEmpty()) entries
         else entries.map { e ->
             book.entryOverrides[e.uid]
-                ?.let { WorldInfoBridge.toCoreEntry(it.copy(id = e.id, uid = e.uid, enabled = e.enabled)) }
+                ?.let { WorldInfoBridge.toCoreEntry(it.copy(id = e.id, uid = e.uid, enabled = e.enabled, disable = !e.enabled)) }
                 ?: e
         }
 
@@ -257,6 +257,7 @@ class WorldInfoLibrary(private val storageRoot: File) {
      *  该书仍作为其余会话的全局生效书（层 3 与层 1 可共存于同一本书）。 */
     suspend fun bindBookToSession(bookId: String, sessionId: String): WorldInfoBookDocument? = mutex.withLock {
         val book = loadBookInternal(bookId) ?: return@withLock null
+        if (book.origin == WorldInfoBookOrigin.CARD && !cardBookResolvable(book)) return@withLock book
         val updated = book.copy(
             scope = if (book.isGlobalActive) WorldInfoBookScope.GLOBAL else WorldInfoBookScope.SESSION,
             sessionIds = (book.sessionIds + sessionId).distinct(),
@@ -292,6 +293,8 @@ class WorldInfoLibrary(private val storageRoot: File) {
             return@withLock
         }
         val target = loadBookInternal(bookId) ?: return@withLock
+        // 来源卡已删除的卡书不可解析（解析层会过滤），设为全局生效会清空其它书的全局标记且无人受益——拒绝
+        if (target.origin == WorldInfoBookOrigin.CARD && !cardBookResolvable(target)) return@withLock
         clearOtherGlobalActive(excludeId = bookId)
         saveBookInternal(
             target.copy(
@@ -417,7 +420,7 @@ class WorldInfoLibrary(private val storageRoot: File) {
                 book = book,
                 totalEntries = entries?.size ?: 0,
                 constantEntries = entries?.count { it.constant } ?: 0,
-                disabledEntries = book.disabledUids.size,
+                disabledEntries = entries?.count { !it.enabled } ?: book.disabledUids.size,
                 sourceDeleted = entries == null,
                 conflictingSessions = conflicts
             )

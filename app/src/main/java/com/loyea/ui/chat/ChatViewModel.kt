@@ -611,6 +611,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val characterId = activeSession.value?.characterId
             val regexOutcome = characterId?.let { loadRegexRulesFor(it) }
             withContext(Dispatchers.Main) {
+                // 代际守卫：快速连续切换会话时，晚到的旧会话加载结果不得覆盖新会话列表
+                if (currentSessionId.value != sessionId) return@withContext
                 messages.value = msgs
                 displayRegexRules.value = regexOutcome?.rules ?: emptyList()
             }
@@ -1916,7 +1918,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                             currentList = updateAiMessage(currentList, aiMessageId) {
                                                 it.copy(imageUrl = imagePath)
                                             }
-                                            messages.value = currentList
+                                            if (currentSessionId.value == sessionId) {
+                                                messages.value = currentList
+                                            }
                                             toolOutput = "图像已生成并展示给用户。请用一两句话自然地向用户描述你画了什么；不要输出链接、路径或 Markdown 图片语法。"
                                             success = true
                                         }
@@ -2092,26 +2096,48 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         role = "system",
                         content = "[SYSTEM NOTICE] The tool-call round limit for this reply has been reached. Do NOT attempt any further tool calls. Review the information you have already gathered, think it through, and give the user your complete final answer now."
                     )
-                    var finishStreamOk = false
+                    isThinking.value = true // 收尾期间保持流式态（停止按钮可用）
+                    var finishHadContent = false
+                    var finishFailed = false
+                    val hapticTagRegex = Regex("\\[haptic:[^\\]]*\\]")
                     try {
                         llmClient.sendChatCompletionStream(
                             config = apiConfig,
                             messages = conversation + limitNote,
                             tools = emptyList()
                         ).collect { event ->
-                            if (event is StreamEvent.Content && event.text.isNotEmpty()) {
-                                accumulatedContent += event.text
-                                currentList = currentList.map { msg ->
-                                    if (msg.id == aiMessageId) {
-                                        msg.copy(contentSegments = currentSegments())
-                                    } else msg
+                            when (event) {
+                                is StreamEvent.Content -> if (event.text.isNotEmpty()) {
+                                    // 与主循环同源：剥除完整 [haptic:xxx] 标签（收尾轮不触发震动）
+                                    val clean = event.text.replace(hapticTagRegex, "")
+                                    if (clean.isNotEmpty()) {
+                                        accumulatedContent += clean
+                                        currentList = currentList.map { msg ->
+                                            if (msg.id == aiMessageId) {
+                                                msg.copy(contentSegments = currentSegments())
+                                            } else msg
+                                        }
+                                        messages.value = currentList
+                                        finishHadContent = true
+                                    }
                                 }
-                                messages.value = currentList
-                                finishStreamOk = true
+                                is StreamEvent.Usage -> {
+                                    accumulatedPromptTokens += event.promptTokens
+                                    accumulatedCompletionTokens += event.completionTokens
+                                }
+                                is StreamEvent.Error -> finishFailed = true
+                                else -> {}
                             }
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
+                        finishFailed = true
+                    }
+                    if (!finishHadContent && finishFailed) {
+                        // 收尾失败且零产出：留痕提示，不让失败被静默吞掉
+                        accumulatedContent += if (appLanguage.value == "en")
+                            "\n\n[Final reply generation failed. The above is the information gathered so far.]"
+                        else "\n\n[收尾回复生成失败：以上为已获取的信息。]"
                     }
 
                     val finalContent = accumulatedContent.trim().ifBlank {
@@ -3926,21 +3952,28 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
             val remoteUrl = llmClient.generateImage(targetGenConfig, prompt, imageGenModel.value)
                 ?: return@withContext null
-            val localFile = File(context.filesDir, "images/img_${System.currentTimeMillis()}.png")
-            localFile.parentFile?.mkdirs()
+            // 先写临时文件再重命名：下载中断不留半截图片；UUID 后缀规避并发同名覆盖
+            val tmpFile = File(context.filesDir, "images/img_${System.currentTimeMillis()}_${java.util.UUID.randomUUID()}.tmp")
+            tmpFile.parentFile?.mkdirs()
             try {
                 val request = okhttp3.Request.Builder().url(remoteUrl).build()
                 okhttp3.OkHttpClient().newCall(request).execute().use { response ->
                     if (response.isSuccessful) {
                         response.body?.byteStream()?.use { input ->
-                            localFile.outputStream().use { output -> input.copyTo(output) }
+                            tmpFile.outputStream().use { output -> input.copyTo(output) }
                         }
                     }
                 }
+                if (!tmpFile.exists() || tmpFile.length() == 0L) return@withContext remoteUrl
+                val localFile = File(context.filesDir, "images/img_${System.currentTimeMillis()}.png")
+                if (!tmpFile.renameTo(localFile)) tmpFile.copyTo(localFile, overwrite = true)
+                tmpFile.delete()
+                localFile.absolutePath
             } catch (e: Exception) {
                 e.printStackTrace()
+                tmpFile.delete()
+                remoteUrl
             }
-            if (localFile.exists()) localFile.absolutePath else remoteUrl
         }
 
     suspend fun transcribeAudio(file: File): String? {
@@ -4068,7 +4101,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
             val finalMsgs = mergeAndSaveMessages(sessionId, collapsedHistory + userMsg + aiMsg)
             withContext(Dispatchers.Main) {
-                messages.value = finalMsgs
+                if (currentSessionId.value == sessionId) {
+                    messages.value = finalMsgs
+                }
             }
 
             // 3. 调用生图
@@ -4092,14 +4127,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 if (imageUrl != null) {
                     // 异步下载到本地以便离线查看
                     viewModelScope.launch(Dispatchers.IO) {
-                        val localImageFile = File(context.filesDir, "images/img_${System.currentTimeMillis()}.png")
-                        localImageFile.parentFile?.mkdirs()
+                        // 临时文件 + 重命名：下载中断不留半截图片
+                        val tmpFile = File(context.filesDir, "images/img_${System.currentTimeMillis()}_${java.util.UUID.randomUUID()}.tmp")
+                        tmpFile.parentFile?.mkdirs()
                         try {
                             val request = okhttp3.Request.Builder().url(imageUrl).build()
                             okhttp3.OkHttpClient().newCall(request).execute().use { response ->
                                 if (response.isSuccessful) {
                                     response.body?.byteStream()?.use { input ->
-                                        localImageFile.outputStream().use { output ->
+                                        tmpFile.outputStream().use { output ->
                                             input.copyTo(output)
                                         }
                                     }
@@ -4108,12 +4144,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         } catch (e: java.lang.Exception) {
                             e.printStackTrace()
                         }
+                        val localImageFile = File(context.filesDir, "images/img_${System.currentTimeMillis()}.png")
+                        if (tmpFile.exists() && tmpFile.length() > 0L) {
+                            if (!tmpFile.renameTo(localImageFile)) tmpFile.copyTo(localImageFile, overwrite = true)
+                        }
+                        tmpFile.delete()
 
-                        // 将最终图片和消息更新（会话守卫：生图期间用户可能已切走，UI 仅在本会话前台时更新）
+                        // 落盘以目标会话为准：生图期间切走会话时从磁盘读回该会话、只更新生图占位一条
+                        // （messages.value 已是新会话列表，直接拿去保存会把新会话消息并进旧会话文件）
+                        // UI 仅在本会话前台时更新
                         withContext(Dispatchers.Main) {
                             val updatedContent = if (appLanguage.value == "en") "AI has generated an image. Prompt: \"$prompt\""
                             else "AI 已为您生成图像，提示词：\"$prompt\""
-                            val currentList = messages.value.map { msg ->
+                            val base = if (currentSessionId.value == sessionId) messages.value
+                                else runCatching { storageManager.loadSessionMessages(sessionId) }.getOrDefault(emptyList())
+                            val currentList = base.map { msg ->
                                 if (msg.id == aiMessageId) {
                                     msg.copy(
                                         content = updatedContent,
@@ -4133,7 +4178,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     // 生图失败（会话守卫同成功分支）
                     val isEnImg = appLanguage.value == "en"
-                    val currentList = messages.value.map { msg ->
+                    val base = if (currentSessionId.value == sessionId) messages.value
+                        else runCatching { storageManager.loadSessionMessages(sessionId) }.getOrDefault(emptyList())
+                    val currentList = base.map { msg ->
                         if (msg.id == aiMessageId) {
                             msg.copy(
                                 content = if (isEnImg) "Image generation failed: ${imageFailReason ?: "Please check your image generation API settings or network connection"}"

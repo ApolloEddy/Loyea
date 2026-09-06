@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -147,7 +148,11 @@ fun ChatScreen(
     }
 
     // 切换会话时，自动保存和载入草稿
+    // 已完成「定位到最后一次用户消息」的会话（未锚定前自动滚动让位；换会话即重置，每次进入都重新锚定）
+    var anchoredSession by remember { mutableStateOf<String?>(null) }
+
     LaunchedEffect(currentSessionId) {
+        anchoredSession = null
         if (lastSessionId.isNotEmpty() && lastSessionId != currentSessionId) {
             saveDraft(lastSessionId, inputText.text)
         }
@@ -159,8 +164,18 @@ fun ChatScreen(
 
     // 自动滚动：思考中默认展开并滚动到「Thinking 标题顶到屏幕顶端即停」；用户触摸后完全交还控制权
     var autoPinActive by remember { mutableStateOf(true) }
-    // 已完成「定位到最后一次用户消息」的会话（每个会话只锚定一次；未锚定前自动滚动让位）
-    var anchoredSession by remember { mutableStateOf<String?>(null) }
+    // 回到底部气泡：底部判定容差与锚点上文偏移（dp 换算像素，避免密度差异）
+    val bottomTolerancePx = with(LocalDensity.current) { 64.dp.toPx() }
+    val anchorContextPx = with(LocalDensity.current) { 120.dp.toPx() }
+    val isAtBottom by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull() ?: return@derivedStateOf true
+            last.index >= info.totalItemsCount - 1 && last.offset + last.size <= info.viewportEndOffset + bottomTolerancePx
+        }
+    }
+    var unseenBottomCount by remember { mutableIntStateOf(0) }
+    var lastSeenListSize by remember { mutableStateOf(messages.size) }
 
     // 流式响应中的占位气泡（isThinking 每轮流前置位，工具执行期由 isMcpRunning 补位，覆盖整个多轮响应）
     val activeStreaming = isThinking || isMcpRunning
@@ -168,7 +183,8 @@ fun ChatScreen(
 
     // 新一轮 AI 回复开始时复位自动置顶（同响应内 id 稳定不重复触发）
     LaunchedEffect(streamingMsg?.id) {
-        if (streamingMsg != null) autoPinActive = true
+        // 新一轮回复开始时仅当用户仍在底部才恢复自动跟随（多轮工具响应不把上滑回看的用户拽回）
+        if (streamingMsg != null && isAtBottom) autoPinActive = true
     }
 
     LaunchedEffect(messages.lastOrNull(), isThinking, isMcpRunning) {
@@ -183,20 +199,13 @@ fun ChatScreen(
             s != null && s.isThoughtsExpanded && !s.thoughts.isNullOrBlank() ->
                 listState.scrollToItem(messages.size, 0)
             // 流式初期（思考文本未到/已折叠）跟随底部；思考结束回到底部看最终回复
-            else -> listState.animateScrollToItem(messages.size - 1 + if (isThinking) 1 else 0)
+            // 非思考态滚到最后一条消息（列表 0 位是 Spacer，消息 j 在下标 j+1，故目标为 messages.size）；
+            // 思考态多滚一项到 Thinking 指示器；目标越界会被 LazyListState 钳制
+            else -> listState.animateScrollToItem(messages.size + if (isThinking) 1 else 0)
         }
     }
 
-    // 回到底部气泡：追踪用户是否在列表底部 + 离底期间的新消息数
-    val isAtBottom by remember {
-        derivedStateOf {
-            val info = listState.layoutInfo
-            val last = info.visibleItemsInfo.lastOrNull() ?: return@derivedStateOf true
-            last.index >= info.totalItemsCount - 1 && last.offset + last.size <= info.viewportEndOffset + 200
-        }
-    }
-    var unseenBottomCount by remember { mutableIntStateOf(0) }
-    var lastSeenListSize by remember { mutableStateOf(messages.size) }
+    // 回到底部气泡：离底期间的新消息计数（isAtBottom/计数变量见上方声明区）
     LaunchedEffect(messages.size, isAtBottom) {
         if (messages.size > lastSeenListSize && !isAtBottom) {
             unseenBottomCount += messages.size - lastSeenListSize
@@ -213,7 +222,7 @@ fun ChatScreen(
         val lastUserIdx = messages.indexOfLast { it.sender == Sender.USER }
         val targetListIndex = if (lastUserIdx >= 0) lastUserIdx + 1 else messages.size // 列表 0 位是占位 Spacer
         autoPinActive = false // 抑制载入即滚到底，让位给锚点
-        listState.scrollToItem(targetListIndex, if (lastUserIdx >= 0) -120 else 0)
+        listState.scrollToItem(targetListIndex, if (lastUserIdx >= 0) -anchorContextPx.toInt() else 0)
         unseenBottomCount = 0
         lastSeenListSize = messages.size
     }
@@ -1605,7 +1614,8 @@ fun MessageItem(
                         onToggle = onToggleThoughts,
                         durationSeconds = message.thoughtDurationSeconds,
                         isStillThinking = message.isStillThinking,
-                        thinkingStartedAt = message.thinkingStartedAt
+                        thinkingStartedAt = message.thinkingStartedAt,
+                        appLanguage = appLanguage
                     )
                 }
 
@@ -2265,7 +2275,7 @@ private fun ActiveBookPanel(
                 else -> {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = "《${current.bookName}》",
+                            text = if (isEn) "\"${current.bookName}\"" else "《${current.bookName}》",
                             fontSize = 15.sp,
                             fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.weight(1f, fill = false),
@@ -2287,7 +2297,7 @@ private fun ActiveBookPanel(
                                 append(if (isEn) " · ${current.constantEntries} constant" else " · ${current.constantEntries} 常驻")
                             }
                             if (current.disabledEntries > 0) {
-                                append(if (isEn) " · ${current.disabledEntries} off" else " · ${current.disabledEntries} 已关")
+                                append(if (isEn) " · ${current.disabledEntries} disabled" else " · ${current.disabledEntries} 已关")
                             }
                         },
                         fontSize = 12.sp,

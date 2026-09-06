@@ -1345,7 +1345,7 @@ private fun WorldInfoEntryCard(
                 if (entry.useProbability) add("p:${entry.probability}%")
                 if (entry.depth != 4) add("depth:${entry.depth}")
                 if (entry.delayUntilRecursion > 0) add("delay:${entry.delayUntilRecursion}")
-                if (entry.preventRecursion) add(if (isEn) "prevent" else "断链")
+                if (entry.preventRecursion) add(if (isEn) "break chain" else "断链")
                 if (entry.excludeRecursion) add(if (isEn) "no-recursion" else "禁递归")
                 if (entry.keysContainedIn != "chat") add("src:${entry.keysContainedIn}")
                 if (entry.comment.isNotBlank()) add(if (isEn) "comment: ${entry.comment}" else "备注: ${entry.comment}")
@@ -1547,7 +1547,7 @@ private fun WorldInfoEditDialog(
                     NumberTextField(
                         value = delayUntilRecursionInput,
                         onValueChange = { delayUntilRecursionInput = it },
-                        label = if (isEn) "Delay to recursion" else "延迟到递归轮",
+                        label = if (isEn) "Recursion delay (turns)" else "延迟到递归轮",
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -2055,9 +2055,11 @@ private fun buildSillyTavernWorldInfo(entries: List<WorldInfoEntry>): String {
     val root = JsonObject()
     root.addProperty("kind", 0)
     val entriesObj = JsonObject()
+    var nextUid = entries.maxOfOrNull { it.uid } ?: 0
     entries.forEachIndexed { index, e ->
         val obj = JsonObject()
-        obj.addProperty("uid", if (e.uid > 0) e.uid else index + 1)
+        // uid<=0 的条目用「现有最大 uid 之后」的递增号，避免与真实 uid=1 的条目撞号
+        obj.addProperty("uid", if (e.uid > 0) e.uid else ++nextUid)
         val keyArr = JsonArray().apply { e.keywords.forEach { add(it) } }
         val keySecArr = JsonArray().apply { e.keysecondary.forEach { add(it) } }
         obj.add("key", keyArr)

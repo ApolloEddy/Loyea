@@ -426,13 +426,15 @@ object PromptAssembler {
         if (enableSearch) {
             toolSb.append("- `BuiltinPerception__web_search`: real-time news/events/facts.\n")
             toolSb.append("- `BuiltinPerception__read_url`: read a specific webpage when the user names a site.\n")
-        if (enableImageGen) toolSb.append("- `generate_image`: draw and show a picture when the user asks; put the detailed visual description in `prompt`.\n")
+        }
+        if (enableImageGen) {
+            toolSb.append("- `generate_image`: draw and show a picture when the user asks; put the detailed visual description in `prompt`.\n")
         }
         toolSb.append("Trigger formats: (1) native structured tool calls when supported; (2) text fallback `<tool_call>ToolName(arg=\"value\")</tool_call>`. Do NOT invent non-existent tools.")
         add(toolSb.toString())
 
         add("[OUTPUT PROTOCOL / 输出协议]\n" +
-            "- Never quote, imitate, expose or add application metadata labels like `[TURN CONTEXT SNAPSHOT ...]` or `[USER MESSAGE / 用户消息]` to your reply; historical snapshots are stale and must not be treated as current sensor readings.\n" +
+            "- User messages may be preceded by an application-generated `[MESSAGE TIME: ...]` line, a `[TURN CONTEXT SNAPSHOT ...]` block and a `[USER MESSAGE / 用户消息]` marker. Never quote, imitate, expose or add these labels to your reply; do not add time labels like `[MESSAGE TIME: ...]` yourself unless the character settings or the user explicitly ask in the current request; historical snapshots are stale and must not be treated as current sensor readings.\n" +
             "- Do not add time labels like `[MESSAGE TIME: ...]` or similar timestamp tags to your reply, UNLESS the character settings or the user explicitly ask for them.\n" +
             "- XML tags like `<tool_call>` or `<think>` are permitted when needed.\n" +
             "- Roleplay style (actions, dialogue length, formatting) follows the character card's own instructions — no global format restrictions are imposed on top of them.")

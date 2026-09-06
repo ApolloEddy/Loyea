@@ -260,6 +260,7 @@ fun ThinkingProcessLayout(
     durationSeconds: Int = 0,
     isStillThinking: Boolean = false,
     thinkingStartedAt: Long = 0L,
+    appLanguage: String = "zh",
     modifier: Modifier = Modifier
 ) {
     // 实时思考计时：以消息上的绝对开始时间戳为锚计算流逝秒数；
@@ -321,9 +322,9 @@ fun ThinkingProcessLayout(
             
             Text(
                 text = if (isStillThinking) {
-                    "Thinking for ${elapsedSec}s…"
+                    if (appLanguage == "en") "Thinking for ${elapsedSec}s…" else "深度思考中 · ${elapsedSec}s"
                 } else {
-                    "Thought for ${durationSeconds}s"
+                    if (appLanguage == "en") "Thought for ${durationSeconds}s" else "已深度思考 · ${durationSeconds}s"
                 },
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
