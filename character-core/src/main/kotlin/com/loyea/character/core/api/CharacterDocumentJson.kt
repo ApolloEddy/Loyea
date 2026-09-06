@@ -77,6 +77,7 @@ object CharacterDocumentJson {
         val profile = CharacterProfile(
             id = profileObj.stringOrNull("id") ?: return null,
             revision = profileObj.longOrNull("revision") ?: 1L,
+            createdAt = profileObj.longOrNull("createdAt") ?: 0L,
             name = profileObj.stringOrNull("name") ?: "",
             description = profileObj.stringOrNull("description") ?: "",
             personality = profileObj.stringOrNull("personality") ?: "",

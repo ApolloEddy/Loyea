@@ -44,6 +44,9 @@ data class Message(
     val thoughtDurationSeconds: Int = 0,
     val mcpCalls: List<McpCall> = emptyList(),
     val isStillThinking: Boolean = false,
+    /** 本轮思考开始的绝对时间戳（epoch ms）；Thinking 读秒以此锚定，
+     *  重组/切后台/切页面回来后按真实流逝时间显示，不归零重计。 */
+    val thinkingStartedAt: Long = 0L,
     val isError: Boolean = false,
     val characterId: String? = null,
 

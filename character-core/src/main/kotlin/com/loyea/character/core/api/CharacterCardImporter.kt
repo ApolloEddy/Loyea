@@ -56,6 +56,7 @@ object CharacterCardImporter {
         val profile = CharacterProfile(
             id = profileId,
             revision = 1L,
+            createdAt = System.currentTimeMillis(),
             name = data.name.ifBlank { "未命名角色" },
             description = data.description,
             personality = data.personality,

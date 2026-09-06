@@ -258,19 +258,27 @@ fun ThinkingProcessLayout(
     onToggle: () -> Unit,
     durationSeconds: Int = 0,
     isStillThinking: Boolean = false,
+    thinkingStartedAt: Long = 0L,
     modifier: Modifier = Modifier
 ) {
-    // 实时思考计时：思考中每秒递增，结束后定格为总耗时
-    var elapsedSec by remember { mutableIntStateOf(0) }
+    // 实时思考计时：以消息上的绝对开始时间戳为锚计算流逝秒数；
+    // 重组、切后台、从其他页面切回来都按真实时间显示，不再归零重计。
+    // tick 仅作为每秒重组的驱动器；旧消息无锚点时退回相对累加（不比旧行为差）。
+    var tick by remember { mutableIntStateOf(0) }
+    var fallbackSec by remember { mutableIntStateOf(0) }
     LaunchedEffect(isStillThinking) {
         if (isStillThinking) {
             while (true) {
                 delay(1000)
-                elapsedSec++
+                tick++
+                fallbackSec++
             }
-        } else {
-            elapsedSec = durationSeconds
         }
+    }
+    val elapsedSec = when {
+        !isStillThinking -> durationSeconds
+        thinkingStartedAt > 0 -> ((System.currentTimeMillis() - thinkingStartedAt) / 1000).toInt()
+        else -> fallbackSec
     }
 
     // 小箭头随折叠状态平滑旋转 0 到 90 度

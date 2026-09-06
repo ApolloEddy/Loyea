@@ -1504,7 +1504,8 @@ fun MessageItem(
                         isExpanded = message.isThoughtsExpanded,
                         onToggle = onToggleThoughts,
                         durationSeconds = message.thoughtDurationSeconds,
-                        isStillThinking = message.isStillThinking
+                        isStillThinking = message.isStillThinking,
+                        thinkingStartedAt = message.thinkingStartedAt
                     )
                 }
 

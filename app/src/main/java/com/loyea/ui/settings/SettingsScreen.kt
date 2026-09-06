@@ -1580,9 +1580,12 @@ fun AddOrEditSheet(
                 )
             }
             if (cloudModels.isNotEmpty()) {
+                // 与本地预设重名的模型不重复出 chips：同一 id 两行同时高亮会被看成"选中了两个模型"
+                val cloudOnlyModels = cloudModels.filter { it !in recommendedModels }
+                if (cloudOnlyModels.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = if (isEn) "Cloud models (${cloudModels.size})" else "云端模型（${cloudModels.size} 个）",
+                    text = if (isEn) "Cloud models (${cloudOnlyModels.size})" else "云端模型（${cloudOnlyModels.size} 个）",
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
@@ -1591,7 +1594,7 @@ fun AddOrEditSheet(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
                 ) {
-                    cloudModels.forEach { model ->
+                    cloudOnlyModels.forEach { model ->
                         val isSelected = modelInput == model
                         Box(
                             modifier = Modifier
@@ -1615,6 +1618,7 @@ fun AddOrEditSheet(
                             )
                         }
                     }
+                }
                 }
             }
         }

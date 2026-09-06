@@ -25,8 +25,12 @@ class CharacterDocumentStore(private val charactersDir: File) {
             .orEmpty()
             .mapNotNull { file ->
                 runCatching { CharacterDocumentJson.fromJson(file.readText()) }.getOrNull()
+                    ?.let { doc -> doc to file.lastModified() }
             }
-            .sortedBy { it.profile.id }
+            // 创建时间升序（0.5.5 的插入序习惯：先建在前）；旧文档未记录 createdAt 时用文件 mtime 兜底，
+            // 避免按 id 字母序导致后建的人格跳到先导入的卡之上。
+            .sortedBy { (doc, fileModified) -> if (doc.profile.createdAt > 0) doc.profile.createdAt else fileModified }
+            .map { it.first }
     }
 
     fun load(id: String): CharacterDocument? {

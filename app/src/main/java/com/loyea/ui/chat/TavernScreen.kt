@@ -227,7 +227,8 @@ fun TavernScreen(
                             onExportPng = { shareCharacterCardPng(context, card) },
                             onExportJson = { shareCharacterCardJson(context, card) },
                             onEdit = { cardToEdit = card },
-                            onDelete = { cardToDelete = card }
+                            onDelete = { cardToDelete = card },
+                            bookView = characterBooks[card.id]
                         )
                     }
                 }

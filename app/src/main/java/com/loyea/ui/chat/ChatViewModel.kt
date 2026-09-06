@@ -1264,6 +1264,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 isThoughtsExpanded = true,
                 thoughtDurationSeconds = 0,
                 isStillThinking = true,
+                thinkingStartedAt = startTime,
                 characterId = characterCard.id
             )
             messages.value = collapsedHistoryList + placeholderAiMsg

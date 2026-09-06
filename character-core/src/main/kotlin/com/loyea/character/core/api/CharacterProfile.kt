@@ -34,6 +34,8 @@ enum class CharacterOrigin {
 data class CharacterProfile(
     val id: String,
     val revision: Long = 1L,
+    /** 创建时间（epoch ms）；0 = 旧文档未记录，由存储层用文件 mtime 兜底排序。 */
+    val createdAt: Long = 0L,
     val name: String,
     val description: String = "",
     val personality: String = "",
