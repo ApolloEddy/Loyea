@@ -102,9 +102,9 @@ class PromptAssemblerTest {
     }
 
     @Test
-    fun systemTimeLivesInTurnSnapshotNotPerMessageTags() {
-        // 时间元数据唯一来源 = 回合快照 System Time；逐条 [MESSAGE TIME] 前缀已退役
-        // （模型会模仿自己的输出格式导致标签复述泄露，2026-09-06 根治）
+    fun userMessageTimeMetadataWithoutAssistantTagImitation() {
+        // 时间元数据 = 用户消息逐条 [MESSAGE TIME] + 回合快照 System Time；
+        // assistant 消息永远不带标签（切断自我格式模仿的泄露根因，2026-09-06）
         val parts = PromptAssembler.assemblePromptParts(
             card = card(systemPrompt = "保持角色设定"),
             userName = "Eddy",
@@ -115,7 +115,11 @@ class PromptAssemblerTest {
         )
 
         assertTrue(parts.turnContextSnapshot.contains("System Time:"))
-        assertFalse(parts.stableSystemPrompt.contains("[MESSAGE TIME: ...]"))
+        // 元数据说明只描述用户消息带标签、assistant 不带
+        assertTrue(parts.stableSystemPrompt.contains("[MESSAGE TIME: ...]"))
+        assertTrue(parts.stableSystemPrompt.contains("assistant messages are never prefixed"))
+        // 时间戳窄禁令：默认不输出，带「角色设定或用户明确要求」例外（用户拍板 2026-09-06）
+        assertTrue(parts.stableSystemPrompt.contains("UNLESS the character settings or the user explicitly ask"))
         // 全局方括号禁令已删除：卡片自定义格式（状态面板等）不再被宿主压制
         assertFalse(parts.stableSystemPrompt.contains("Never output any bracketed text"))
     }

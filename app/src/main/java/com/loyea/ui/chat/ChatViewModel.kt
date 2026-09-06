@@ -1581,9 +1581,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 includeVision = includeVision,
                 includeAudio = includeAudioInput,
                 compressedSummary = activeSession.value?.compressedSummary ?: "",
-                // 时间元数据只进回合快照（System Time），不再逐条加 [MESSAGE TIME] 前缀：
-                // 逐条标签让模型在模仿自己的输出格式，是标签复述泄露的根因（2026-09-06）
-                includeMessageTimestamps = false,
+                // 用户消息逐条时间戳保留（时间观念/流逝感）；builder 只给用户消息加、
+                // assistant 历史回复不加，切断"模型模仿自己输出格式"的泄露根因（2026-09-06）
+                includeMessageTimestamps = sessionUsesSystemTime,
                 allowPhysicalContext = sessionUsesSystemTime,
                 allowGraphContext = enableGraphMemory.value,
                 postHistoryInstructions = compiledPrompt?.postHistoryBlock?.text ?: "",

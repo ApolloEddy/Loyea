@@ -59,7 +59,10 @@ object LlmConversationBuilder {
             }
 
             val providerContent = buildString {
-                if (includeMessageTimestamps) {
+                // 时间戳只加在用户消息上：assistant 历史回复带标签会让模型模仿自己的
+                // 输出格式，是回复泄露 [MESSAGE TIME] 标签的根因（2026-09-06）。
+                // 用户消息逐条时间保留——时间观念与流逝感由用户消息时间线承载。
+                if (includeMessageTimestamps && message.sender == Sender.USER) {
                     append(ConversationTimelineFormatter.formatMessageMetadata(message, timeZone))
                     append('\n')
                 }

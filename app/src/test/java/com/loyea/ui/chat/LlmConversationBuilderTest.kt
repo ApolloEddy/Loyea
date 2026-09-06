@@ -52,6 +52,25 @@ class LlmConversationBuilderTest {
     }
 
     @Test
+    fun timestampsOnlyOnUserMessagesAssistantNeverTagged() {
+        // 泄露根因契约：assistant 历史回复绝不带 [MESSAGE TIME] 标签
+        // （模型会模仿自己的输出格式导致回复泄露标签），用户消息时间戳保留
+        val user = Message("u", "question", Sender.USER, timestamp = 1_725_000_000_000L)
+        val assistant = Message("a", "answer", Sender.AI, timestamp = 1_725_000_030_000L)
+
+        val built = LlmConversationBuilder.build(
+            systemPrompt = "stable",
+            history = listOf(user, assistant, user.copy(id = "u2")),
+            includeMessageTimestamps = true,
+            timeZone = chinaTime
+        )
+
+        assertTrue(built[1].content!!.contains("[MESSAGE TIME:"))
+        assertFalse(built[2].content!!.contains("MESSAGE TIME"))
+        assertTrue(built[3].content!!.contains("[MESSAGE TIME:"))
+    }
+
+    @Test
     fun sameMessageEncodingDoesNotDependOnSlidingWindowIndex() {
         val retained = Message("same", "retained", Sender.USER, timestamp = 1_725_000_000_000L)
         val inShortWindow = LlmConversationBuilder.build(

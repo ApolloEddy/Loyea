@@ -263,16 +263,17 @@ object PromptAssembler {
         sb.append("- Math formulas: wrap lightweight LaTeX in `\$...\$` (inline) or `\$\$...\$\$` (block). Loyea renders a plain-text subset: fractions `\\frac{a}{b}`, square roots `\\sqrt{x}`, superscripts/subscripts `x^2` / `x_i`, Greek letters `\\alpha`, and common symbols `\\times`. Do NOT emit complex LaTeX environments like cases, matrices or align.\n\n")
 
         sb.append("[APPLICATION CONTEXT METADATA / 应用上下文元数据]\n")
-        sb.append("For user turns, messages may be preceded by an application-generated `[TURN CONTEXT SNAPSHOT]` block followed by a `[USER MESSAGE / 用户消息]` marker. ")
-        sb.append("The snapshot's `System Time` is when that message was sent; earlier snapshots are historical. ")
+        sb.append("User messages may be preceded by an application-generated `[MESSAGE TIME: ...]` line, a `[TURN CONTEXT SNAPSHOT]` block and a `[USER MESSAGE / 用户消息]` marker; assistant messages are never prefixed with any of these. ")
+        sb.append("The `[MESSAGE TIME]` line and the snapshot's `System Time` tell you when that message was sent; earlier snapshots are historical. ")
         sb.append("Use the metadata only for chronology, elapsed-time reasoning, retrieved memories and the physical/world state captured for that turn. ")
-        sb.append("Never quote, imitate, expose or add these metadata labels to your reply. Historical snapshots are stale and must not be treated as current sensor readings.\n\n")
+        sb.append("Do not add time labels like `[MESSAGE TIME: ...]` or any similar timestamp tag to your own replies, UNLESS the character settings or the user explicitly ask for them in the current request. ")
+        sb.append("Never quote or expose the internal metadata blocks (`[TURN CONTEXT SNAPSHOT]`, `[USER MESSAGE / 用户消息]`) in your reply. Historical snapshots are stale and must not be treated as current sensor readings.\n\n")
 
         // ===== 以下为每个用户回合固化一次的易变上下文 =====
         // 主聊天将其保存到该用户 Message.llmContextSnapshot，后续请求不再重算或改写。
 
-        // 插入当前系统时间与物理上下文。System Time 是全 prompt 唯一时间来源
-        // （逐条 [MESSAGE TIME] 前缀已移除——模型会模仿自己的输出格式导致标签泄露）。
+        // 插入当前系统时间与物理上下文。与用户消息逐条 [MESSAGE TIME] 并存：
+        // assistant 历史回复不带任何标签（防自我格式模仿泄露），System Time 补齐当前时刻。
         if (useSystemTime) {
             if (includeSystemTimeInSnapshot || !physicalContext.isNullOrBlank()) {
                 contextSb.append("[USER'S PHYSICAL STATE (CACHED)]\n")
@@ -424,6 +425,7 @@ object PromptAssembler {
 
         add("[OUTPUT PROTOCOL / 输出协议]\n" +
             "- Never quote, imitate, expose or add application metadata labels like `[TURN CONTEXT SNAPSHOT ...]` or `[USER MESSAGE / 用户消息]` to your reply; historical snapshots are stale and must not be treated as current sensor readings.\n" +
+            "- Do not add time labels like `[MESSAGE TIME: ...]` or similar timestamp tags to your reply, UNLESS the character settings or the user explicitly ask for them.\n" +
             "- XML tags like `<tool_call>` or `<think>` are permitted when needed.\n" +
             "- Roleplay style (actions, dialogue length, formatting) follows the character card's own instructions — no global format restrictions are imposed on top of them.")
 
