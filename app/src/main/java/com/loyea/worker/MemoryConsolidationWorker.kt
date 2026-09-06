@@ -50,7 +50,7 @@ class MemoryConsolidationWorker(
         }
 
         val notification = NotificationCompat.Builder(context, channelId)
-            .setSmallIcon(R.drawable.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("Loyea")
             .setContentText("正在整理记忆思绪中...")
             .setPriority(NotificationCompat.PRIORITY_LOW)
