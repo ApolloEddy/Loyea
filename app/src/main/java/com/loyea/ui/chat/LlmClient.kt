@@ -83,6 +83,9 @@ data class LlmChatMessage(
 /**
  * 大模型 API 网络通信客户端
  */
+/** 生图失败（携带可展示给用户的真实原因：HTTP 状态 / 服务商错误体 / 网络异常） */
+class ImageGenException(message: String) : Exception(message)
+
 class LlmClient {
     @Volatile
     var lastAsrError: String? = null
@@ -1657,7 +1660,7 @@ class LlmClient {
         prompt: String,
         model: String
     ): String? = withContext(Dispatchers.IO) {
-        if (config.apiKey.isBlank()) return@withContext null
+        if (config.apiKey.isBlank()) throw ImageGenException("生图 API Key 未配置 / image API key is missing")
         try {
             val url = resolveImagesGenerationsUrl(config)
             val targetModel = if (config.provider.equals("MiMo", ignoreCase = true) && (model.equals("dall-e-3", ignoreCase = true) || model.isBlank())) {
@@ -1680,18 +1683,25 @@ class LlmClient {
                 .build()
 
             client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return@withContext null
+                if (!response.isSuccessful) {
+                    // 失败原因透出：HTTP 状态 + 错误响应体前 300 字符，让 UI 能显示真实原因
+                    val errBody = runCatching { response.body?.string() }.getOrNull()
+                        ?.trim()?.take(300)?.ifBlank { null }
+                    throw ImageGenException("HTTP ${response.code}" + (errBody?.let { " - $it" } ?: ""))
+                }
                 val resBody = response.body?.string() ?: ""
                 val jsonObj = gson.fromJson(resBody, JsonObject::class.java)
                 val dataArray = jsonObj.getAsJsonArray("data")
                 if (dataArray != null && dataArray.size() > 0) {
                     return@withContext dataArray.get(0).asJsonObject.get("url")?.asString
                 }
-                return@withContext null
+                throw ImageGenException("响应中没有图片数据 / no image data in response")
             }
+        } catch (e: ImageGenException) {
+            throw e
         } catch (e: Exception) {
             e.printStackTrace()
-            null
+            throw ImageGenException(e.message ?: e.javaClass.simpleName)
         }
     }
 

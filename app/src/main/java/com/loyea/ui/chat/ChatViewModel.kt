@@ -1811,16 +1811,24 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         for (toolCall in streamToolCalls) {
                             val displayCallId = "${toolCall.id}_${System.currentTimeMillis()}"
                             val parsedArgs = llmClient.parseArgumentsMap(toolCall.argumentsJson)
+                            val isEnCall = appLanguage.value == "en"
                             val customActionText = when {
                                 toolCall.name.lowercase().contains("web_search") -> {
                                     val query = parsedArgs.get("query")?.toString() ?: ""
-                                    if (query.isNotEmpty()) "搜索网页：$query" else "搜索网页"
+                                    if (query.isNotEmpty()) {
+                                        if (isEnCall) "Searching the web: $query" else "搜索网页：$query"
+                                    } else if (isEnCall) "Searching the web" else "搜索网页"
                                 }
                                 toolCall.name.lowercase().contains("read_url") -> {
                                     val url = parsedArgs.get("url")?.toString() ?: ""
-                                    if (url.isNotEmpty()) "打开网页：$url" else "打开网页"
+                                    if (url.isNotEmpty()) {
+                                        if (isEnCall) "Opening page: $url" else "打开网页：$url"
+                                    } else if (isEnCall) "Opening a web page" else "打开网页"
                                 }
-                                else -> translateToolName(toolCall.name)
+                                toolCall.name.lowercase().contains("generate_image") -> {
+                                    if (isEnCall) "Generating an image" else "生成一张图片"
+                                }
+                                else -> translateToolName(toolCall.name, isEnCall)
                             }
                             val runningCall = McpCall(
                                 id = displayCallId,
@@ -1882,9 +1890,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                         toolOutput = "Error: Image prompt cannot be empty."
                                         success = false
                                     } else {
-                                        val imagePath = generateAndStoreImage(imagePrompt)
+                                        var imageFailReason: String? = null
+                                        val imagePath = try {
+                                            generateAndStoreImage(imagePrompt)
+                                        } catch (e: ImageGenException) {
+                                            imageFailReason = e.message
+                                            null
+                                        }
                                         if (imagePath == null) {
-                                            toolOutput = "[生图失败] 生成请求失败，请检查生图 API 配置或稍后再试。"
+                                            toolOutput = "[生图失败] ${imageFailReason ?: "生成请求失败，请稍后再试。"}"
                                             success = false
                                         } else {
                                             // 图片直接落到当前回复气泡内展示（骨架占位 → 圆角大图，点击看原图）
@@ -2005,18 +2019,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             )
                         }
 
-                        val executedToolsStr = streamToolCalls.joinToString("、") {
+                        val isEnNote = appLanguage.value == "en"
+                        val executedToolsStr = streamToolCalls.joinToString(if (isEnNote) ", " else "、") {
                             val parsedArgs = llmClient.parseArgumentsMap(it.argumentsJson)
                             when {
                                 it.name.lowercase().contains("web_search") -> {
                                     val query = parsedArgs.get("query")?.toString() ?: ""
-                                    if (query.isNotEmpty()) "搜索网页：$query" else "搜索网页"
+                                    if (query.isNotEmpty()) {
+                                        if (isEnNote) "Searched the web: $query" else "搜索网页：$query"
+                                    } else if (isEnNote) "Searched the web" else "搜索网页"
                                 }
                                 it.name.lowercase().contains("read_url") -> {
                                     val url = parsedArgs.get("url")?.toString() ?: ""
-                                    if (url.isNotEmpty()) "打开网页：$url" else "打开网页"
+                                    if (url.isNotEmpty()) {
+                                        if (isEnNote) "Opened page: $url" else "打开网页：$url"
+                                    } else if (isEnNote) "Opened a web page" else "打开网页"
                                 }
-                                else -> translateToolName(it.name)
+                                else -> translateToolName(it.name, isEnNote)
                             }
                         }
                         accumulatedThoughts += "\n\n💡 *（已在此处调用接口感知状态：$executedToolsStr）*\n\n"
@@ -2055,6 +2074,34 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 // 工具轮耗尽 maxRounds 时的收尾：若最后一轮仍是工具轮，模型未产出最终回复，
                 // 必须结束占位气泡的"思考中"状态（该状态会被落盘，不处理则重启后依然卡死）
                 if (lastRoundHadTools) {
+                    // 轮数到顶：告知模型上限并让它把话说完（一次无工具收尾请求，复用同一气泡与段落机制；
+                    // 收尾流失败且毫无产出时，才回退到系统提示文案）
+                    val limitNote = LlmChatMessage(
+                        role = "system",
+                        content = "[SYSTEM NOTICE] The tool-call round limit for this reply has been reached. Do NOT attempt any further tool calls. Review the information you have already gathered, think it through, and give the user your complete final answer now."
+                    )
+                    var finishStreamOk = false
+                    try {
+                        llmClient.sendChatCompletionStream(
+                            config = apiConfig,
+                            messages = conversation + limitNote,
+                            tools = emptyList()
+                        ).collect { event ->
+                            if (event is StreamEvent.Content && event.text.isNotEmpty()) {
+                                accumulatedContent += event.text
+                                currentList = currentList.map { msg ->
+                                    if (msg.id == aiMessageId) {
+                                        msg.copy(contentSegments = currentSegments())
+                                    } else msg
+                                }
+                                messages.value = currentList
+                                finishStreamOk = true
+                            }
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+
                     val finalContent = accumulatedContent.trim().ifBlank {
                         if (appLanguage.value == "en") "[System] Tool call limit reached. Please reply directly with the information you already have."
                         else "[系统] 工具调用次数已达上限，请直接根据已有信息组织回复。"
@@ -2178,9 +2225,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun translateToolName(name: String): String {
+    private fun translateToolName(name: String, isEn: Boolean = false): String {
         val lowName = name.lowercase()
-        return when {
+        val zh = when {
             lowName.contains("get_location") || lowName.contains("current_location") -> "感知当前地理位置"
             lowName.contains("get_weather_forecast") || lowName.contains("forecast") -> "获取未来天气预报"
             lowName.contains("get_live_weather") || lowName.contains("weather") -> "获取当前气象状况"
@@ -2192,6 +2239,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             lowName.contains("get_wifi_status") || lowName.contains("wifi") -> "检测 Wi-Fi 网络连接"
             lowName.contains("get_noise_level") || lowName.contains("noise") -> "测量环境噪音分贝"
             lowName.contains("send_voice_reply") -> "向你发送语音回复"
+            lowName.contains("generate_image") -> "生成一张图片"
             lowName.contains("heart_rate") -> "调取实时心率"
             lowName.contains("steps") -> "查询今日步数"
             lowName.contains("sleep") -> "分析睡眠质量"
@@ -2200,7 +2248,31 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             lowName.contains("physical_perception") -> "感知身体与环境状态"
             lowName.contains("web_search") || lowName.contains("google_search") -> "搜索实时互联网信息"
             lowName.contains("read_url") || lowName.contains("fetch_url") || lowName.contains("open_url") -> "读取网页正文"
-            else -> "执行操作: ${name.substringAfterLast(".")}"
+            else -> "调用外部工具：${name.substringAfterLast(".")}"
+        }
+        if (!isEn) return zh
+        return when {
+            lowName.contains("get_location") || lowName.contains("current_location") -> "Sensing current location"
+            lowName.contains("get_weather_forecast") || lowName.contains("forecast") -> "Getting the weather forecast"
+            lowName.contains("get_live_weather") || lowName.contains("weather") -> "Checking current weather"
+            lowName.contains("get_environment_light") || lowName.contains("light") -> "Measuring ambient light"
+            lowName.contains("get_battery_status") || lowName.contains("battery") -> "Reading battery status"
+            lowName.contains("get_bluetooth_status") || lowName.contains("bluetooth") -> "Checking Bluetooth devices"
+            lowName.contains("get_activity_state") || lowName.contains("activity") -> "Detecting activity state"
+            lowName.contains("get_health_data") || lowName.contains("health") -> "Reading health data"
+            lowName.contains("get_wifi_status") || lowName.contains("wifi") -> "Checking Wi-Fi connection"
+            lowName.contains("get_noise_level") || lowName.contains("noise") -> "Measuring ambient noise"
+            lowName.contains("send_voice_reply") -> "Sending you a voice reply"
+            lowName.contains("generate_image") -> "Generating an image"
+            lowName.contains("heart_rate") -> "Reading heart rate"
+            lowName.contains("steps") -> "Reading today's step count"
+            lowName.contains("sleep") -> "Analyzing sleep quality"
+            lowName.contains("blood_pressure") -> "Reading blood pressure"
+            lowName.contains("time") -> "Syncing system time"
+            lowName.contains("physical_perception") -> "Sensing body and environment"
+            lowName.contains("web_search") || lowName.contains("google_search") -> "Searching the web"
+            lowName.contains("read_url") || lowName.contains("fetch_url") || lowName.contains("open_url") -> "Reading a web page"
+            else -> "Called external tool: ${name.substringAfterLast(".")}"
         }
     }
 
@@ -3994,7 +4066,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 activeApiConfig.value
             }
             val modelName = imageGenModel.value
-            val imageUrl = llmClient.generateImage(targetGenConfig, prompt, modelName)
+            var imageFailReason: String? = null
+            val imageUrl = try {
+                llmClient.generateImage(targetGenConfig, prompt, modelName)
+            } catch (e: ImageGenException) {
+                imageFailReason = e.message
+                null
+            }
 
             withContext(Dispatchers.Main) {
                 isThinking.value = false
@@ -4043,7 +4121,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     val currentList = messages.value.map { msg ->
                         if (msg.id == aiMessageId) {
                             msg.copy(
-                                content = "图像生成失败，请检查您的生图 API 配置或网络连接。",
+                                content = "图像生成失败：${imageFailReason ?: "请检查您的生图 API 配置或网络连接"}",
                                 isStillThinking = false,
                                 isError = true
                             )
