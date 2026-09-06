@@ -1,10 +1,17 @@
 package com.loyea.ui.chat
 
 import android.content.Context
+import com.loyea.character.core.api.CharacterDocument
+import com.loyea.character.core.api.CharacterProfile
+import com.loyea.storage.CharacterDocumentStore
+import com.loyea.storage.RebuildStorageMigrator
+import com.loyea.storage.worldinfo.WorldInfoBookOrigin
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -107,52 +114,8 @@ class ChatStorageManagerTest {
         assertNotNull(legacyMessage.llmTimeZoneId)
     }
 
-    @Test
-    fun testOldWorldInfoJsonMissingNewFieldsGetsDefaults() = runBlocking {
-        // v0.5.1 时代只有 12 字段的 world_info.json；新字段缺失时 selfHeal 兜底
-        val oldJson = """
-            [
-              {
-                "id": "wi_1",
-                "keywords": ["k1"],
-                "content": "C1",
-                "enabled": true,
-                "uid": 1,
-                "keysecondary": [],
-                "constant": false,
-                "order": 100,
-                "depth": 4,
-                "comment": "",
-                "selective": false,
-                "disable": false
-              }
-            ]
-        """.trimIndent()
-        File(tempFolder.root, "files/global_world_info.json").writeText(oldJson)
-
-        val entries = storageManager.loadWorldInfo()
-        assertEquals(1, entries.size)
-        val e = entries[0]
-        // String/List 字段缺失 → null → ?: 生效
-        assertEquals("", e.group)
-        assertEquals("chat", e.keysContainedIn)
-        assertEquals(emptyList<String>(), e.keysecondary)
-        // 原始类型缺失 → Gson 保持 JVM 默认（0/false），? 失效：
-        // probability 退化为 0、allowRecursion 退化为 false —— 保守兼容 v0.5.1（无概率/无递归参与）
-        assertEquals(0, e.selectiveLogic)
-        assertEquals(0, e.probability)
-        assertEquals(false, e.useProbability)
-        assertEquals(0, e.delayUntilRecursion)
-        assertEquals(false, e.preventRecursion)
-        assertEquals(false, e.allowRecursion)
-        assertEquals(false, e.excludeRecursion)
-        assertEquals(0, e.position)
-        assertEquals(0, e.weight)
-        // 既有字段不受影响
-        assertEquals("wi_1", e.id)
-        assertEquals(listOf("k1"), e.keywords)
-        assertEquals(4, e.depth)
-    }
+    // v0.5.1 旧字段缺失的 selfHeal 兜底断言：旧读取路径已退役（W5），
+    // 等价断言改走迁移路径，见下方 testLegacyMissingFieldsGetDefaultsThroughMigration。
 
     @Test
     fun testUpdateSessionTokensAccumulatesCacheTokens() = runBlocking {
@@ -179,88 +142,134 @@ class ChatStorageManagerTest {
         assertEquals(13, loaded.promptCacheMissTokens)
     }
 
-    // ---------- 会话专属世界书 ----------
+    // ---------- 删除会话 × 书库绑定清理（WorldInfo 2.0 Spec §6.5） ----------
+
+    private val storageRoot get() = File(tempFolder.root, "files/rebuild_storage_v1")
+
+    private fun legacySessionBookJson(entriesJson: String): String =
+        """{"entries":$entriesJson}"""
+
+    private fun seedLegacySources(globalEntriesJson: String, sessionBookJson: String?, sessionId: String) {
+        // 先完成 rebuild_storage_v1 根迁移建立 manifest：否则 deleteSession 内
+        // ensureMigrated() 会把已种子的根整体重建（RebuildStorageMigrator staging 切换语义）
+        RebuildStorageMigrator.ensureMigrated(File(tempFolder.root, "files"))
+        if (globalEntriesJson.isNotEmpty()) {
+            File(storageRoot, "global_world_info.json").writeText(globalEntriesJson)
+        }
+        if (sessionBookJson != null) {
+            val file = File(storageRoot, "sessions/world_info_$sessionId.json")
+            file.parentFile?.mkdirs()
+            file.writeText(sessionBookJson)
+        }
+        File(storageRoot, "sessions_metadata.json").writeText(
+            """[{"id":"$sessionId","title":"T","lastActiveTime":100}]"""
+        )
+        runBlocking { storageManager.worldInfoLibrary.migrateIfNeeded() }
+    }
 
     @Test
-    fun testSessionWorldInfoRoundTrip() = runBlocking {
-        val sessionId = "sess_wi"
-        val book = WorldInfoBook(
-            entries = listOf(
-                WorldInfoEntry(
-                    id = "e1",
-                    keywords = listOf("k1"),
-                    content = "C1",
-                    enabled = true,
-                    uid = 1,
-                    keysecondary = listOf("ks"),
-                    constant = false,
-                    order = 50,
-                    depth = 3,
-                    comment = "c",
-                    selective = true,
-                    disable = false,
-                    selectiveLogic = 3,
-                    group = "G",
-                    probability = 80,
-                    useProbability = true,
-                    delayUntilRecursion = 1,
-                    preventRecursion = false,
-                    allowRecursion = true,
-                    excludeRecursion = false,
-                    keysContainedIn = "chat,world",
-                    position = 1,
-                    weight = 2
-                )
-            ),
-            config = WorldInfoConfig(
-                scanDepth = 5,
-                position = "top",
-                insertionOrderMode = WorldInfoInsertionOrder.KEY_LENGTH,
-                tokenBudget = 1024,
-                recursionDepthCap = 2,
-                allowRecursion = false,
-                emitGroupHeaders = true
+    fun testDeleteSessionUnbindsCardBookButKeepsIt() = runBlocking {
+        // 卡书（引用不落内容）绑定会话：删除会话只解绑，书保留
+        val sessionId = "sess_card"
+        seedLegacySources("[]", null, sessionId) // 先建根 manifest，避免根迁移重建吞掉后写入的卡
+        CharacterDocumentStore(File(storageRoot, "characters")).save(
+            CharacterDocument(
+                profile = CharacterProfile(id = "char_k", name = "K"),
+                embeddedBookJson = """{"name":"KB","entries":[{"id":1,"keys":["a"],"content":"A","constant":true}]}"""
             )
         )
-        storageManager.saveSessionWorldInfo(sessionId, book)
+        val library = storageManager.worldInfoLibrary
+        library.ensureCardBookRegistered("char_k")
+        val cardBook = library.loadAllBooks().first { it.origin == WorldInfoBookOrigin.CARD }
+        library.bindBookToSession(cardBook.id, sessionId)
 
-        val loaded = storageManager.loadSessionWorldInfo(sessionId)
-        assertNotNull(loaded)
-        assertEquals(book.entries, loaded!!.entries)
-        assertEquals(book.config, loaded.config)
-    }
-
-    @Test
-    fun testSessionWorldInfoAbsentReturnsNull() = runBlocking {
-        assertNull(storageManager.loadSessionWorldInfo("no_such_session"))
-    }
-
-    @Test
-    fun testDeleteSessionRemovesWorldInfoFile() = runBlocking {
-        val sessionId = "sess_del"
-        storageManager.saveSessionList(listOf(ChatSession(sessionId, "S", 1000L)))
-        storageManager.saveSessionMessages(sessionId, emptyList())
-        storageManager.saveSessionWorldInfo(sessionId, WorldInfoBook())
-
-        assertNotNull(storageManager.loadSessionWorldInfo(sessionId))
         storageManager.deleteSession(sessionId)
-        assertNull(storageManager.loadSessionWorldInfo(sessionId))
+
+        val after = library.loadBook(cardBook.id)
+        assertNotNull(after) // 卡书只解绑不删
+        assertTrue(sessionId !in after!!.sessionIds)
     }
 
     @Test
-    fun testSessionWorldInfoMissingConfigGetsDefaults() = runBlocking {
-        // 手工构造旧式/残缺会话书 JSON：有 entries、缺 config 对象
-        val sessionId = "sess_old"
-        val file = File(tempFolder.root, "files/sessions/world_info_$sessionId.json")
-        file.parentFile?.mkdirs()
-        file.writeText("""{"entries":[{"id":"e1","keywords":["k"],"content":"C"}]}""")
+    fun testDeleteSessionDeletesOwnedBookOnlyBoundToIt() = runBlocking {
+        // owned 会话书仅绑定本会话：整本删除
+        val sessionId = "sess_owned"
+        seedLegacySources(
+            "[]",
+            legacySessionBookJson("""[{"id":"e1","keywords":["k"],"content":"C"}]"""),
+            sessionId
+        )
+        val library = storageManager.worldInfoLibrary
+        val owned = library.loadAllBooks().first { it.sessionIds.contains(sessionId) }
 
-        val loaded = storageManager.loadSessionWorldInfo(sessionId)
-        assertNotNull(loaded)
-        assertEquals(1, loaded!!.entries.size)
-        assertEquals("e1", loaded.entries[0].id)
-        assertEquals(emptyList<String>(), loaded.entries[0].keysecondary)
-        assertEquals(WorldInfoConfig(), loaded.config)
+        storageManager.deleteSession(sessionId)
+
+        assertNull(library.loadBook(owned.id))
+    }
+
+    @Test
+    fun testDeleteSessionKeepsOwnedBookSharedByOtherSessions() = runBlocking {
+        // owned 书同时绑定另一会话：只解绑不删
+        val sessionId = "sess_a"
+        seedLegacySources(
+            "[]",
+            legacySessionBookJson("""[{"id":"e1","keywords":["k"],"content":"C"}]"""),
+            sessionId
+        )
+        val library = storageManager.worldInfoLibrary
+        val owned = library.loadAllBooks().first { it.sessionIds.contains(sessionId) }
+        library.bindBookToSession(owned.id, "sess_b")
+
+        storageManager.deleteSession(sessionId)
+
+        val after = library.loadBook(owned.id)
+        assertNotNull(after)
+        assertEquals(listOf("sess_b"), after!!.sessionIds)
+    }
+
+    @Test
+    fun testLegacyMissingFieldsGetDefaultsThroughMigration() = runBlocking {
+        // v0.5.1 时代只有 12 字段的旧条目：经迁移路径 selfHeal 兜底
+        // （String/List 缺失 → ?: 生效；原始类型缺失 → JVM 默认，概率/递归保守禁用）
+        val oldJson = """
+            [
+              {
+                "id": "wi_1",
+                "keywords": ["k1"],
+                "content": "C1",
+                "enabled": true,
+                "uid": 1,
+                "keysecondary": [],
+                "constant": false,
+                "order": 100,
+                "depth": 4,
+                "comment": "",
+                "selective": false,
+                "disable": false
+              }
+            ]
+        """.trimIndent()
+        seedLegacySources(oldJson, null, "sess_x")
+
+        val global = storageManager.worldInfoLibrary.loadAllBooks()
+            .first { it.isGlobalActive }
+        assertEquals(1, global.entries.size)
+        val e = global.entries[0]
+        assertEquals("", e.group)
+        assertEquals("chat", e.keysContainedIn)
+        assertEquals(emptyList<String>(), e.keysecondary)
+        assertEquals(0, e.selectiveLogic)
+        assertEquals(0, e.probability)
+        assertEquals(false, e.useProbability)
+        assertEquals(0, e.delayUntilRecursion)
+        assertEquals(false, e.preventRecursion)
+        assertEquals(false, e.allowRecursion)
+        assertEquals(false, e.excludeRecursion)
+        assertEquals(0, e.position)
+        assertEquals(0, e.weight)
+        assertEquals("wi_1", e.id)
+        assertEquals(listOf("k1"), e.keywords)
+        assertEquals(4, e.depth)
     }
 
     // ---------- WorldInfoConfig JSON 编解码 ----------

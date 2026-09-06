@@ -5,7 +5,6 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.loyea.storage.CharacterDocumentStore
 import com.loyea.storage.RebuildStorageMigrator
-import com.loyea.storage.worldinfo.WorldInfoBookDocument
 import com.loyea.storage.worldinfo.WorldInfoLibrary
 import java.io.File
 import kotlinx.coroutines.sync.Mutex
@@ -40,7 +39,7 @@ data class ChatSession(
  * 全局世界观条目（World Info，仿 SillyTavern 世界书）。
  *
  * 关键词触发注入 system prompt；字段保留 SillyTavern World Info 常用字段，
- * 保证导入/导出往返不失真（见 WorldInfoSettings 的 import/export）。
+ * 保证导入/导出往返不失真（导入导出在世界书库页 WorldInfoLibraryScreen）。
  */
 data class WorldInfoEntry(
     val id: String,
@@ -68,15 +67,6 @@ data class WorldInfoEntry(
     val keysContainedIn: String = "chat", // 主关键词扫描源（chat/user/system/world 逗号分隔）
     val position: Int = 0,           // 条内插入位置微调（当前仅保留字段）
     val weight: Int = 0              // 排序权重（order 相等时的次序）
-)
-
-/**
- * 一本完整世界书 = 条目列表 + 匹配配置。
- * 会话专属书以该结构整体存取：文件存在即替代全局书，不存在则回退全局。
- */
-data class WorldInfoBook(
-    val entries: List<WorldInfoEntry> = emptyList(),
-    val config: WorldInfoConfig = WorldInfoConfig()
 )
 
 /**
@@ -330,13 +320,33 @@ class ChatStorageManager(private val context: Context) {
                     if (file.exists()) {
                         file.delete()
                     }
-                    // 1.1 删除会话专属世界书遗留文件（迁移前残留；书库数据见 1.2）
+                    // 1.1 删除会话专属世界书遗留文件（迁移前残留）
                     val wiFile = File(sessionsDir, "world_info_$sessionId.json")
                     if (wiFile.exists()) {
                         wiFile.delete()
                     }
-                    // 1.2 删除书库中绑定该会话的世界书（WorldInfo 2.0 Spec §6.5）
-                    runCatching { deleteSessionWorldInfo(sessionId) }.onFailure { it.printStackTrace() }
+                    // 1.2 清理书库中该会话的绑定（WorldInfo 2.0 Spec §6.5）：
+                    // 仅本会话绑定的 owned 书整本删除（多会话共享只解绑）；卡书只解绑不删
+                    runCatching {
+                        worldInfoLibrary.loadAllBooks()
+                            .filter { sessionId in it.sessionIds }
+                            .forEach { book ->
+                                val remaining = book.sessionIds - sessionId
+                                if (!book.isOwned) {
+                                    if (remaining.size < book.sessionIds.size) {
+                                        worldInfoLibrary.saveBook(
+                                            book.copy(sessionIds = remaining, updatedAt = System.currentTimeMillis())
+                                        )
+                                    }
+                                } else if (remaining.isEmpty()) {
+                                    worldInfoLibrary.deleteBook(book.id)
+                                } else {
+                                    worldInfoLibrary.saveBook(
+                                        book.copy(sessionIds = remaining, updatedAt = System.currentTimeMillis())
+                                    )
+                                }
+                            }
+                    }.onFailure { it.printStackTrace() }
                     // 2. 从会话列表中移除并重新保存元数据
                     val currentSessions = loadSessionListInternal().filter { it.id != sessionId }
                     saveSessionListInternal(currentSessions)
@@ -347,114 +357,7 @@ class ChatStorageManager(private val context: Context) {
         }
     }
 
-    // ---------- 世界书（W2 双轨 shim：旧接口由统一书库支撑，WorldInfo 2.0 Spec §4.2） ----------
-    // 全局条目 ↔ 全局生效 owned 书；会话条目 ↔ 绑定该会话的 owned 书。
-    // 旧 world_info 文件迁移后不再读写（本层随 W5 旧 UI 一并退役）。
-
-    /** 全局生效的 owned 书（旧 UI 只管理 owned 全局书；全局生效若是卡书则旧 UI 视为空）。 */
-    private suspend fun globalOwnedBook(): WorldInfoBookDocument? =
-        worldInfoLibrary.loadAllBooks().firstOrNull { it.isGlobalActive && it.isOwned }
-
-    /**
-     * 保存全局世界观条目列表（无全局书则建书并设为全局生效）
-     */
-    suspend fun saveWorldInfo(entries: List<WorldInfoEntry>) {
-        ensureMigrated()
-        runCatching {
-            val existing = globalOwnedBook()
-            if (existing != null) {
-                worldInfoLibrary.saveBook(
-                    existing.copy(entries = entries, updatedAt = System.currentTimeMillis())
-                )
-            } else {
-                worldInfoLibrary.createOwnedBook(
-                    name = "全局世界书", entries = entries, setGlobalActive = true
-                )
-            }
-        }.onFailure { it.printStackTrace() }
-    }
-
-    /**
-     * 读取全局世界观条目列表（不存在则返回空列表）
-     */
-    suspend fun loadWorldInfo(): List<WorldInfoEntry> {
-        ensureMigrated()
-        return runCatching { globalOwnedBook()?.entries ?: emptyList() }.getOrDefault(emptyList())
-    }
-
-    /**
-     * 原子化更新全局世界观条目列表
-     */
-    suspend fun updateWorldInfo(updateBlock: (List<WorldInfoEntry>) -> List<WorldInfoEntry>) {
-        ensureMigrated()
-        runCatching {
-            val current = globalOwnedBook()?.entries ?: emptyList()
-            saveWorldInfo(updateBlock(current))
-        }.onFailure { it.printStackTrace() }
-    }
-
-    /** 绑定某会话的 owned 书（旧 UI 只管理 owned 会话书；卡书绑定走 W4 面板语义）。 */
-    private suspend fun sessionOwnedBook(sessionId: String): WorldInfoBookDocument? =
-        worldInfoLibrary.loadAllBooks().firstOrNull { sessionId in it.sessionIds && it.isOwned }
-
-    /**
-     * 读取某会话专属世界书；未绑定返回 null（调用方回退全局书，行为同 0.7.1）。
-     */
-    suspend fun loadSessionWorldInfo(sessionId: String): WorldInfoBook? {
-        ensureMigrated()
-        return runCatching {
-            sessionOwnedBook(sessionId)?.let { book ->
-                WorldInfoBook(entries = book.entries, config = book.config ?: WorldInfoConfig())
-            }
-        }.getOrNull()
-    }
-
-    /**
-     * 保存某会话专属世界书（写入即建立绑定，匹配时最高优先于默认解析）。
-     */
-    suspend fun saveSessionWorldInfo(sessionId: String, book: WorldInfoBook) {
-        ensureMigrated()
-        runCatching {
-            val existing = sessionOwnedBook(sessionId)
-            if (existing != null) {
-                worldInfoLibrary.saveBook(
-                    existing.copy(
-                        entries = book.entries,
-                        config = book.config,
-                        updatedAt = System.currentTimeMillis()
-                    )
-                )
-            } else {
-                worldInfoLibrary.createOwnedBook(
-                    name = "会话书 · ${sessionId.takeLast(6)}",
-                    entries = book.entries,
-                    sessionIds = listOf(sessionId),
-                    config = book.config
-                )
-            }
-        }.onFailure { it.printStackTrace() }
-    }
-
-    /**
-     * 删除某会话专属世界书：仅绑定该会话的书整本删除，多会话共享的书只解绑。
-     */
-    suspend fun deleteSessionWorldInfo(sessionId: String) {
-        ensureMigrated()
-        runCatching {
-            worldInfoLibrary.loadAllBooks()
-                .filter { sessionId in it.sessionIds && it.isOwned }
-                .forEach { book ->
-                    val remaining = book.sessionIds - sessionId
-                    if (remaining.isEmpty()) {
-                        worldInfoLibrary.deleteBook(book.id)
-                    } else {
-                        worldInfoLibrary.saveBook(
-                            book.copy(sessionIds = remaining, updatedAt = System.currentTimeMillis())
-                        )
-                    }
-                }
-        }.onFailure { it.printStackTrace() }
-    }
+    // ---------- 世界书（WorldInfo 2.0：旧 shim 已随 W5 旧 UI 退役，统一走 worldInfoLibrary） ----------
 
     /**
      * 保存所有角色卡列表

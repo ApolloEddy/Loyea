@@ -395,18 +395,22 @@ class WorldInfoLibrary(private val storageRoot: File) {
     // ---------- 一次性迁移（Spec §5） ----------
 
     /**
-     * 全局书 / 会话书 / 角色卡书 → 统一书库。
-     * 幂等（manifest 短路）；staging 构建失败整体作废可重试；旧文件原样保留不读不删
-     * （迁移后旧读取路径由 W2 切换）。构建中任何源读取异常 → 放弃本次迁移并返回失败说明。
+     * 全局书 / 会话书 / 角色卡书 → 统一书库（Spec §5）。
+     *
+     * 幂等与安全策略：
+     * - manifest 存在即短路（重复迁移不覆盖书库后续改动）；
+     * - 迁移书使用确定性 ID（wb_migrated_*），逐书原子写、manifest 最后写入：
+     *   任何时点崩溃 → 重试重写同名文件，不产生重复书；
+     * - 窗口期（manifest 未写前）已存在的用户书不受影响——只增不删；
+     * - 旧文件原样保留，迁移后不再读取（W2 起读取路径已切换）。
      */
     suspend fun migrateIfNeeded(): WorldInfoMigrationOutcome = mutex.withLock {
         if (manifestFile.exists()) {
             return@withLock WorldInfoMigrationOutcome(performed = false, booksCreated = 0, notes = emptyList())
         }
         try {
-            // 上次 staging 未完成：整体作废重来（源文件未动过）
+            // 旧实现遗留的 staging 垃圾清理
             if (stagingDir.exists()) stagingDir.deleteRecursively()
-            val stagingBooksDir = File(stagingDir, "books").apply { mkdirs() }
 
             val notes = ArrayList<String>()
             val books = ArrayList<WorldInfoBookDocument>()
@@ -419,7 +423,7 @@ class WorldInfoLibrary(private val storageRoot: File) {
                 val entries = readLegacyEntryArray(globalFile.readText())
                 if (entries.isNotEmpty()) {
                     books += WorldInfoBookDocument(
-                        id = newBookId(),
+                        id = "wb_migrated_global",
                         name = "全局世界书",
                         createdAt = now,
                         updatedAt = now,
@@ -443,7 +447,7 @@ class WorldInfoLibrary(private val storageRoot: File) {
                 val sessionId = file.name.removePrefix("world_info_").removeSuffix(".json")
                 val (entries, config) = readLegacySessionBook(file.readText())
                 books += WorldInfoBookDocument(
-                    id = newBookId(),
+                    id = "wb_migrated_session_" + sanitizeIdPart(sessionId),
                     name = "会话书 · ${titles[sessionId] ?: sessionId.takeLast(6)}",
                     createdAt = now,
                     updatedAt = now,
@@ -462,7 +466,7 @@ class WorldInfoLibrary(private val storageRoot: File) {
             characterStore.loadAll().forEach { doc ->
                 if (!doc.embeddedBookJson.isNullOrBlank()) {
                     books += WorldInfoBookDocument(
-                        id = newBookId(),
+                        id = "wb_migrated_card_" + sanitizeIdPart(doc.profile.id),
                         name = "角色卡 · ${doc.profile.name}",
                         createdAt = now,
                         updatedAt = now,
@@ -475,9 +479,10 @@ class WorldInfoLibrary(private val storageRoot: File) {
             }
             if (cardCount > 0) notes += "角色卡书：$cardCount 本。"
 
-            // 4. 写 staging（每书一文件 + manifest 最后写入），原子切换
+            // 写入：确定性 ID 逐书原子写（重试幂等）；窗口期用户书只增不删
             books.forEach { book ->
-                atomicWrite(File(stagingBooksDir, "${book.id}.json"), WorldInfoBookJson.toJson(book))
+                if (!booksDir.exists()) booksDir.mkdirs()
+                atomicWrite(bookFile(book.id), WorldInfoBookJson.toJson(book))
             }
             val manifest = JsonObject().apply {
                 addProperty("version", MANIFEST_VERSION)
@@ -490,22 +495,14 @@ class WorldInfoLibrary(private val storageRoot: File) {
                 })
                 add("notes", JsonArray().apply { notes.forEach { add(com.google.gson.JsonPrimitive(it)) } })
             }
-            File(stagingDir, "manifest.json").writeText(manifest.toString())
-
-            if (worldinfoDir.exists()) worldinfoDir.deleteRecursively() // 无 manifest 的半成品目录
-            if (!stagingDir.renameTo(worldinfoDir)) {
-                worldinfoDir.mkdirs()
-                stagingDir.copyRecursively(worldinfoDir, overwrite = true)
-                stagingDir.deleteRecursively()
-            }
+            atomicWrite(manifestFile, manifest.toString())
             WorldInfoMigrationOutcome(performed = true, booksCreated = books.size, notes = notes)
         } catch (e: Exception) {
             e.printStackTrace()
-            stagingDir.deleteRecursively()
             WorldInfoMigrationOutcome(
                 performed = false,
                 booksCreated = 0,
-                notes = listOf("迁移中止（${e.javaClass.simpleName}: ${e.message ?: "未知"}），可重试；旧文件未受影响。")
+                notes = listOf("迁移中止（${e.javaClass.simpleName}: ${e.message ?: "未知"}），可重试；迁移书为确定性 ID，重试幂等；旧文件未受影响。")
             )
         }
     }
@@ -550,6 +547,9 @@ class WorldInfoLibrary(private val storageRoot: File) {
 
     private fun bookFile(id: String): File =
         File(booksDir, "${id.replace(Regex("[^A-Za-z0-9._-]"), "_")}.json")
+
+    /** 迁移书确定性 ID 的组成部分清洗（会话/角色 ID → 文件名安全片段）。 */
+    private fun sanitizeIdPart(raw: String): String = raw.replace(Regex("[^A-Za-z0-9._-]"), "_")
 
     private fun atomicWrite(file: File, content: String) {
         val tmp = File(file.parentFile, file.name + ".tmp")

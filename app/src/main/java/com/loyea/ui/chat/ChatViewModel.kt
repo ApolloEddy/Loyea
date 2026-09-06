@@ -129,17 +129,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     var characterCardList = mutableStateOf<List<CharacterCard>>(emptyList())
         private set
 
-    // 8.1 全局世界观（World Info）条目列表（跨会话）
-    var worldInfoEntries = mutableStateOf<List<WorldInfoEntry>>(emptyList())
-        private set
-
-    // 8.2 全局世界观匹配配置（跨会话，存 SharedPreferences）
+    // 8.2 全局世界观默认匹配配置（WorldInfo 2.0：书级未覆盖时的默认层，存 SharedPreferences）
     var worldInfoConfig = mutableStateOf(WorldInfoConfig())
         private set
 
-    // 8.3 当前会话专属世界书（null = 未配置，回退到全局书）
-    var sessionWorldInfo = mutableStateOf<WorldInfoBook?>(null)
-        private set
     // P5 有限正则：当前角色的映射规则（显示阶段在渲染时按 DISPLAY_ASSISTANT 过滤应用）
     var displayRegexRules = mutableStateOf<List<com.loyea.character.core.regex.RegexRule>>(emptyList())
         private set
@@ -483,10 +476,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 characterCardList.value = cards
                 characterBookViews.value = bookViews
             }
-            val worldInfo = storageManager.loadWorldInfo()
-            withContext(Dispatchers.Main) {
-                worldInfoEntries.value = worldInfo
-            }
+            // 全局条目已并入统一书库（WorldInfo 2.0）；此处仅加载默认匹配配置
             val worldInfoCfg = WorldInfoConfigStorage.load(prefs)
             withContext(Dispatchers.Main) {
                 worldInfoConfig.value = worldInfoCfg
@@ -610,14 +600,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         prefs.edit().putString("current_session_id", sessionId).apply()
         viewModelScope.launch(Dispatchers.IO) {
             val msgs = storageManager.loadSessionMessages(sessionId)
-            // 会话专属世界书随会话切换重载（null = 未配置，回退全局书）
-            val sessionBook = storageManager.loadSessionWorldInfo(sessionId)
+            // 世界书生效解析改为请求时经 WorldInfoLibrary（WorldInfo 2.0），切换会话无需预载
             // P5：随角色切换重载有限正则规则（来自卡 extensions.regex_scripts 白名单映射）
             val characterId = activeSession.value?.characterId
             val regexOutcome = characterId?.let { loadRegexRulesFor(it) }
             withContext(Dispatchers.Main) {
                 messages.value = msgs
-                sessionWorldInfo.value = sessionBook
                 displayRegexRules.value = regexOutcome?.rules ?: emptyList()
             }
         }
@@ -2450,91 +2438,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * 保存世界观条目列表：按 scope 路由。
-     * - GLOBAL（默认）：全局书落库 + 更新内存 state（设置页既有行为不变）
-     * - SESSION：写当前会话专属书（保留会话 config），覆盖全局书
+     * 保存全局默认匹配配置（WorldInfo 2.0：书级未覆盖时所有书继承的默认层）。
+     * 书级配置覆盖在世界书详情页编辑（WorldInfoLibraryScreen）。
      */
-    fun saveWorldInfo(entries: List<WorldInfoEntry>, scope: WorldInfoScope = WorldInfoScope.GLOBAL) {
-        if (scope == WorldInfoScope.SESSION) {
-            val sessionId = currentSessionId.value
-            if (sessionId.isBlank()) return
-            val book = WorldInfoBook(
-                entries = entries,
-                config = sessionWorldInfo.value?.config ?: WorldInfoConfig()
-            )
-            viewModelScope.launch(Dispatchers.IO) {
-                storageManager.saveSessionWorldInfo(sessionId, book)
-                withContext(Dispatchers.Main) {
-                    sessionWorldInfo.value = book
-                }
-            }
-            return
-        }
-        viewModelScope.launch(Dispatchers.IO) {
-            storageManager.saveWorldInfo(entries)
-            withContext(Dispatchers.Main) {
-                worldInfoEntries.value = entries
-            }
-        }
-    }
-
-    /**
-     * 保存世界观匹配配置：按 scope 路由。
-     * - GLOBAL（默认）：落 prefs + 更新内存 state
-     * - SESSION：写当前会话专属书（保留会话 entries），覆盖全局书
-     */
-    fun saveWorldInfoConfig(config: WorldInfoConfig, scope: WorldInfoScope = WorldInfoScope.GLOBAL) {
-        if (scope == WorldInfoScope.SESSION) {
-            val sessionId = currentSessionId.value
-            if (sessionId.isBlank()) return
-            val book = WorldInfoBook(
-                // 会话已有专属书 → 保留其条目；否则以全局条目为种子（避免"空书覆盖全局"的脚枪）
-                entries = sessionWorldInfo.value?.entries ?: worldInfoEntries.value,
-                config = config
-            )
-            viewModelScope.launch(Dispatchers.IO) {
-                storageManager.saveSessionWorldInfo(sessionId, book)
-                withContext(Dispatchers.Main) {
-                    sessionWorldInfo.value = book
-                }
-            }
-            return
-        }
+    fun saveWorldInfoConfig(config: WorldInfoConfig) {
         WorldInfoConfigStorage.save(prefs, config)
         worldInfoConfig.value = config
-    }
-
-    /**
-     * 清空当前会话专属世界书（删除文件 + state 置 null），该会话恢复回退全局书。
-     */
-    fun clearSessionWorldInfo() {
-        val sessionId = currentSessionId.value
-        if (sessionId.isBlank()) return
-        viewModelScope.launch(Dispatchers.IO) {
-            storageManager.deleteSessionWorldInfo(sessionId)
-            withContext(Dispatchers.Main) {
-                sessionWorldInfo.value = null
-            }
-        }
-    }
-
-    /**
-     * 为当前会话创建独立世界书，以全局书（条目 + 配置）为种子。
-     * 之后该会话完全使用自己的副本，不再受全局书影响。
-     */
-    fun createSessionWorldInfo() {
-        val sessionId = currentSessionId.value
-        if (sessionId.isBlank()) return
-        val book = WorldInfoBook(
-            entries = worldInfoEntries.value,
-            config = worldInfoConfig.value
-        )
-        viewModelScope.launch(Dispatchers.IO) {
-            storageManager.saveSessionWorldInfo(sessionId, book)
-            withContext(Dispatchers.Main) {
-                sessionWorldInfo.value = book
-            }
-        }
     }
 
     /**

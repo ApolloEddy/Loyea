@@ -17,13 +17,6 @@ enum class WorldInfoInsertionOrder {
 }
 
 /**
- * 世界书作用域：
- * - GLOBAL = 全局共享书（跨所有会话，v0.5.2 及之前的行为）；
- * - SESSION = 某会话专属书（文件存在时完全替代全局书；不存在时回退全局书）。
- */
-enum class WorldInfoScope { GLOBAL, SESSION }
-
-/**
  * 世界书全局配置（与条目文件分开存储，存 SharedPreferences）。
  * 纯 Kotlin 数据类（storage 才有 Android 依赖），便于单测。
  */
