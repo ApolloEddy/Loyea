@@ -20,7 +20,8 @@ object LlmConversationBuilder {
         allowPhysicalContext: Boolean = true,
         allowGraphContext: Boolean = true,
         timeZone: TimeZone = TimeZone.getDefault(),
-        postHistoryInstructions: String = ""
+        postHistoryInstructions: String = "",
+        historyBudgetTokens: Long = 0L
     ): List<LlmChatMessage> {
         val result = mutableListOf<LlmChatMessage>()
         if (!systemPrompt.isNullOrBlank()) {
@@ -35,14 +36,9 @@ object LlmConversationBuilder {
             )
         }
 
-        val recentHistory = history.asSequence()
-            .filter {
-                (it.content.isNotBlank() || !it.imageUrl.isNullOrBlank() || !it.audioUrl.isNullOrBlank()) &&
-                    !it.content.startsWith("[错误]") &&
-                    !it.content.startsWith("[Error]")
-            }
-            .toList()
-            .takeLast(20)
+        // Spec 7.3：用总上下文预算选择连续历史后缀，删除固定 takeLast(20) 裁剪依据；
+        // 工具调用与结果同属一条消息，天然作为完整单元取舍
+        val recentHistory = selectWithinBudget(history, historyBudgetTokens)
 
         recentHistory.forEachIndexed { index, message ->
             val effectiveImage = if (includeVision && !message.imageUrl.isNullOrBlank()) message.imageUrl else null
@@ -95,6 +91,31 @@ object LlmConversationBuilder {
             result.add(LlmChatMessage(role = "system", content = postHistoryInstructions))
         }
         return result
+    }
+
+    /**
+     * Spec 7.3：在给定 token 预算内选择最近连续后缀（时间正序，从尾部累计）。
+     * 最后一条消息（当前输入）无条件保留；预算 <=0 视为不限制。
+     * 每条成本 = 正文 + 逐回合快照 + 元数据开销（时间戳/角色标记的保守估计）。
+     */
+    fun selectWithinBudget(history: List<Message>, historyBudgetTokens: Long): List<Message> {
+        val filtered = history.filter {
+            (it.content.isNotBlank() || !it.imageUrl.isNullOrBlank() || !it.audioUrl.isNullOrBlank()) &&
+                !it.content.startsWith("[错误]") &&
+                !it.content.startsWith("[Error]")
+        }
+        if (historyBudgetTokens <= 0L) return filtered
+        var acc = 0L
+        var startIndex = filtered.size
+        for (i in filtered.indices.reversed()) {
+            val message = filtered[i]
+            val cost = estimateTokens(message.content) +
+                (message.llmContextSnapshot?.let(::estimateTokens) ?: 0L) + 8L
+            if (i != filtered.size - 1 && acc + cost > historyBudgetTokens) break
+            acc += cost
+            startIndex = i
+        }
+        return filtered.subList(startIndex, filtered.size)
     }
 
     private fun sanitizeSnapshot(

@@ -1633,12 +1633,11 @@ fun MessageItem(
                     message.contentSegments.forEach { segment ->
                         when (segment.type) {
                             "text" -> if (segment.text.isNotBlank()) {
-                                val processedSegText = remember(segment.text) {
-                                    segment.text.replace(Regex("(?<!`)`(?!`)"), "\\\\`")
-                                }
                                 androidx.compose.foundation.text.selection.SelectionContainer {
-                                    MarkdownText(
-                                        text = processedSegText,
+                                    // Spec 7.1：markdown 与 HTML 面板分段原生渲染，原文不改写
+                                    MessageContentWithPanels(
+                                        raw = segment.text,
+                                        collapseKeyPrefix = "${message.id}:seg",
                                         color = MaterialTheme.colorScheme.onBackground
                                     )
                                 }
@@ -1661,15 +1660,11 @@ fun MessageItem(
                         }
                     }
                 } else if (message.content.isNotBlank()) {
-                    // 旧路径（历史消息）：整段渲染，并折叠连续空行
-                    val processedContent = remember(message.content) {
-                        message.content.replace(Regex("(?<!`)`(?!`)"), "\\\\`")
-                            .replace(Regex("\\n{2,}"), "\n\n")
-                            .trim('\n', '\r')
-                    }
                     androidx.compose.foundation.text.selection.SelectionContainer {
-                        MarkdownText(
-                            text = processedContent,
+                        // Spec 7.1：markdown 与 HTML 面板分段原生渲染（折叠/字段/正文保留）
+                        MessageContentWithPanels(
+                            raw = message.content,
+                            collapseKeyPrefix = message.id,
                             color = MaterialTheme.colorScheme.onBackground
                         )
                     }

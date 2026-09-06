@@ -901,8 +901,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 updatedMsgs = updated
                 updated
             }
+            // Spec 7.3 / M03：切换被摘要覆盖消息的版本 → 旧摘要失效，从原始消息重建
+            val coveredIdx = updatedMsgs.indexOfFirst { it.id == messageId }
+            val coveredCount = activeSession.value?.compressedAtCount ?: 0
+            if (coveredIdx in 0 until coveredCount) {
+                storageManager.updateSessionCompression(sessionId, "", 0)
+            }
             withContext(Dispatchers.Main) {
                 messages.value = updatedMsgs
+                if (coveredIdx in 0 until coveredCount) {
+                    sessions.value = sessions.value.map { s ->
+                        if (s.id == sessionId) s.copy(compressedSummary = "", compressedAtCount = 0) else s
+                    }
+                }
             }
         }
     }
@@ -1423,16 +1434,45 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
 
+            // ===== 历史覆盖（Spec §7.3）：预算内连续后缀，被移出的消息必须已被摘要覆盖 =====
+            // 未提供模型容量配置时的保守回退：8192 − 输出预留(1024+256) − system/摘要/输入占用
+            val systemEstimate = estimateTokens(promptPartsFinal.stableSystemPrompt) +
+                estimateTokens(activeSession.value?.compressedSummary ?: "") +
+                estimateTokens(compiledPrompt?.postHistoryBlock?.text ?: "") +
+                estimateTokens(requestUserMessage?.content ?: "")
+            val historyBudget = (8192L - 1024L - 256L - systemEstimate).coerceAtLeast(256L)
+            var selectedHistory: List<Message> =
+                LlmConversationBuilder.selectWithinBudget(requestHistory, historyBudget)
+            val excludedCount = requestHistory.size - selectedHistory.size
+            val coveredCount = activeSession.value?.compressedAtCount ?: 0
+            if (excludedCount > coveredCount && sessionId.isNotBlank()) {
+                // 将被移出的消息尚未被摘要覆盖：先同步完成摘要（成功才允许移出）
+                val compressed = compressSessionPrefixNow(sessionId, excludedCount)
+                if (!compressed) {
+                    // 摘要失败：coverage 不推进、不静默丢历史——改为只排除已覆盖前缀并提示可重试
+                    val keepFrom = minOf(coveredCount, requestHistory.size - 1)
+                    selectedHistory = requestHistory.subList(keepFrom, requestHistory.size)
+                    withContext(Dispatchers.Main) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "上下文整理失败，本轮发送包含更多历史；可重试以重新整理",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            }
+
             // 构建初始会话上下文（按目标模型能力决定图片/音频是否进入 payload）
             var conversation = buildLlmConversation(
-                promptPartsFinal.stableSystemPrompt, requestHistory,
+                promptPartsFinal.stableSystemPrompt, selectedHistory,
                 includeVision = includeVision,
                 includeAudio = includeAudioInput,
                 compressedSummary = activeSession.value?.compressedSummary ?: "",
                 includeMessageTimestamps = sessionUsesSystemTime,
                 allowPhysicalContext = sessionUsesSystemTime,
                 allowGraphContext = enableGraphMemory.value,
-                postHistoryInstructions = compiledPrompt?.postHistoryBlock?.text ?: ""
+                postHistoryInstructions = compiledPrompt?.postHistoryBlock?.text ?: "",
+                historyBudgetTokens = historyBudget
             )
             var round = 0
             val maxRounds = 5
@@ -2021,7 +2061,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         includeMessageTimestamps: Boolean = false,
         allowPhysicalContext: Boolean = true,
         allowGraphContext: Boolean = true,
-        postHistoryInstructions: String = ""
+        postHistoryInstructions: String = "",
+        historyBudgetTokens: Long = 0L
     ): List<LlmChatMessage> = LlmConversationBuilder.build(
         systemPrompt = systemPrompt,
         history = history,
@@ -2031,7 +2072,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         includeMessageTimestamps = includeMessageTimestamps,
         allowPhysicalContext = allowPhysicalContext,
         allowGraphContext = allowGraphContext,
-        postHistoryInstructions = postHistoryInstructions
+        postHistoryInstructions = postHistoryInstructions,
+        historyBudgetTokens = historyBudgetTokens
     )
 
     private fun updateAiMessage(
@@ -2564,6 +2606,77 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * 同步压缩会话前缀到 bound（Spec §7.3 / 验收 M01-M03）：
+     * 把 [0, bound) 范围内未覆盖的消息增量摘要；成功返回 true 并推进 coverage，
+     * 失败返回 false（coverage 不推进、原始消息保留、可重试）。
+     * 防重入：与后台压缩共用 isCompressing。
+     */
+    private suspend fun compressSessionPrefixNow(sessionId: String, bound: Int): Boolean {
+        if (sessionId.isBlank() || bound <= 0) return false
+        if (isCompressing) return false
+        isCompressing = true
+        try {
+            val fullMessages = storageManager.loadSessionMessages(sessionId)
+            val compressStart = activeSession.value?.compressedAtCount ?: 0
+            if (bound <= compressStart) return true
+            if (bound > fullMessages.size) return false
+
+            val existingSummary = activeSession.value?.compressedSummary ?: ""
+            val segment = fullMessages.subList(compressStart, bound)
+            val segmentText = segment.joinToString("\n") {
+                "${if (it.sender == Sender.USER) "用户" else "AI"}: ${it.content.take(500)}"
+            }
+
+            val memoryApiId = prefs.getString("memory_api_config_id", "") ?: ""
+            val targetConfig = if (memoryApiId.isBlank()) {
+                activeApiConfig.value
+            } else {
+                apiConfigList.value.find { it.id == memoryApiId } ?: activeApiConfig.value
+            }
+
+            val summaryInput = BackgroundPromptTemplates.compressionInput(existingSummary, segmentText)
+            val response = llmClient.sendChatCompletion(
+                config = targetConfig,
+                systemPrompt = BackgroundPromptTemplates.CONVERSATION_COMPRESSION_SYSTEM,
+                history = listOf(
+                    Message(
+                        id = "conversation-compression-input",
+                        content = summaryInput,
+                        sender = Sender.USER
+                    )
+                )
+            )
+            persistSessionTokens(
+                sessionId,
+                promptTokens = response.promptTokens ?:
+                    estimateTokens(BackgroundPromptTemplates.CONVERSATION_COMPRESSION_SYSTEM) + estimateTokens(summaryInput),
+                completionTokens = response.completionTokens ?: estimateTokens(response.content),
+                lastContext = null
+            )
+            if (!response.isError && response.content.isNotBlank()) {
+                val newSummary = response.content.trim()
+                storageManager.updateSessionCompression(sessionId, newSummary, bound)
+                withContext(Dispatchers.Main) {
+                    sessions.value = sessions.value.map { s ->
+                        if (s.id == sessionId) {
+                            s.copy(compressedSummary = newSummary, compressedAtCount = bound)
+                        } else {
+                            s
+                        }
+                    }
+                }
+                return true
+            }
+            return false
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return false
+        } finally {
+            isCompressing = false
+        }
+    }
+
     fun triggerManualMemorySummary(sessionId: String): Boolean =
         enqueueMemoryConsolidation(sessionId)
 
@@ -2790,6 +2903,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             storageManager.updateSessionMessages(sessionId) {
                 truncatedMsgs
+            }
+
+            // Spec 7.3 / M03：被摘要覆盖的消息被编辑（且后续被截断）时，
+            // 相应范围摘要失效——清空 coverage，随后从保留的原始消息重建
+            if ((activeSession.value?.compressedAtCount ?: 0) > index) {
+                storageManager.updateSessionCompression(sessionId, "", 0)
+                withContext(Dispatchers.Main) {
+                    sessions.value = sessions.value.map { s ->
+                        if (s.id == sessionId) s.copy(compressedSummary = "", compressedAtCount = 0) else s
+                    }
+                }
             }
 
             withContext(Dispatchers.Main) {
@@ -3033,7 +3157,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun cleanTextForTts(rawText: String, isMiMo: Boolean = false): String {
         if (rawText.isBlank()) return ""
-        var text = rawText
+        // Spec 7.2：TTS 只朗读叙事/对白正文——先剔除 HTML 状态面板与标签，再走既有清洗链
+        var text = HtmlDisplaySplitter.narrativeText(rawText)
+        if (text.isBlank()) return ""
         // 1. 剔除 <think> 和 </think> 标签及其内部的思考内容
         text = text.replace(Regex("<think>[\\s\\S]*?</think>"), "")
         // 2. 剔除 XML 标签本身，如 <tool_call ...>...</tool_call>
