@@ -50,6 +50,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val context = application.applicationContext
     private val prefs = context.getSharedPreferences("loyea_prefs", Context.MODE_PRIVATE)
     private val storageManager = ChatStorageManager(context)
+
+    /** WorldInfo 2.0 统一书库门面（书库页 / 生效书面板直接使用，Spec §7）。 */
+    val worldInfoLibrary: com.loyea.storage.worldinfo.WorldInfoLibrary
+        get() = storageManager.worldInfoLibrary
     private val llmClient = LlmClient()
     private val sessionDrafts = mutableMapOf<String, String>()
 
@@ -723,6 +727,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 storageManager.saveCharacterDocument(doc)
+                // WorldInfo 2.0：带内嵌书的新卡自动注册进书库（幂等；resolve 时也会兜底补建）
+                if (doc.embeddedBookJson != null) {
+                    runCatching { storageManager.worldInfoLibrary.ensureCardBookRegistered(doc.profile.id) }
+                }
                 val cards = storageManager.loadCharacterCards()
                 // 同步刷新内嵌世界书视图（新导入/更新立即可见，无需重启）
                 val bookViews = characterBookViews.value.toMutableMap()

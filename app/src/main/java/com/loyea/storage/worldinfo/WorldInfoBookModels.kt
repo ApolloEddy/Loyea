@@ -70,3 +70,17 @@ data class WorldInfoMigrationOutcome(
     val booksCreated: Int,
     val notes: List<String>
 )
+
+/**
+ * 书库行摘要（Spec §6.2 列表行数据）：条目计数、卡书来源状态、会话绑定冲突。
+ */
+data class WorldInfoBookSummary(
+    val book: WorldInfoBookDocument,
+    val totalEntries: Int,
+    val constantEntries: Int,
+    val disabledEntries: Int,
+    /** card 书：来源卡已删除或内嵌书不可解析（灰显「来源已删除」）。 */
+    val sourceDeleted: Boolean = false,
+    /** 与其他书重复绑定同一会话的会话 ID（非空 = 冲突徽章，Spec §4.1 tie-break）。 */
+    val conflictingSessions: List<String> = emptyList()
+)

@@ -251,7 +251,7 @@ fun SettingsScreen(
                     )
                 }
                 SettingsSubPage.WORLD_INFO_SETTINGS -> {
-                    WorldInfoSettingsLayout(
+                    WorldInfoLibraryScreen(
                         viewModel = viewModel,
                         appLanguage = appLanguage,
                         onBackClick = { subPage = SettingsSubPage.MAIN }
@@ -563,7 +563,7 @@ fun SettingsMainLayout(
 
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
 
-                // 全局世界观（World Info）二级页面入口：与人格设计/记忆管理平级
+                // 世界书（WorldInfo 2.0 统一书库）二级页面入口
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -585,12 +585,12 @@ fun SettingsMainLayout(
                         Spacer(modifier = Modifier.width(12.dp))
                         Column {
                             Text(
-                                text = if (isEn) "World Info (Global Lore)" else "World Info 世界观记忆",
+                                text = if (isEn) "World Books" else "世界书",
                                 fontSize = 15.sp,
                                 color = MaterialTheme.colorScheme.onBackground
                             )
                             Text(
-                                text = if (isEn) "Keyword-triggered global lore, cross-session" else "关键词触发的全局世界观设定，跨会话生效（兼容 SillyTavern）",
+                                text = if (isEn) "Unified library: created / imported / character-card books" else "统一管理所有世界书（自建 / 导入 / 角色卡）",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
                             )

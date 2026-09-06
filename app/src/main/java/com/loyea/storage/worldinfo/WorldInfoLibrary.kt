@@ -145,6 +145,9 @@ class WorldInfoLibrary(private val storageRoot: File) {
         defaultConfig: WorldInfoConfig
     ): ActiveBookResolution = mutex.withLock {
         val defaultCore = WorldInfoBridge.toCoreConfig(defaultConfig)
+        // 卡书自动注册（Spec §6.2/M13）：卡存在且有内嵌书但书库无对应行时自动补建
+        // （用户删除卡书 = 清除 override 与绑定，卡再次对话时重新入库）
+        if (characterId != null) ensureCardBookRegisteredInternal(characterId)
         // 来源卡已删除/书损坏的 card 书不可解析：过滤后继续下层（Spec §3.2.3 降级语义）
         val books = loadAllBooksInternal().filter { book ->
             book.origin != WorldInfoBookOrigin.CARD || cardBookResolvable(book)
@@ -165,7 +168,10 @@ class WorldInfoLibrary(private val storageRoot: File) {
                 source = source,
                 book = book,
                 entries = adapted.entries.filter { it.uid !in book.disabledUids },
-                config = adapted.config.copy(recursionDepthCap = defaultCore.recursionDepthCap)
+                // Spec §4.3：用户在书上的 config 覆盖 > 卡自带配置；未覆盖时沿用 0.7.1 语义
+                // （卡配置生效、recursionDepthCap 跟随用户全局默认）
+                config = book.config?.let { WorldInfoBridge.toCoreConfig(it) }
+                    ?: adapted.config.copy(recursionDepthCap = defaultCore.recursionDepthCap)
             )
         }
         ActiveBookResolution(
@@ -254,6 +260,136 @@ class WorldInfoLibrary(private val storageRoot: File) {
                 updatedAt = System.currentTimeMillis()
             )
         )
+    }
+
+    // ---------- 书库查询与卡书注册（W3 书库 UI 支撑） ----------
+
+    /** 全部书的摘要（列表页一次取齐：计数 + 来源状态 + 冲突检测）。 */
+    suspend fun bookSummaries(): List<WorldInfoBookSummary> = mutex.withLock {
+        val books = loadAllBooksInternal()
+        val sessionBindCounts = books.flatMap { it.sessionIds }.groupingBy { it }.eachCount()
+        books.map { book ->
+            summarize(book, sessionBindCounts)
+        }
+    }
+
+    /** 单本书摘要（聊天页生效书面板用）。 */
+    suspend fun bookOverview(bookId: String): WorldInfoBookSummary? = mutex.withLock {
+        val book = loadBookInternal(bookId) ?: return@withLock null
+        summarize(book, emptyMap())
+    }
+
+    /**
+     * card 书实时条目（app 格式，enabled 已合并「卡内开关 && 用户 override」；
+     * disable = 卡内原生禁用）。供详情页展示与 ST 导出（E12：被禁条目以 disable 表达）。
+     * 返回 null = 书不存在 / 不是卡书 / 来源卡已删除。
+     */
+    suspend fun loadCardBookEntries(bookId: String): List<WorldInfoEntry>? = mutex.withLock {
+        val book = loadBookInternal(bookId)?.takeIf { it.origin == WorldInfoBookOrigin.CARD }
+            ?: return@withLock null
+        val doc = book.originCharacterId?.let { characterStore.load(it) } ?: return@withLock null
+        val parsed = doc.embeddedBookJson?.let { CharacterCardCodec.parseCharacterBook(it) }
+            ?: return@withLock null
+        CardBookAdapter.toWorldInfoBook(parsed, "view:${book.id}").entries.map { e ->
+            val userEnabled = e.uid !in book.disabledUids
+            WorldInfoEntry(
+                id = "uid_${e.uid}",
+                keywords = e.keywords,
+                content = e.content,
+                enabled = e.enabled && userEnabled,
+                uid = e.uid,
+                keysecondary = e.keysecondary,
+                constant = e.constant,
+                order = e.order,
+                depth = e.depth,
+                comment = e.comment,
+                selective = e.selective,
+                disable = !e.enabled,
+                selectiveLogic = e.selectiveLogic,
+                group = e.group,
+                probability = e.probability,
+                useProbability = e.useProbability,
+                delayUntilRecursion = e.delayUntilRecursion,
+                preventRecursion = e.preventRecursion,
+                allowRecursion = e.allowRecursion,
+                excludeRecursion = e.excludeRecursion,
+                keysContainedIn = e.keysContainedIn,
+                position = e.position,
+                weight = e.weight
+            )
+        }
+    }
+
+    /** 设置书的会话绑定（全量替换）；scope 展示元数据同步调整。 */
+    suspend fun setBookSessionBindings(bookId: String, sessionIds: List<String>): WorldInfoBookDocument? =
+        mutex.withLock {
+            val book = loadBookInternal(bookId) ?: return@withLock null
+            val updated = book.copy(
+                sessionIds = sessionIds.distinct(),
+                scope = if (book.isGlobalActive) WorldInfoBookScope.GLOBAL
+                else if (sessionIds.isNotEmpty()) WorldInfoBookScope.SESSION
+                else WorldInfoBookScope.GLOBAL,
+                updatedAt = System.currentTimeMillis()
+            )
+            saveBookInternal(updated)
+            updated
+        }
+
+    /** 确保角色卡书已注册（幂等，导入新卡后调用；返回是否新建行）。 */
+    suspend fun ensureCardBookRegistered(characterId: String): Boolean = mutex.withLock {
+        ensureCardBookRegisteredInternal(characterId)
+    }
+
+    private fun ensureCardBookRegisteredInternal(characterId: String): Boolean {
+        val doc = characterStore.load(characterId) ?: return false
+        if (doc.embeddedBookJson.isNullOrBlank()) return false
+        val exists = loadAllBooksInternal().any {
+            it.origin == WorldInfoBookOrigin.CARD && it.originCharacterId == characterId
+        }
+        if (exists) return false
+        val now = System.currentTimeMillis()
+        saveBookInternal(
+            WorldInfoBookDocument(
+                id = newBookId(),
+                name = "角色卡 · ${doc.profile.name}",
+                createdAt = now,
+                updatedAt = now,
+                origin = WorldInfoBookOrigin.CARD,
+                originCharacterId = characterId,
+                scope = WorldInfoBookScope.GLOBAL
+            )
+        )
+        return true
+    }
+
+    /** 单书摘要计算（须在锁内调用）。 */
+    private fun summarize(
+        book: WorldInfoBookDocument,
+        sessionBindCounts: Map<String, Int>
+    ): WorldInfoBookSummary {
+        val conflicts = book.sessionIds.filter { (sessionBindCounts[it] ?: 0) > 1 }
+        return if (book.origin == WorldInfoBookOrigin.CARD) {
+            val entries = book.originCharacterId
+                ?.let { characterStore.load(it) }?.embeddedBookJson
+                ?.let { json -> CharacterCardCodec.parseCharacterBook(json) }
+                ?.let { parsed -> CardBookAdapter.toWorldInfoBook(parsed, "summary:${book.id}").entries }
+            WorldInfoBookSummary(
+                book = book,
+                totalEntries = entries?.size ?: 0,
+                constantEntries = entries?.count { it.constant } ?: 0,
+                disabledEntries = book.disabledUids.size,
+                sourceDeleted = entries == null,
+                conflictingSessions = conflicts
+            )
+        } else {
+            WorldInfoBookSummary(
+                book = book,
+                totalEntries = book.entries.size,
+                constantEntries = book.entries.count { it.constant },
+                disabledEntries = book.entries.count { !it.enabled },
+                conflictingSessions = conflicts
+            )
+        }
     }
 
     // ---------- 一次性迁移（Spec §5） ----------

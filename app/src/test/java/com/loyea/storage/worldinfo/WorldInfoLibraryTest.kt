@@ -365,6 +365,132 @@ class WorldInfoLibraryTest {
         assertEquals("wb_1", WorldInfoLibrary(root).loadBook("wb_1")!!.id)
     }
 
+    // ---------- W3：书库查询 / 卡书注册 / 绑定 / 实时条目 ----------
+
+    @Test
+    fun `deleted card book re-registers on next resolve with overrides cleared`() = runBlocking {
+        val root = makeRoot()
+        seedLegacyData(root)
+        val library = WorldInfoLibrary(root)
+        library.migrateIfNeeded()
+        val cardBook = library.loadAllBooks().first { it.origin == WorldInfoBookOrigin.CARD }
+
+        // 用户关掉一条
+        library.setCardEntryOverride(cardBook.id, uid = 1, enabled = false)
+        assertEquals(1, library.loadBook(cardBook.id)!!.disabledUids.size)
+
+        // 删除卡书（= 清除 override 与绑定）
+        library.deleteBook(cardBook.id)
+        assertTrue(library.loadAllBooks().none { it.id == cardBook.id })
+
+        // 下次解析自动重新入库（Spec §6.2 删除语义）
+        val resolution = library.resolveActiveBook("s9", "char_lin", defaultConfig())
+        assertEquals(ActiveBookSource.CARD_FOLLOW, resolution.source)
+        assertEquals(2, resolution.entries.size) // override 已清除，2 条全回
+        val reRegistered = library.loadAllBooks().first { it.origin == WorldInfoBookOrigin.CARD }
+        assertTrue(reRegistered.disabledUids.isEmpty())
+    }
+
+    @Test
+    fun `setBookSessionBindings replaces bindings and updates scope metadata`() = runBlocking {
+        val root = makeRoot()
+        seedLegacyData(root)
+        val library = WorldInfoLibrary(root)
+        library.migrateIfNeeded()
+        val globalBook = library.loadAllBooks().first { it.isGlobalActive }
+
+        val updated = library.setBookSessionBindings(globalBook.id, listOf("s1", "s2"))!!
+        assertEquals(listOf("s1", "s2"), updated.sessionIds)
+        assertEquals(WorldInfoBookScope.GLOBAL, updated.scope) // 全局书保持 GLOBAL 展示
+        assertTrue(updated.isGlobalActive) // 全局标记不受绑定影响
+
+        // 全量替换
+        val updated2 = library.setBookSessionBindings(globalBook.id, listOf("s2"))!!
+        assertEquals(listOf("s2"), updated2.sessionIds)
+
+        // 清空绑定回到无绑定态
+        val updated3 = library.setBookSessionBindings(globalBook.id, emptyList())!!
+        assertTrue(updated3.sessionIds.isEmpty())
+    }
+
+    @Test
+    fun `loadCardBookEntries merges card-level disable and user override`() = runBlocking {
+        val root = makeRoot()
+        seedLegacyData(root)
+        val library = WorldInfoLibrary(root)
+        library.migrateIfNeeded()
+        val cardBook = library.loadAllBooks().first { it.origin == WorldInfoBookOrigin.CARD }
+
+        val entries = library.loadCardBookEntries(cardBook.id)!!
+        assertEquals(2, entries.size)
+        assertTrue(entries.all { it.enabled }) // 卡内全启用、无 override
+
+        // 用户关 uid=1 → merged enabled=false，id 稳定 uid_<n>
+        library.setCardEntryOverride(cardBook.id, uid = 1, enabled = false)
+        val merged = library.loadCardBookEntries(cardBook.id)!!
+        assertEquals(false, merged.first { it.uid == 1 }.enabled)
+        assertTrue(merged.first { it.uid == 2 }.enabled)
+
+        // 来源卡删除 → null
+        CharacterDocumentStore(File(root, "characters")).delete("char_lin")
+        assertNull(library.loadCardBookEntries(cardBook.id))
+    }
+
+    @Test
+    fun `bookSummaries counts entries, conflicts and source deletion`() = runBlocking {
+        val root = makeRoot()
+        seedLegacyData(root)
+        val library = WorldInfoLibrary(root)
+        library.migrateIfNeeded()
+
+        // 会话书 s1（1 条，enabled）+ 另一本书也绑 s1 → 冲突
+        library.createOwnedBook(
+            name = "另一本", entries = emptyList(), sessionIds = listOf("s1")
+        )
+        val summaries = library.bookSummaries()
+
+        assertEquals(4, summaries.size) // 全局 + 会话 + 卡 + 新建
+        val global = summaries.first { it.book.isGlobalActive }
+        assertEquals(2, global.totalEntries)
+        assertEquals(1, global.constantEntries) // g1 constant=true
+        assertEquals(0, global.disabledEntries)
+
+        val card = summaries.first { it.book.origin == WorldInfoBookOrigin.CARD }
+        assertEquals(2, card.totalEntries)
+        assertEquals(1, card.constantEntries) // 卡内 uid=1 constant
+        assertFalse(card.sourceDeleted)
+
+        // 两本绑 s1 的书互为冲突
+        val sessionBound = summaries.filter { "s1" in it.book.sessionIds }
+        assertEquals(2, sessionBound.size)
+        assertTrue(sessionBound.all { "s1" in it.conflictingSessions })
+
+        // 来源卡删除 → sourceDeleted
+        CharacterDocumentStore(File(root, "characters")).delete("char_lin")
+        val refreshed = library.bookSummaries()
+        assertTrue(refreshed.first { it.book.origin == WorldInfoBookOrigin.CARD }.sourceDeleted)
+    }
+
+    @Test
+    fun `card book config override takes precedence over card-embedded config`() = runBlocking {
+        val root = makeRoot()
+        seedLegacyData(root)
+        val library = WorldInfoLibrary(root)
+        library.migrateIfNeeded()
+        val cardBook = library.loadAllBooks().first { it.origin == WorldInfoBookOrigin.CARD }
+
+        // 无覆盖：卡内 scan_depth=7 生效
+        val base = library.resolveActiveBook("s9", "char_lin", defaultConfig())
+        assertEquals(7, base.config.scanDepth)
+
+        // 书级覆盖 scanDepth=2 → 整本覆盖生效（Spec §4.3）
+        library.saveBook(
+            cardBook.copy(config = WorldInfoConfig(scanDepth = 2), updatedAt = System.currentTimeMillis())
+        )
+        val overridden = library.resolveActiveBook("s9", "char_lin", defaultConfig())
+        assertEquals(2, overridden.config.scanDepth)
+    }
+
     private fun book(
         id: String,
         createdAt: Long,
