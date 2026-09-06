@@ -758,15 +758,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         val formattedWelcome = PromptAssembler.formatMessageContent(welcomeText, selectedChar, userName.value)
 
-        val initialMsgs = listOf(
-            Message(
-                id = System.currentTimeMillis().toString(),
-                content = formattedWelcome,
-                sender = Sender.AI,
-                characterId = selectedChar.id
-            )
-        )
         viewModelScope.launch(Dispatchers.IO) {
+            // 备用开场白（Spec §1.2）：默认开场白为首条内容，备用开场白进多版本翻页器，
+            // 沿用既有 swipe 交互切换，不新增主界面控件
+            val doc = storageManager.loadCharacterDocument(selectedChar.id)
+            val greetings = doc?.let {
+                com.loyea.character.core.prompt.CharacterCompiler.greetings(it.profile, userName.value)
+            }?.takeIf { it.isNotEmpty() } ?: listOf(formattedWelcome)
+            val initialMsgs = listOf(
+                Message(
+                    id = System.currentTimeMillis().toString(),
+                    content = greetings.first(),
+                    sender = Sender.AI,
+                    characterId = selectedChar.id,
+                    versions = greetings.drop(1).map { alt -> MessageVersion(content = alt) }
+                )
+            )
             storageManager.saveSessionList(updatedSessions)
             storageManager.saveSessionMessages(newSessionId, initialMsgs)
             withContext(Dispatchers.Main) {
@@ -1306,13 +1313,72 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             // bottom 世界书固化进回合快照；显式 top 模式保留原有前置语义，因此每次仍需重建。
             val worldInfoPosition = if (worldInfoConfig.value.position == "top") "top" else "bottom"
-            val worldInfo = if (needsTurnSnapshot || worldInfoPosition == "top") {
+            // 导入卡路径（Spec §5.1）：世界书由 CharacterCompiler 按位置注入 system，
+            // 不再固化进回合快照——正确位置优先于缓存命中率（Spec §5.3）
+            val characterDocument = storageManager.loadCharacterDocument(characterCard.id)
+            val useCompiledPath = characterDocument != null && (
+                characterDocument.embeddedBookJson != null ||
+                    characterDocument.profile.origin == com.loyea.character.core.api.CharacterOrigin.IMPORTED
+                )
+            var compiledPrompt: com.loyea.character.core.prompt.CharacterCompiler.PreparedCharacterTurn? = null
+            val worldInfo = if (useCompiledPath) {
+                null
+            } else if (needsTurnSnapshot || worldInfoPosition == "top") {
                 buildWorldInfoBlock(history)
             } else {
                 null
             }
 
-            val promptParts = PromptAssembler.assemblePromptParts(
+            // ===== 导入卡编译路径（Spec §5.1 固定顺序合同） =====
+            // 原生人格走 0.5.5 稳定前缀路径；导入卡（或带内嵌世界书的文档）经 CharacterCompiler：
+            // 世界书按 before_char/after_char 位置注入 system，正确位置优先于缓存命中率（Spec §5.3）。
+            val promptParts = if (useCompiledPath) {
+                val compiled = buildCompiledTurn(
+                    document = characterDocument!!,
+                    card = characterCard,
+                    history = history,
+                    sessionUsesSystemTime = sessionUsesSystemTime,
+                    physicalPerceptionEnabled = sessionUsesSystemTime,
+                    enableSearch = apiConfig.enableSearch,
+                    enableHaptic = toolAuthHaptic.value,
+                    enableVoice = hasTtsCapability(),
+                    enableAdultContent = enableAdultContent.value,
+                    graphMemory = graphMemory,
+                    snapshotTime = snapshotTime
+                )
+                // Spec §6.2.6：常驻条目放不进预算 → 可恢复错误，暂停发送，不静默丢核心规则
+                if (compiled.constantOverflow) {
+                    withContext(Dispatchers.Main) {
+                        isThinking.value = false
+                        android.widget.Toast.makeText(
+                            context,
+                            "世界书常驻内容超出预算：请在世界书设置中增大 Token 预算或缩减条目后重试",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    }
+                    return@launch
+                }
+                if (compiled.unsupportedPositions.isNotEmpty()) {
+                    android.util.Log.w("CharacterCompiler",
+                        "unsupported world info positions: ${compiled.unsupportedPositions}")
+                }
+                compiledPrompt = compiled
+                PromptAssembler.PromptParts(
+                    stableSystemPrompt = compiled.systemText(),
+                    turnContextSnapshot = if (needsTurnSnapshot || sessionUsesSystemTime) {
+                        PromptAssembler.assembleTurnSnapshotOnly(
+                            physicalContext = physicalContextData,
+                            useSystemTime = sessionUsesSystemTime,
+                            includeSystemTimeInSnapshot = false,
+                            snapshotTimeMillis = snapshotTime
+                        )
+                    } else ""
+                )
+            } else {
+                null
+            }
+
+            val effectivePromptParts = promptParts ?: PromptAssembler.assemblePromptParts(
                 card = characterCard,
                 userName = userName.value,
                 useSystemTime = sessionUsesSystemTime,
@@ -1329,8 +1395,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 trustedCard = characterCard.isBuiltIn,
                 snapshotTimeMillis = snapshotTime
             )
+            val promptPartsFinal = effectivePromptParts
 
-            val turnSnapshot = existingTurnSnapshot ?: promptParts.turnContextSnapshot
+            val turnSnapshot = existingTurnSnapshot ?: promptPartsFinal.turnContextSnapshot
             var requestHistory = history
             if (requestUserMessage != null && existingTurnSnapshot == null && turnSnapshot.isNotBlank()) {
                 requestHistory = history.map { message ->
@@ -1358,13 +1425,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             // 构建初始会话上下文（按目标模型能力决定图片/音频是否进入 payload）
             var conversation = buildLlmConversation(
-                promptParts.stableSystemPrompt, requestHistory,
+                promptPartsFinal.stableSystemPrompt, requestHistory,
                 includeVision = includeVision,
                 includeAudio = includeAudioInput,
                 compressedSummary = activeSession.value?.compressedSummary ?: "",
                 includeMessageTimestamps = sessionUsesSystemTime,
                 allowPhysicalContext = sessionUsesSystemTime,
-                allowGraphContext = enableGraphMemory.value
+                allowGraphContext = enableGraphMemory.value,
+                postHistoryInstructions = compiledPrompt?.postHistoryBlock?.text ?: ""
             )
             var round = 0
             val maxRounds = 5
@@ -1952,7 +2020,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         compressedSummary: String = "",
         includeMessageTimestamps: Boolean = false,
         allowPhysicalContext: Boolean = true,
-        allowGraphContext: Boolean = true
+        allowGraphContext: Boolean = true,
+        postHistoryInstructions: String = ""
     ): List<LlmChatMessage> = LlmConversationBuilder.build(
         systemPrompt = systemPrompt,
         history = history,
@@ -1961,7 +2030,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         compressedSummary = compressedSummary,
         includeMessageTimestamps = includeMessageTimestamps,
         allowPhysicalContext = allowPhysicalContext,
-        allowGraphContext = allowGraphContext
+        allowGraphContext = allowGraphContext,
+        postHistoryInstructions = postHistoryInstructions
     )
 
     private fun updateAiMessage(
@@ -2315,13 +2385,104 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val seedKey = (activeSession.value?.id ?: "") + "|" +
             history.lastOrNull { it.sender == Sender.USER }?.content.orEmpty()
         val book = resolveWorldInfoBook()
-        return WorldInfoMatcher.worldInfoBlockFor(
+        return WorldInfoBridge.blockFor(
             entries = book.entries,
             historyContents = history.map { it.content },
             userName = userName.value,
             systemPrompt = activeCharacterCard.value?.systemPrompt.orEmpty(),
             config = book.config,
             random = kotlin.random.Random(seedKey.hashCode().toLong())
+        )
+    }
+
+    /**
+     * 导入卡编译路径（Spec §5.1）：角色书 + 全局/会话书组合匹配后，
+     * 由 CharacterCompiler 按固定顺序产出结构化提示词。
+     * 配置优先级（Spec §6.1）：卡/书显式设置 > Loyea 默认；递归轮次上限沿用用户设置。
+     */
+    private fun buildCompiledTurn(
+        document: com.loyea.character.core.api.CharacterDocument,
+        card: CharacterCard,
+        history: List<Message>,
+        sessionUsesSystemTime: Boolean,
+        physicalPerceptionEnabled: Boolean,
+        enableSearch: Boolean,
+        enableHaptic: Boolean,
+        enableVoice: Boolean,
+        enableAdultContent: Boolean,
+        graphMemory: String?,
+        snapshotTime: Long
+    ): com.loyea.character.core.prompt.CharacterCompiler.PreparedCharacterTurn {
+        val profile = document.profile
+        val seedKey = (activeSession.value?.id ?: "") + "|" +
+            history.lastOrNull { it.sender == Sender.USER }?.content.orEmpty()
+
+        // —— 条目组合：角色书（before_char/after_char）+ 旧版书（legacy 桶）——
+        val entries = ArrayList<com.loyea.character.core.worldinfo.WorldInfoEntry>()
+        var bookConfig: com.loyea.character.core.worldinfo.WorldInfoConfig? = null
+        document.embeddedBookJson?.let { bookJson ->
+            com.loyea.character.core.codec.CharacterCardCodec.parseCharacterBook(bookJson)?.let { parsed ->
+                val adapted = com.loyea.character.core.codec.CardBookAdapter.toWorldInfoBook(
+                    parsed, "charbook:${profile.id}"
+                )
+                entries += adapted.entries
+                bookConfig = adapted.config
+            }
+        }
+        val legacyBook = resolveWorldInfoBook()
+        entries += WorldInfoBridge.toCoreEntries(legacyBook.entries)
+
+        val userCoreConfig = WorldInfoBridge.toCoreConfig(legacyBook.config)
+        val combinedConfig = bookConfig?.copy(recursionDepthCap = userCoreConfig.recursionDepthCap)
+            ?: userCoreConfig
+
+        val hostBlocks = PromptAssembler.buildHostProtocolBlocks(
+            userName = userName.value,
+            useSystemTime = sessionUsesSystemTime,
+            physicalPerceptionEnabled = physicalPerceptionEnabled,
+            enableSearch = enableSearch,
+            enableHaptic = enableHaptic,
+            enableVoice = enableVoice,
+            enableAdultContent = enableAdultContent,
+            trustedCard = card.isBuiltIn
+        ).mapIndexed { index, block ->
+            com.loyea.character.core.api.PromptBlock(
+                sourceId = "host.$index",
+                category = com.loyea.character.core.api.PromptBlockCategory.HOST,
+                text = block.text,
+                slot = com.loyea.character.core.api.PromptBlock.SLOT_HOST
+            )
+        }
+        val memoryBlocks = PromptAssembler.buildMemoryBlocks(
+            coreMemories = activeSession.value?.coreMemories ?: emptyList(),
+            graphMemory = graphMemory,
+            useSystemTime = sessionUsesSystemTime
+        ).mapIndexed { index, block ->
+            com.loyea.character.core.api.PromptBlock(
+                sourceId = "memory.$index",
+                category = com.loyea.character.core.api.PromptBlockCategory.MEMORY,
+                text = block.text,
+                slot = com.loyea.character.core.api.PromptBlock.SLOT_MEMORY
+            )
+        }
+
+        val turnInput = com.loyea.character.core.api.TurnInput(
+            requestId = java.util.UUID.randomUUID().toString(),
+            sessionId = activeSession.value?.id ?: "",
+            bindingRevision = activeSession.value?.bindingRevision ?: 1L,
+            characterRevision = profile.revision,
+            generationKind = "normal",
+            historyContents = history.map { it.content },
+            userName = userName.value,
+            worldInfoEntries = entries,
+            worldInfoConfig = combinedConfig,
+            randomSeed = seedKey.hashCode().toLong()
+        )
+        return com.loyea.character.core.prompt.CharacterCompiler.prepare(
+            profile = profile,
+            input = turnInput,
+            hostBlocks = hostBlocks,
+            memoryBlocks = memoryBlocks
         )
     }
 

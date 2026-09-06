@@ -19,7 +19,8 @@ object LlmConversationBuilder {
         includeMessageTimestamps: Boolean = false,
         allowPhysicalContext: Boolean = true,
         allowGraphContext: Boolean = true,
-        timeZone: TimeZone = TimeZone.getDefault()
+        timeZone: TimeZone = TimeZone.getDefault(),
+        postHistoryInstructions: String = ""
     ): List<LlmChatMessage> {
         val result = mutableListOf<LlmChatMessage>()
         if (!systemPrompt.isNullOrBlank()) {
@@ -88,6 +89,10 @@ object LlmConversationBuilder {
                     audioUrl = effectiveAudio
                 )
             )
+        }
+        // Spec 5.1.9：角色历史后指令必须位于历史之后，不得并入前部常驻字符串
+        if (postHistoryInstructions.isNotBlank()) {
+            result.add(LlmChatMessage(role = "system", content = postHistoryInstructions))
         }
         return result
     }
