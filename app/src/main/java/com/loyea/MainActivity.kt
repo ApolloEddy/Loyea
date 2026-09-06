@@ -311,7 +311,16 @@ class MainActivity : ComponentActivity() {
                                 characterCardList = characterCardList,
                                 onCharacterCardListSave = { chatViewModel.saveCharacterCardList(it) },
                                 appLanguage = appLanguage,
-                                onBackClick = { navController.popBackStack() }
+                                onBackClick = { navController.popBackStack() },
+                                onImportCardBytes = { bytes ->
+                                    chatViewModel.importCharacterCard(bytes) { outcome ->
+                                        Toast.makeText(
+                                            this@MainActivity,
+                                            outcome.message,
+                                            if (outcome.success) Toast.LENGTH_SHORT else Toast.LENGTH_LONG
+                                        ).show()
+                                    }
+                                }
                             )
                         }
                     }

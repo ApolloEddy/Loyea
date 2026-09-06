@@ -74,7 +74,8 @@ fun TavernScreen(
     characterCardList: List<CharacterCard>,
     onCharacterCardListSave: (List<CharacterCard>) -> Unit,
     appLanguage: String,
-    onBackClick: () -> Unit
+    onBackClick: () -> Unit,
+    onImportCardBytes: (ByteArray) -> Unit = {}
 ) {
     val context = LocalContext.current
     val contentResolver = context.contentResolver
@@ -91,23 +92,9 @@ fun TavernScreen(
         uri?.let {
             try {
                 contentResolver.openInputStream(uri)?.use { inputStream ->
+                    // 导入走 character-core 保真 codec（角色文档单一真源），由宿主回调处理
                     val bytes = inputStream.readBytes()
-                    val parsedCard = TavernCardParser.parsePngCard(ByteArrayInputStream(bytes))
-                    if (parsedCard != null) {
-                        // 自动拷贝图片至本地 avatars 目录
-                        val avatarsDir = File(context.filesDir, "avatars").apply {
-                            if (!exists()) mkdirs()
-                        }
-                        val targetFile = File(avatarsDir, "${parsedCard.id}.png")
-                        targetFile.writeBytes(bytes)
-
-                        // 注入带有绝对路径的卡片
-                        val finalCard = parsedCard.copy(avatarUri = targetFile.absolutePath)
-                        onCharacterCardListSave(characterCardList + finalCard)
-                        Toast.makeText(context, if (isEn) "Imported [${parsedCard.name}] successfully" else "成功导入角色卡 [${parsedCard.name}]", Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(context, if (isEn) "No valid character card metadata found in PNG" else "未能在此 PNG 中找到有效的人格卡设定，请确认其为标准角色卡", Toast.LENGTH_LONG).show()
-                    }
+                    onImportCardBytes(bytes)
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -123,14 +110,8 @@ fun TavernScreen(
         uri?.let {
             try {
                 contentResolver.openInputStream(uri)?.use { inputStream ->
-                    val jsonStr = inputStream.bufferedReader().use { it.readText() }
-                    val parsedCard = TavernCardParser.parseJsonCard(jsonStr)
-                    if (parsedCard != null) {
-                        onCharacterCardListSave(characterCardList + parsedCard)
-                        Toast.makeText(context, if (isEn) "Imported [${parsedCard.name}] successfully" else "成功导入角色卡 [${parsedCard.name}]", Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(context, if (isEn) "Invalid JSON character card format" else "角色卡 JSON 格式不规范，解析失败", Toast.LENGTH_LONG).show()
-                    }
+                    val bytes = inputStream.readBytes()
+                    onImportCardBytes(bytes)
                 }
             } catch (e: Exception) {
                 e.printStackTrace()

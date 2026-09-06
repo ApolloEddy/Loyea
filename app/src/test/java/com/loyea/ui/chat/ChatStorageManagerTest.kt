@@ -98,7 +98,9 @@ class ChatStorageManagerTest {
         )
 
         val legacyId = "legacy_without_snapshot"
-        val legacyFile = File(tempFolder.root, "files/sessions/session_$legacyId.json")
+        // 模拟迁移前遗留在旧 filesDir/sessions 的会话文件（父目录需先建好）
+        val legacyFile = File(tempFolder.root, "files/rebuild_storage_v1/sessions/session_$legacyId.json")
+        legacyFile.parentFile.mkdirs()
         legacyFile.writeText("""[{"id":"old","content":"legacy","sender":"USER","timestamp":1}]""")
         val legacyMessage = storageManager.loadSessionMessages(legacyId).single()
         assertNull(legacyMessage.llmContextSnapshot)

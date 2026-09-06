@@ -4,6 +4,8 @@ import android.content.Context
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.reflect.TypeToken
+import com.loyea.storage.CharacterDocumentStore
+import com.loyea.storage.RebuildStorageMigrator
 import java.io.File
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -17,13 +19,17 @@ data class ChatSession(
     val title: String,               // 会话标题
     val lastActiveTime: Long = System.currentTimeMillis(), // 最后活动时间，用于排序
     val characterId: String = "char_loyea_default", // 新增角色人格绑定
+    // —— 重启版新增：请求归属检查与 0.6.1 迁移保留字段（Spec §3.2/§9.1）——
+    val bindingRevision: Long = 1L,  // 同一会话内人格绑定变化时递增，阻断 A→B→A 写回
+    val sessionIncarnationId: String? = null, // 0.6.1 迁移保留；防止删除后复用 session id 的历史围栏
+    val legacyExtrasJson: String? = null,     // 0.6.1 会话中本轮不支持功能的只读遗留数据
     val useSystemTime: Boolean? = false, // 是否在此会话中使用真实系统时间
     val coreMemories: List<String> = emptyList(), // 会话核心记忆列表
     val isTitleSummarized: Boolean? = false, // 是否已由AI总结了标题
     val compressedSummary: String = "", // 长会话早期摘要（滑窗外的旧消息被压缩后保留故事脉络）
     val compressedAtCount: Int = 0, // 已参与压缩的消息条数（增量压缩断点）
     val promptTokens: Long = 0, // 本会话累计 prompt token（会话独立计量）
-    val completionTokens: Long = 0, // 本会话累计 completion token
+    val completionTokens: Long = 0, // 本会累计 completion token
     val lastContextTokens: Long = 0, // 最近一次主聊天流请求的上下文 token（仅主聊天流更新，用于上下文窗口展示）
     val promptCacheHitTokens: Long = 0, // 本会话累计 DeepSeek 前缀缓存命中 token
     val promptCacheMissTokens: Long = 0 // 本会话累计 DeepSeek 前缀缓存未命中 token
@@ -77,16 +83,31 @@ data class WorldInfoBook(
  */
 class ChatStorageManager(private val context: Context) {
     private val gson = Gson()
-    private val sessionsFile = File(context.filesDir, "sessions_metadata.json")
-    private val sessionsDir = File(context.filesDir, "sessions").apply {
-        if (!exists()) mkdirs()
-    }
+
+    // 重启版存储根：首次访问前完成一次性迁移（旧文件保持原样，幂等）。
+    // 路径一律惰性解析：迁移会以目录重命名原子切换根目录，迁移前缓存的
+    // File 句柄会指向被替换的旧目录（Spec §9.2 staging 语义）。
+    private val storageRoot get() = File(context.filesDir, RebuildStorageMigrator.ROOT_NAME)
+    private val sessionsFile get() = File(storageRoot, "sessions_metadata.json")
+    private val sessionsDir get() = File(storageRoot, "sessions").apply { if (!exists()) mkdirs() }
+    private val documentStore get() = CharacterDocumentStore(File(storageRoot, "characters"))
 
     companion object {
         private val sessionsMutex = Mutex()
         private val messagesMutex = Mutex()
         private val cardsMutex = Mutex()
         private val worldInfoMutex = Mutex()
+        private val migrationMutex = Mutex()
+    }
+
+    /** 所有读写前串行调用：确保迁移完成（幂等、进程内唯一）后才访问新存储根。 */
+    private suspend fun ensureMigrated() {
+        // manifest 已存在时只付一次 exists() 的代价；迁移本身由 migrator 幂等保证
+        if (File(storageRoot, "manifest.json").exists()) return
+        migrationMutex.withLock {
+            runCatching { RebuildStorageMigrator.ensureMigrated(context.filesDir) }
+                .onFailure { it.printStackTrace() }
+        }
     }
 
     private fun saveSessionListInternal(sessions: List<ChatSession>) {
@@ -110,6 +131,9 @@ class ChatStorageManager(private val context: Context) {
                     title = raw.title ?: "Unnamed Chat",
                     lastActiveTime = raw.lastActiveTime,
                     characterId = raw.characterId ?: "char_loyea_default",
+                    bindingRevision = if ((raw.bindingRevision ?: 0L) > 0L) raw.bindingRevision else 1L,
+                    sessionIncarnationId = raw.sessionIncarnationId,
+                    legacyExtrasJson = raw.legacyExtrasJson,
                     useSystemTime = raw.useSystemTime ?: false,
                     coreMemories = raw.coreMemories ?: emptyList(),
                     isTitleSummarized = raw.isTitleSummarized ?: false,
@@ -164,46 +188,55 @@ class ChatStorageManager(private val context: Context) {
         }
     }
 
-    private fun saveCharacterCardsInternal(cards: List<CharacterCard>) {
+    /**
+     * 卡片持久化已切换为 rebuild_storage_v1/characters/<id>.json（CharacterDocument 单一真源）。
+     * 旧 character_cards.json 只在迁移时读取一次；此后的投影改动按字段写回文档。
+     */
+    private suspend fun saveCharacterCardsInternal(cards: List<CharacterCard>) {
         try {
-            val json = gson.toJson(cards)
-            atomicWrite(cardsFile, json)
+            val existing = documentStore.loadAll().associateBy { it.profile.id }
+            // 空列表保护：不因"加载失败→空列表→自动保存"清空文档库（Spec §9.2）
+            if (cards.isEmpty() && existing.isNotEmpty()) {
+                return
+            }
+            val keepIds = cards.map { it.id }.toSet()
+            existing.values.forEach { doc ->
+                if (doc.profile.id !in keepIds) documentStore.delete(doc.profile.id)
+            }
+            cards.forEach { card ->
+                val doc = existing[card.id]
+                if (doc != null) {
+                    documentStore.save(CharacterDocumentStore.applyCardToDocument(doc, card))
+                } else {
+                    documentStore.save(CharacterDocumentStore.documentFromCard(card))
+                }
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 
-    private fun loadCharacterCardsInternal(): List<CharacterCard> {
+    private suspend fun loadCharacterCardsInternal(): List<CharacterCard> {
         return try {
-            if (!cardsFile.exists()) {
-                val defaults = TavernCardParser.getBuiltInCards()
-                saveCharacterCardsInternal(defaults)
-                return defaults
+            val documents = documentStore.loadAll().associateBy { it.profile.id }
+            val cards = ArrayList<CharacterCard>()
+            // 内置模板是首次默认值：有已保存文档用文档，没有才用模板（Spec §4.8）
+            TavernCardParser.getBuiltInCards().forEach { template ->
+                val doc = documents[template.id]
+                cards += if (doc != null) CharacterDocumentStore.projectCard(doc) else template
             }
-            val json = cardsFile.readText()
-            val type = object : TypeToken<List<CharacterCard>>() {}.type
-            val rawList = gson.fromJson<List<CharacterCard>>(json, type) ?: emptyList()
-            // 进行自愈式清洗
-            rawList.map { raw ->
-                CharacterCard(
-                    id = raw.id ?: System.currentTimeMillis().toString(),
-                    name = raw.name ?: "Unknown",
-                    avatarUri = raw.avatarUri,
-                    avatarColor = raw.avatarColor ?: "#E5D3B3",
-                    shortIntro = raw.shortIntro ?: "",
-                    systemPrompt = raw.systemPrompt ?: "",
-                    personality = raw.personality ?: "",
-                    scenario = raw.scenario ?: "",
-                    firstMessage = raw.firstMessage ?: "",
-                    chatExamples = raw.chatExamples ?: "",
-                    isBuiltIn = raw.isBuiltIn,
-                    creatorName = raw.creatorName,
-                    backgroundUri = raw.backgroundUri
-                )
+            documents.values
+                .filter { !it.profile.isBuiltIn }
+                .forEach { cards += CharacterDocumentStore.projectCard(it) }
+            if (documents.isEmpty()) {
+                // 全新安装：落盘内置模板文档，之后的编辑走文档
+                TavernCardParser.getBuiltInCards().forEach { template ->
+                    documentStore.save(CharacterDocumentStore.documentFromCard(template))
+                }
             }
+            cards
         } catch (e: Exception) {
             e.printStackTrace()
-            backupCorruptFile(cardsFile)
             emptyList()
         }
     }
@@ -237,6 +270,7 @@ class ChatStorageManager(private val context: Context) {
      * 保存所有会话元数据列表
      */
     suspend fun saveSessionList(sessions: List<ChatSession>) {
+        ensureMigrated()
         sessionsMutex.withLock {
             saveSessionListInternal(sessions)
         }
@@ -246,6 +280,7 @@ class ChatStorageManager(private val context: Context) {
      * 读取所有会话元数据列表 (进行自愈式数据清洗，防御 Gson 反序列化带来的内存 null 隐患)
      */
     suspend fun loadSessionList(): List<ChatSession> {
+        ensureMigrated()
         return sessionsMutex.withLock {
             loadSessionListInternal()
         }
@@ -255,6 +290,7 @@ class ChatStorageManager(private val context: Context) {
      * 保存某个会话的消息列表
      */
     suspend fun saveSessionMessages(sessionId: String, messages: List<Message>) {
+        ensureMigrated()
         messagesMutex.withLock {
             saveSessionMessagesInternal(sessionId, messages)
         }
@@ -264,6 +300,7 @@ class ChatStorageManager(private val context: Context) {
      * 读取某个会话的消息列表
      */
     suspend fun loadSessionMessages(sessionId: String): List<Message> {
+        ensureMigrated()
         return messagesMutex.withLock {
             loadSessionMessagesInternal(sessionId)
         }
@@ -273,6 +310,7 @@ class ChatStorageManager(private val context: Context) {
      * 删除某个会话及其对应的消息文件
      */
     suspend fun deleteSession(sessionId: String) {
+        ensureMigrated()
         sessionsMutex.withLock {
             messagesMutex.withLock {
                 try {
@@ -296,14 +334,13 @@ class ChatStorageManager(private val context: Context) {
         }
     }
 
-    private val cardsFile = File(context.filesDir, "character_cards.json")
-
-    private val worldInfoFile = File(context.filesDir, "global_world_info.json")
+    private val worldInfoFile get() = File(storageRoot, "global_world_info.json")
 
     /**
      * 保存全局世界观条目列表
      */
     suspend fun saveWorldInfo(entries: List<WorldInfoEntry>) {
+        ensureMigrated()
         worldInfoMutex.withLock {
             try {
                 atomicWrite(worldInfoFile, gson.toJson(entries))
@@ -352,6 +389,7 @@ class ChatStorageManager(private val context: Context) {
      * 读取全局世界观条目列表（不存在则返回空列表）
      */
     suspend fun loadWorldInfo(): List<WorldInfoEntry> {
+        ensureMigrated()
         return worldInfoMutex.withLock {
             if (!worldInfoFile.exists()) return@withLock emptyList()
             try {
@@ -371,6 +409,7 @@ class ChatStorageManager(private val context: Context) {
      * 原子化更新全局世界观条目列表
      */
     suspend fun updateWorldInfo(updateBlock: (List<WorldInfoEntry>) -> List<WorldInfoEntry>) {
+        ensureMigrated()
         worldInfoMutex.withLock {
             val current = if (worldInfoFile.exists()) {
                 try {
@@ -403,6 +442,7 @@ class ChatStorageManager(private val context: Context) {
      * 读取某会话专属世界书；文件不存在返回 null（调用方回退全局书）。
      */
     suspend fun loadSessionWorldInfo(sessionId: String): WorldInfoBook? {
+        ensureMigrated()
         return worldInfoMutex.withLock {
             val file = sessionWorldInfoFile(sessionId)
             if (!file.exists()) return@withLock null
@@ -432,6 +472,7 @@ class ChatStorageManager(private val context: Context) {
      * 保存某会话专属世界书（写入即建立"自定义书"，匹配时完全替代全局书）。
      */
     suspend fun saveSessionWorldInfo(sessionId: String, book: WorldInfoBook) {
+        ensureMigrated()
         worldInfoMutex.withLock {
             try {
                 val obj = JsonObject()
@@ -451,6 +492,7 @@ class ChatStorageManager(private val context: Context) {
      * 删除某会话专属世界书（该会话恢复回退全局书）。
      */
     suspend fun deleteSessionWorldInfo(sessionId: String) {
+        ensureMigrated()
         worldInfoMutex.withLock {
             try {
                 val file = sessionWorldInfoFile(sessionId)
@@ -467,6 +509,7 @@ class ChatStorageManager(private val context: Context) {
      * 保存所有角色卡列表
      */
     suspend fun saveCharacterCards(cards: List<CharacterCard>) {
+        ensureMigrated()
         cardsMutex.withLock {
             saveCharacterCardsInternal(cards)
         }
@@ -476,15 +519,34 @@ class ChatStorageManager(private val context: Context) {
      * 读取所有角色卡列表 (如不存在则自动注入内置角色模板)
      */
     suspend fun loadCharacterCards(): List<CharacterCard> {
+        ensureMigrated()
         return cardsMutex.withLock {
             loadCharacterCardsInternal()
         }
+    }
+
+    // ---------- CharacterDocument 直通（导入与编辑回写使用） ----------
+
+    suspend fun loadCharacterDocument(id: String): com.loyea.character.core.api.CharacterDocument? {
+        ensureMigrated()
+        return cardsMutex.withLock { documentStore.load(id) }
+    }
+
+    suspend fun saveCharacterDocument(document: com.loyea.character.core.api.CharacterDocument) {
+        ensureMigrated()
+        cardsMutex.withLock { documentStore.save(document) }
+    }
+
+    suspend fun characterDocumentExists(id: String): Boolean {
+        ensureMigrated()
+        return cardsMutex.withLock { documentStore.exists(id) }
     }
 
     /**
      * 原子化更新会话消息
      */
     suspend fun updateSessionMessages(sessionId: String, updateBlock: (List<Message>) -> List<Message>) {
+        ensureMigrated()
         messagesMutex.withLock {
             val current = loadSessionMessagesInternal(sessionId)
             val updated = updateBlock(current)
@@ -496,6 +558,7 @@ class ChatStorageManager(private val context: Context) {
      * 原子化更新会话列表
      */
     suspend fun updateSessionList(updateBlock: (List<ChatSession>) -> List<ChatSession>) {
+        ensureMigrated()
         sessionsMutex.withLock {
             val current = loadSessionListInternal()
             val updated = updateBlock(current)
@@ -507,6 +570,7 @@ class ChatStorageManager(private val context: Context) {
      * 原子化更新某个会话的核心记忆
      */
     suspend fun updateSessionCoreMemories(sessionId: String, memories: List<String>) {
+        ensureMigrated()
         updateSessionList { currentList ->
             currentList.map { session ->
                 if (session.id == sessionId) {
@@ -522,6 +586,7 @@ class ChatStorageManager(private val context: Context) {
      * 原子化更新某个会话的长会话压缩摘要与压缩断点
      */
     suspend fun updateSessionCompression(sessionId: String, summary: String, compressedAtCount: Int) {
+        ensureMigrated()
         updateSessionList { currentList ->
             currentList.map { session ->
                 if (session.id == sessionId) {
@@ -550,6 +615,7 @@ class ChatStorageManager(private val context: Context) {
         promptCacheHitTokens: Long? = null,
         promptCacheMissTokens: Long? = null
     ) {
+        ensureMigrated()
         updateSessionList { currentList ->
             currentList.map { session ->
                 if (session.id == sessionId) {

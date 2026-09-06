@@ -618,6 +618,53 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         prefs.edit().putString("user_bubble_color", newColor).apply()
     }
 
+    // --- 角色卡导入（character-core 保真 codec，Spec §4） ---
+
+    /** 导入结果：message 已按语言组织好，UI 直接展示。 */
+    data class CharacterImportOutcome(val success: Boolean, val message: String)
+
+    fun importCharacterCard(bytes: ByteArray, onResult: (CharacterImportOutcome) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val result = com.loyea.character.core.api.CharacterCardImporter.import(bytes)
+                var doc = result.document
+                // 头像沿用既有 avatars 目录，以稳定 ID 命名（重复导入不产生新文件）
+                val avatarsDir = File(context.filesDir, "avatars").apply { if (!exists()) mkdirs() }
+                val avatarFile = File(avatarsDir, "${doc.profile.id}.png")
+                runCatching { avatarFile.writeBytes(bytes) }
+                doc = doc.withProfile(
+                    doc.profile.copy(
+                        display = doc.profile.display.copy(avatarUri = avatarFile.absolutePath)
+                    )
+                )
+                // 同一稳定 ID 视为同一角色：更新现有并递增 revision；不同卡天然不同 ID（Spec §4.5）
+                val isUpdate = storageManager.characterDocumentExists(doc.profile.id)
+                if (isUpdate) {
+                    storageManager.loadCharacterDocument(doc.profile.id)?.let { existing ->
+                        doc = doc.copy(profile = doc.profile.copy(revision = existing.profile.revision + 1))
+                    }
+                }
+                storageManager.saveCharacterDocument(doc)
+                val cards = storageManager.loadCharacterCards()
+                withContext(Dispatchers.Main) {
+                    characterCardList.value = cards
+                    val base = if (isUpdate) "已更新角色卡 [${doc.profile.name}]" else "成功导入角色卡 [${doc.profile.name}]"
+                    val hint = if (result.report.unsupported.isNotEmpty()) "（部分能力暂不支持，已保留原文）" else ""
+                    onResult(CharacterImportOutcome(true, base + hint))
+                }
+            } catch (e: com.loyea.character.core.api.ImportFailure) {
+                withContext(Dispatchers.Main) {
+                    onResult(CharacterImportOutcome(false, e.message ?: "导入失败"))
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                withContext(Dispatchers.Main) {
+                    onResult(CharacterImportOutcome(false, "导入失败: ${e.localizedMessage}"))
+                }
+            }
+        }
+    }
+
     fun saveCharacterCardList(newList: List<CharacterCard>) {
         characterCardList.value = newList
         viewModelScope.launch(Dispatchers.IO) {

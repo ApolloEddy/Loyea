@@ -15,3 +15,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Loyea"
 include(":app")
+include(":character-core")

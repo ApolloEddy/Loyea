@@ -3,6 +3,7 @@ package com.loyea.perception.memory
 import android.content.Context
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
@@ -12,7 +13,6 @@ import java.io.File
  */
 class GraphMemoryManager(private val context: Context) {
     private val gson = Gson()
-    private val memoriesFile = File(context.filesDir, "graph_memories.json")
 
     companion object {
         private val fileMutex = Mutex()
@@ -20,6 +20,16 @@ class GraphMemoryManager(private val context: Context) {
         private const val PURGE_THROTTLE_MS = 24L * 3600 * 1000L
         /** 记忆过期窗口：90 天未被提及即视为过期遗忘 */
         private const val PURGE_EXPIRE_MS = 90L * 24 * 3600 * 1000L
+    }
+
+    // 图谱记忆随迁移进入 rebuild_storage_v1 根；首次访问前确保迁移完成
+    private val memoriesFile = File(File(context.filesDir, com.loyea.storage.RebuildStorageMigrator.ROOT_NAME), "graph_memories.json")
+
+    init {
+        // 构造即触发（幂等、进程内已串行）迁移门禁，避免任何读写绕过迁移直接落到空文件
+        runBlocking {
+            runCatching { com.loyea.storage.RebuildStorageMigrator.ensureMigrated(context.filesDir) }
+        }
     }
 
     private var lastPurgeTime = 0L

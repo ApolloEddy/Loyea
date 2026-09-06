@@ -54,6 +54,8 @@ diff_chatscreen.txt
 
 # Development specs (kept locally; not part of the public repo docs)
 docs/physical_perception_spec.md
+# 真实角色卡：仅限用户本地验收，绝不入库（Spec §2）
+docs/【NSFW】端庄中医林芷柔*.png
 docs/tavern_plugin_refactor.md
 docs/tavo_parity_plan.md
 docs/Loyea-Rebuild-Spec-*.md
