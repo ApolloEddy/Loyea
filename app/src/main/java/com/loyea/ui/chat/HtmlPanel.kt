@@ -2,11 +2,14 @@ package com.loyea.ui.chat
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -27,6 +30,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -62,10 +66,13 @@ data class ParsedPanel(
     val initiallyOpen: Boolean = false
 )
 
-/** 消息正文的展示分段：Markdown 文本与 HTML 面板交替。 */
+/** 消息正文的展示分段：Markdown 文本、HTML 面板与折叠代码块交替。 */
 sealed class ContentSegment {
     data class Markdown(val text: String) : ContentSegment()
     data class Panel(val parsed: ParsedPanel?) : ContentSegment()
+
+    /** 不支持/无需内联渲染的原始 HTML 构造：默认折叠为一枚小条目，点击展开查看原文 */
+    data class Code(val text: String) : ContentSegment()
 }
 
 /**
@@ -115,7 +122,7 @@ object HtmlDisplaySplitter {
         var last = 0
         DETAILS_BLOCK.findAll(part).forEach { match ->
             if (match.range.first > last) {
-                out.add(ContentSegment.Markdown(part.substring(last, match.range.first)))
+                emitMarkdownOrCode(part.substring(last, match.range.first), out)
             }
             out.add(ContentSegment.Panel(parsePanel(match.value)))
             last = match.range.last + 1
@@ -125,12 +132,63 @@ object HtmlDisplaySplitter {
             if (UNCLOSED_DETAILS.containsMatchIn(tail)) {
                 // 流式未完成：展示已完成正文 + 稳定占位，完成后整体解析（Spec §7.1）
                 val idx = tail.indexOf("<details", 0, ignoreCase = true)
-                if (idx > 0) out.add(ContentSegment.Markdown(tail.substring(0, idx)))
+                if (idx > 0) emitMarkdownOrCode(tail.substring(0, idx), out)
                 out.add(ContentSegment.Panel(parsed = null))
             } else {
-                out.add(ContentSegment.Markdown(tail))
+                emitMarkdownOrCode(tail, out)
             }
         }
+    }
+
+    private val RAW_TAG_LINE = Regex("^\\s*<([a-zA-Z][a-zA-Z0-9]*)[^>]*>", RegexOption.MULTILINE)
+    /** 允许保留为正文文本的容器标签（其余折叠为代码条目） */
+    private val CONTAINER_TAGS = setOf("div", "p", "span", "strong", "b", "em", "i", "u", "s", "br", "hr")
+
+    /**
+     * markdown 分段发出前的降级处理：不在对话界面直接刷大段代码。
+     * 以行为单位识别"以标签开头的行"的连续段——
+     * - 段内只含容器/文本标签 → 剥离标签保留文字，仍按正文渲染；
+     * - 段内出现 img/style/script/video 等非文本构造 → 整段折叠为一条代码条目。
+     */
+    private fun emitMarkdownOrCode(text: String, out: MutableList<ContentSegment>) {
+        val lines = text.split("\n")
+        val mdLines = ArrayList<String>()
+        var run = ArrayList<String>()
+        fun flushRun() {
+            if (run.isEmpty()) return
+            val joined = run.joinToString("\n")
+            val tags = RAW_TAG_LINE.findAll(joined).map { it.groupValues[1].lowercase() }.toList()
+            val nonTextTags = tags.filter { it !in CONTAINER_TAGS }
+            if (nonTextTags.isEmpty()) {
+                // 容器型 HTML：剥标签留文字
+                val plain = joined
+                    .replace(Regex("<[^>]*>"), "")
+                    .replace(Regex("\n{3,}"), "\n\n")
+                    .trim('\n', ' ')
+                if (plain.isNotBlank()) out.add(ContentSegment.Markdown(plain))
+            } else {
+                out.add(ContentSegment.Code(joined))
+            }
+            run = ArrayList()
+        }
+        for (line in lines) {
+            if (RAW_TAG_LINE.containsMatchIn(line)) {
+                run.add(line)
+            } else {
+                if (run.isNotEmpty()) {
+                    if (line.isBlank()) {
+                        flushRun()
+                    } else {
+                        run.add(line)
+                    }
+                } else {
+                    mdLines.add(line)
+                }
+            }
+        }
+        flushRun()
+        val md = mdLines.joinToString("\n")
+        if (md.isNotBlank()) out.add(ContentSegment.Markdown(md))
     }
 
     /** 解析单个 <details>…</details>；解析失败回退为 Markdown 文本（不吞内容）。 */
@@ -267,6 +325,43 @@ fun MessageContentWithPanels(
                 }
                 if (processed.isNotBlank()) {
                     MarkdownText(text = processed, color = color)
+                }
+            }
+            is ContentSegment.Code -> {
+                val codeOpen = collapseState.value["${'$'}collapseKeyPrefix:code${'$'}index"] ?: false
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            collapseState.value = collapseState.value.toMutableMap().apply {
+                                put("${'$'}collapseKeyPrefix:code${'$'}index", !codeOpen)
+                            }
+                        }
+                        .background(
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                            RoundedCornerShape(10.dp)
+                        )
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "嵌入内容 · " + segment.text.count { it == '\n' }.let { "${it + 1} 行" } + " · 点击" + (if (codeOpen) "收起" else "展开"),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                    )
+                }
+                if (codeOpen) {
+                    Text(
+                        text = segment.text,
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 220.dp)
+                            .verticalScroll(rememberScrollState())
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f), RoundedCornerShape(10.dp))
+                            .padding(10.dp)
+                    )
                 }
             }
             is ContentSegment.Panel -> {

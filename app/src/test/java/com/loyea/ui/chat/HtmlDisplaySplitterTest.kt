@@ -101,4 +101,32 @@ class HtmlDisplaySplitterTest {
         val key = "msg-42:panel0"
         assertTrue(key.startsWith("msg-42") && key.endsWith("panel0"))
     }
+
+    @Test
+    fun `container-only html runs are stripped to readable text`() {
+        val raw = "<div style='text-align:center;'>她抬起头。</div>\n\n下一句正文。"
+        val segments = HtmlDisplaySplitter.split(raw)
+        val md = segments.filterIsInstance<ContentSegment.Markdown>().joinToString("\n") { it.text }
+        assertTrue("容器标签剥离后文字保留", md.contains("她抬起头"))
+        assertTrue("不应出现裸标签", !md.contains("<div"))
+        assertTrue(segments.none { it is ContentSegment.Code })
+    }
+
+    @Test
+    fun `non-text constructs collapse into code segment instead of dumping raw html`() {
+        val raw = "正文开场。\n<div style='background-image:url(https://x/y.gif)'>\n<img src=https://x/z.png width=30% />\n<h1>标题</h1>\n</div>\n\n结尾正文。"
+        val segments = HtmlDisplaySplitter.split(raw)
+        val code = segments.filterIsInstance<ContentSegment.Code>()
+        assertEquals(1, code.size)
+        assertTrue("img 构造进入折叠段", code[0].text.contains("<img"))
+        val joined = segments.joinToString("\n") {
+            when (it) {
+                is ContentSegment.Markdown -> it.text
+                is ContentSegment.Code -> ""
+                is ContentSegment.Panel -> ""
+            }
+        }
+        assertTrue("正文前后保留", joined.contains("正文开场") && joined.contains("结尾正文"))
+        assertTrue(!joined.contains("<img"))
+    }
 }

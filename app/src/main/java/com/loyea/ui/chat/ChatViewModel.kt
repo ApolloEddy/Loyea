@@ -1462,6 +1462,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     turnContextSnapshot = if (needsTurnSnapshot || sessionUsesSystemTime) {
                         PromptAssembler.assembleTurnSnapshotOnly(
                             physicalContext = physicalContextData,
+                            graphMemory = if (enableGraphMemory.value) graphMemory else null,
                             useSystemTime = sessionUsesSystemTime,
                             includeSystemTimeInSnapshot = false,
                             snapshotTimeMillis = snapshotTime
@@ -2597,9 +2598,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 slot = com.loyea.character.core.api.PromptBlock.SLOT_HOST
             )
         }
+        // 缓存命中（Spec §5.3）：图谱记忆随会话内容逐轮变化，只进回合快照（冻结到用户消息），
+        // system 消息仅保留稳定的角色/世界书/核心记忆 → 字节级稳定前缀得以保留
         val memoryBlocks = PromptAssembler.buildMemoryBlocks(
             coreMemories = activeSession.value?.coreMemories ?: emptyList(),
-            graphMemory = graphMemory,
+            graphMemory = null,
             useSystemTime = sessionUsesSystemTime
         ).mapIndexed { index, block ->
             com.loyea.character.core.api.PromptBlock(
