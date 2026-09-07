@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -148,11 +149,8 @@ fun ChatScreen(
     }
 
     // 切换会话时，自动保存和载入草稿
-    // 已完成「定位到最后一次用户消息」的会话（未锚定前自动滚动让位；换会话即重置，每次进入都重新锚定）
-    var anchoredSession by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(currentSessionId) {
-        anchoredSession = null
         if (lastSessionId.isNotEmpty() && lastSessionId != currentSessionId) {
             saveDraft(lastSessionId, inputText.text)
         }
@@ -164,9 +162,10 @@ fun ChatScreen(
 
     // 自动滚动：思考中默认展开并滚动到「Thinking 标题顶到屏幕顶端即停」；用户触摸后完全交还控制权
     var autoPinActive by remember { mutableStateOf(true) }
-    // 回到底部气泡：底部判定容差与锚点上文偏移（dp 换算像素，避免密度差异）
+    // 会话锚定进行中标记：锚定完成前自动滚动让位（冷启动即视为待锚定）
+    var anchorPending by remember { mutableStateOf(true) }
+    // 回到底部气泡：底部判定容差（dp 换算像素，避免密度差异）
     val bottomTolerancePx = with(LocalDensity.current) { 64.dp.toPx() }
-    val anchorContextPx = with(LocalDensity.current) { 120.dp.toPx() }
     val isAtBottom by remember {
         derivedStateOf {
             val info = listState.layoutInfo
@@ -174,8 +173,21 @@ fun ChatScreen(
             last.index >= info.totalItemsCount - 1 && last.offset + last.size <= info.viewportEndOffset + bottomTolerancePx
         }
     }
+    // 角标计数按「最后一条消息是否在屏幕上」判定：锚定阅读位不算离底，
+    // 只有最新消息滚出屏幕后每新到一条才 +1，重新可见即清零（修复 99+ 异常累积）
     var unseenBottomCount by remember { mutableIntStateOf(0) }
-    var lastSeenListSize by remember { mutableStateOf(messages.size) }
+    var lastSeenBottomId by remember { mutableStateOf<String?>(null) }
+    val isLastVisible by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val lastContentIdx = info.totalItemsCount - 2 // 末位是底部 Spacer
+            info.visibleItemsInfo.any { it.index >= lastContentIdx }
+        }
+    }
+    // 显示窗口（April 式懒加载）：VM 持有全量历史供 payload；UI 只渲染窗口内消息，
+    // 上滑近窗口头则向前补载 20 条、远离则释放；下滑对称（流式期间不释放底部）
+    var windowStart by remember { mutableIntStateOf(0) }
+    var windowEnd by remember { mutableIntStateOf(Int.MAX_VALUE) }
 
     // 流式响应中的占位气泡（isThinking 每轮流前置位，工具执行期由 isMcpRunning 补位，覆盖整个多轮响应）
     val activeStreaming = isThinking || isMcpRunning
@@ -189,42 +201,76 @@ fun ChatScreen(
 
     LaunchedEffect(messages.lastOrNull(), isThinking, isMcpRunning) {
         if (messages.isEmpty()) return@LaunchedEffect
-        // 会话尚未锚定（刚切换/载入）时让位：先由锚点定位到最后一次用户消息处
-        if (anchoredSession != currentSessionId) return@LaunchedEffect
+        // 锚定进行中时让位：先由锚点定位到最后一次用户消息处，再恢复自动跟随
+        if (anchorPending) return@LaunchedEffect
         val s = if (isThinking || isMcpRunning) messages.lastOrNull { it.sender == Sender.AI } else null
         when {
             // 用户已手动滚动/触摸 → 不再自动滚动
             !autoPinActive -> Unit
             // 思考展开且有内容 → 把该消息顶对齐视口顶部（Thinking 标题置顶，index = messages.size，占位 Spacer 占 index 0）
             s != null && s.isThoughtsExpanded && !s.thoughts.isNullOrBlank() ->
-                listState.scrollToItem(messages.size, 0)
+                listState.scrollToItem((messages.size - windowStart).coerceAtLeast(0), 0)
             // 流式初期（思考文本未到/已折叠）跟随底部；思考结束回到底部看最终回复
             // 非思考态滚到最后一条消息（列表 0 位是 Spacer，消息 j 在下标 j+1，故目标为 messages.size）；
             // 思考态多滚一项到 Thinking 指示器；目标越界会被 LazyListState 钳制
-            else -> listState.animateScrollToItem(messages.size + if (isThinking) 1 else 0)
+            else -> listState.animateScrollToItem((messages.size + if (isThinking) 1 else 0 - windowStart).coerceAtLeast(0))
         }
     }
 
-    // 回到底部气泡：离底期间的新消息计数（isAtBottom/计数变量见上方声明区）
-    LaunchedEffect(messages.size, isAtBottom) {
-        if (messages.size > lastSeenListSize && !isAtBottom) {
-            unseenBottomCount += messages.size - lastSeenListSize
+    LaunchedEffect(messages.lastOrNull()?.id, isLastVisible) {
+        val lastId = messages.lastOrNull()?.id ?: return@LaunchedEffect
+        if (isLastVisible) {
+            unseenBottomCount = 0
+            lastSeenBottomId = lastId
+        } else if (lastSeenBottomId != null && lastId != lastSeenBottomId) {
+            unseenBottomCount += 1
+        } else if (lastSeenBottomId == null) {
+            lastSeenBottomId = lastId
         }
-        lastSeenListSize = messages.size
-        if (isAtBottom) unseenBottomCount = 0
     }
 
-    // 会话载入/切换：内容定位到用户最后一次发消息处（即时定位、略带上文；新回复开始时才恢复自动跟随）
-    LaunchedEffect(currentSessionId, messages.lastOrNull()?.id, messages.size) {
-        if (currentSessionId.isEmpty() || messages.isEmpty()) return@LaunchedEffect
-        if (anchoredSession == currentSessionId) return@LaunchedEffect
-        anchoredSession = currentSessionId
+    // 窗口扩展/释放：上滑近头部补载 20 条、远离头部释放；下滑对称（流式期间不释放底部）
+    LaunchedEffect(windowStart, windowEnd, messages.size, activeStreaming) {
+        snapshotFlow { listState.firstVisibleItemIndex }.collect { firstIdx ->
+            val lastIdx = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: firstIdx
+            if (firstIdx - windowStart <= 4 && windowStart > 0) {
+                windowStart = (windowStart - 20).coerceAtLeast(0)
+            } else if (firstIdx - windowStart > 60) {
+                windowStart = (firstIdx - 40).coerceAtLeast(0)
+                if (windowEnd == Int.MAX_VALUE) windowEnd = messages.size
+            }
+            if (windowEnd < messages.size && lastIdx >= windowEnd - 4) {
+                windowEnd = minOf(messages.size, windowEnd + 20)
+            } else if (!activeStreaming && windowEnd in 1 until messages.size && windowEnd - lastIdx > 60) {
+                windowEnd = (lastIdx + 40).coerceAtMost(messages.size)
+            }
+        }
+    }
+
+    // 窗口切片：LazyColumn 只渲染窗口内消息（key 仍为全局唯一消息 id）
+    val displayMessages = remember(messages, windowStart, windowEnd) {
+        val from = windowStart.coerceIn(0, messages.size)
+        val to = windowEnd.coerceIn(from, messages.size)
+        messages.subList(from, to)
+    }
+
+    // 会话载入/切换：等待新会话消息到达（VM 切换时已先清空列表），定位到最后一次
+    // 用户消息处；初始窗口只从锚点向前留少量上文，更早历史上滑时再动态载入
+    LaunchedEffect(currentSessionId) {
+        if (currentSessionId.isEmpty()) return@LaunchedEffect
+        anchorPending = true
+        snapshotFlow { messages.size }.first { it > 0 }
         val lastUserIdx = messages.indexOfLast { it.sender == Sender.USER }
-        val targetListIndex = if (lastUserIdx >= 0) lastUserIdx + 1 else messages.size // 列表 0 位是占位 Spacer
+        val targetIdx = if (lastUserIdx >= 0) lastUserIdx else messages.size - 1
+        windowStart = (targetIdx - 8).coerceAtLeast(0)
+        windowEnd = Int.MAX_VALUE
         autoPinActive = false // 抑制载入即滚到底，让位给锚点
-        listState.scrollToItem(targetListIndex, if (lastUserIdx >= 0) -anchorContextPx.toInt() else 0)
         unseenBottomCount = 0
-        lastSeenListSize = messages.size
+        lastSeenBottomId = messages.lastOrNull()?.id
+        runCatching {
+            listState.scrollToItem((targetIdx + 1 - windowStart).coerceAtLeast(0))
+        }
+        anchorPending = false
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -340,10 +386,11 @@ fun ChatScreen(
                 // 占位，防止贴顶
                 item { Spacer(modifier = Modifier.height(8.dp)) }
 
-                itemsIndexed(messages, key = { _, m -> m.id }) { index, message ->
+                itemsIndexed(displayMessages, key = { _, m -> m.id }) { index, message ->
+                    val globalIndex = windowStart + index
+                    val prev = if (globalIndex > 0) messages[globalIndex - 1] else null
                     // 时间间隔分隔：与上一条消息间隔超过阈值时，居中显示当前时间（参考 ChatGPT/豆包）
-                    if (index > 0) {
-                        val prev = messages[index - 1]
+                    if (prev != null) {
                         val gap = message.timestamp - prev.timestamp
                         if (gap >= TIME_GAP_DIVIDER_MS) {
                             TimeGapDivider(timestamp = message.timestamp, appLanguage = appLanguage)
@@ -426,6 +473,50 @@ fun ChatScreen(
                 item { Spacer(modifier = Modifier.height(16.dp)) }
             }
 
+            // 深度思考吸顶条（DeepSeek 风格）：思考/工具期间常驻顶部，随时点击折叠或展开思考内容
+            if (activeStreaming && !streamingMsg?.thoughts.isNullOrBlank()) {
+                val thinkMsg = streamingMsg!!
+                var chipTick by remember { mutableIntStateOf(0) }
+                LaunchedEffect(Unit) { while (true) { delay(1000); chipTick++ } }
+                val chipNow = remember(chipTick) { System.currentTimeMillis() }
+                val chipSec = ThinkingTimer.elapsedSeconds(
+                    isStillThinking = true,
+                    finalDurationSeconds = 0,
+                    startedAtMillis = thinkMsg.thinkingStartedAt,
+                    nowMillis = chipNow,
+                    fallbackSeconds = 0
+                )
+                val chipExpanded = thinkMsg.isThoughtsExpanded
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 8.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.95f))
+                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
+                        .clickable { viewModel?.toggleThoughtsExpanded(thinkMsg.id) }
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (chipExpanded) Icons.Default.KeyboardArrowDown else Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (isEn) {
+                            if (chipExpanded) "Thinking for ${chipSec}s" else "Thought for ${chipSec}s · tap to expand"
+                        } else {
+                            if (chipExpanded) "深度思考中 · ${chipSec}s" else "已折叠 · 思考 ${chipSec}s"
+                        },
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                    )
+                }
+            }
+
             // 回到底部气泡（主流 AI Chat 交互：离开底部浮现，点击回最新消息；离底期间新消息攒未读数）
             if (!isAtBottom) {
                 // 外层 Box 不裁剪：角标可越出按钮圆形范围（此前角标被容器 clip 裁掉一半）
@@ -444,7 +535,10 @@ fun ChatScreen(
                             .clickable {
                                 unseenBottomCount = 0
                                 autoPinActive = true
-                                coroutineScope.launch { listState.animateScrollToItem(messages.size) }
+                                coroutineScope.launch {
+                                    windowEnd = Int.MAX_VALUE // 展开窗口至最新，再滚动回底
+                                    listState.animateScrollToItem((messages.size + 1 - windowStart).coerceAtLeast(0))
+                                }
                             },
                         contentAlignment = Alignment.Center
                     ) {
