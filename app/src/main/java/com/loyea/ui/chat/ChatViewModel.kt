@@ -227,6 +227,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     var enableAutoTts = mutableStateOf(false)
         private set
     var enableImageGen = mutableStateOf(true)
+    // 多模态媒体缓存自动清理时长（天）；0 = 关闭自动清理（统一媒体缓存管理，2026-09-07）
+    var mediaCacheCleanDays = mutableStateOf(7)
         private set
     var imageGenModel = mutableStateOf("dall-e-3")
         private set
@@ -369,7 +371,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             llmClient.fetchWebPage(url)
         }
         mcpManager.start()
-        cleanOldTtsCacheAsync()
+        cleanMediaCacheAsync(mediaCacheCleanDays.value) // 统一媒体缓存自动清理（含原 TTS 三天策略）
     }
 
     private fun loadAllData() {
@@ -523,6 +525,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         enableAutoTts.value = prefs.getBoolean("enable_auto_tts", false)
         enableImageGen.value = prefs.getBoolean("enable_image_gen", true)
         imageGenModel.value = prefs.getString("image_gen_model", "dall-e-3") ?: "dall-e-3"
+        mediaCacheCleanDays.value = prefs.getInt("media_cache_clean_days", 7)
         enableAdultContent.value = prefs.getBoolean("enable_adult_content", false)
         mcpToolWhitelist.value = prefs.getStringSet("mcp_tool_whitelist", null)
         
@@ -2947,6 +2950,58 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         prefs.edit().putBoolean(key, enabled).apply()
     }
 
+    fun updateMediaCacheCleanDays(days: Int) {
+        mediaCacheCleanDays.value = days
+        prefs.edit().putInt("media_cache_clean_days", days).apply()
+    }
+
+    /**
+     * 多模态媒体缓存统一清理：
+     * 覆盖 cacheDir 的视觉附件(vision_*) / 录音(record_*) / TTS(tts_*)，以及
+     * filesDir/images 的生图·识图产物。filesDir 中被任意会话消息引用的图片受保护，
+     * 只清理「超龄且未被引用」的文件——删除聊天里的图片属于数据删除，不归缓存管理。
+     * @param olderThanDays 清理该天数之前的文件；<=0 表示全部（手动立即清理）
+     */
+    fun cleanMediaCacheAsync(olderThanDays: Int, onDone: (Int, Long) -> Unit = { _, _ -> }) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val cutoff = if (olderThanDays > 0) System.currentTimeMillis() - olderThanDays * 24L * 60 * 60 * 1000 else Long.MAX_VALUE
+            var deleted = 0
+            var freedBytes = 0L
+
+            fun tryDelete(f: File) {
+                val len = f.length()
+                if (f.delete()) {
+                    deleted++
+                    freedBytes += len
+                }
+            }
+
+            // 1) cacheDir 多模态临时文件（纯缓存，按清理时长删）
+            listOf("vision_", "record_", "tts_").forEach { prefix ->
+                context.cacheDir.listFiles { f ->
+                    f.isFile && f.name.startsWith(prefix) && f.lastModified() <= cutoff
+                }?.forEach { tryDelete(it) }
+            }
+
+            // 2) filesDir/images：只删超龄且未被任何会话消息引用的产物
+            val imagesDir = File(context.filesDir, "images")
+            if (imagesDir.isDirectory) {
+                val referenced = HashSet<String>()
+                runCatching {
+                    storageManager.loadSessionList().forEach { session ->
+                        runCatching { storageManager.loadSessionMessages(session.id) }.getOrDefault(emptyList()).forEach { msg ->
+                            msg.imageUrl?.let { path -> referenced.add(File(path).absolutePath) }
+                        }
+                    }
+                }
+                imagesDir.listFiles { f -> f.isFile && f.lastModified() <= cutoff }?.forEach { f ->
+                    if (f.absolutePath !in referenced) tryDelete(f)
+                }
+            }
+            withContext(Dispatchers.Main) { onDone(deleted, freedBytes) }
+        }
+    }
+
     fun updateMultimodalSetting(key: String, value: Any) {
         when (key) {
             "enable_multimodal" -> {
@@ -3464,41 +3519,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 ex.printStackTrace()
             }
             0
-        }
-    }
-
-    private fun cleanOldTtsCacheAsync() {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val cacheDirFile = context.cacheDir
-                if (cacheDirFile.exists() && cacheDirFile.isDirectory) {
-                    val ttsFiles = cacheDirFile.listFiles { file ->
-                        file.isFile && file.name.startsWith("tts_") && file.name.endsWith(".mp3")
-                    }
-                    if (ttsFiles != null) {
-                        val currentTime = System.currentTimeMillis()
-                        val threeDaysInMillis = 3L * 24 * 60 * 60 * 1000
-                        var deletedCount = 0
-                        for (file in ttsFiles) {
-                            val diff = currentTime - file.lastModified()
-                            if (diff > threeDaysInMillis) {
-                                try {
-                                    if (file.delete()) {
-                                        deletedCount++
-                                    }
-                                } catch (e: Exception) {
-                                    e.printStackTrace()
-                                }
-                            }
-                        }
-                        if (deletedCount > 0) {
-                            Log.d("ChatViewModel", "已自动清理 ${deletedCount} 个 3 天前的历史语音缓存 mp3 文件")
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
         }
     }
 

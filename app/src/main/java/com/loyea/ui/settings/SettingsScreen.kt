@@ -4086,6 +4086,7 @@ fun MultimodalSettingsLayout(
     val autoTtsEnabled = viewModel?.enableAutoTts?.value ?: false
     val imageGenEnabled = viewModel?.enableImageGen?.value ?: true
     val imageModelName = viewModel?.imageGenModel?.value ?: "dall-e-3"
+    val mediaCacheCleanDays = viewModel?.mediaCacheCleanDays?.value ?: 7
 
     val visionConfigId = viewModel?.visionConfigId?.value ?: ""
     val visionModelName = viewModel?.visionModelName?.value ?: "gpt-4o-mini"
@@ -4546,6 +4547,105 @@ fun MultimodalSettingsLayout(
                         isEn = isEn,
                         onValueChange = { viewModel?.updateMultimodalSetting("image_gen_model", it) }
                     )
+                }
+
+                // 媒体缓存统一管理（自动清理时长 + 手动立即清理；覆盖图片/录音/TTS）
+                var cleaningCache by remember { mutableStateOf(false) }
+                var cacheCleanResult by remember { mutableStateOf<String?>(null) }
+                MultimodalModuleCard(
+                    icon = Icons.Default.CleaningServices,
+                    title = if (isEn) "Media Cache" else "媒体缓存清理",
+                    isEn = isEn,
+                    enabled = true,
+                    onToggle = null
+                ) {
+                    Text(
+                        text = if (isEn)
+                            "Covers generated images, attached photos, voice recordings and TTS audio. Images shown in chat messages are protected from deletion."
+                        else
+                            "覆盖生成图片、发送的照片、录音与 TTS 音频；聊天消息中正在展示的图片受保护，不会被删除。",
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f)
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    // 自动清理时长
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (isEn) "Auto-clean after" else "自动清理",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+                            modifier = Modifier.weight(1f)
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf(0, 1, 3, 7, 30).forEach { days ->
+                                val selected = mediaCacheCleanDays == days
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(
+                                            if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                            else Color.Transparent
+                                        )
+                                        .border(
+                                            1.dp,
+                                            if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                                            else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                                            RoundedCornerShape(8.dp)
+                                        )
+                                        .clickable { viewModel?.updateMediaCacheCleanDays(days) }
+                                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                                ) {
+                                    Text(
+                                        text = if (days == 0) (if (isEn) "Off" else "关闭")
+                                            else if (isEn) "${days}d" else "${days} 天",
+                                        fontSize = 12.sp,
+                                        color = if (selected) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
+                    // 手动立即清理
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = if (isEn) "Clean now" else "立即清理",
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f)
+                            )
+                            cacheCleanResult?.let { result ->
+                                Text(
+                                    text = result,
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.9f)
+                                )
+                            }
+                        }
+                        Button(
+                            onClick = {
+                                cleaningCache = true
+                                cacheCleanResult = null
+                                viewModel?.cleanMediaCacheAsync(0) { count, bytes ->
+                                    cleaningCache = false
+                                    val mb = String.format(java.util.Locale.ROOT, "%.1f", bytes / 1048576.0)
+                                    cacheCleanResult = if (isEn) "Cleaned $count files (${mb} MB)"
+                                        else "已清理 ${count} 个文件（${mb} MB）"
+                                }
+                            },
+                            enabled = !cleaningCache
+                        ) {
+                            Text(if (isEn) (if (cleaningCache) "Cleaning…" else "Clean now") else if (cleaningCache) "清理中…" else "立即清理", fontSize = 13.sp)
+                        }
+                    }
                 }
             }
         }
