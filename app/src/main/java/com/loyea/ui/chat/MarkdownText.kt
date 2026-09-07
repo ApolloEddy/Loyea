@@ -14,6 +14,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -661,8 +662,14 @@ fun LatexLayout(latex: String, color: Color) {
 @Composable
 fun CodeBlockLayout(code: String, language: String) {
     val clipboardManager = LocalClipboardManager.current
-    val containerBg = Color(0xFF1E1E1E) // 固定深色背景，符合代码习惯
-    val headerBg = Color(0xFF2D2D2D)
+    // 主题自适应：以 onBackground 亮度判定亮/暗主题（此前硬编码深底导致亮色模式黑字配黑底不可读）
+    val useDarkCodeTheme = MaterialTheme.colorScheme.onBackground.luminance() > 0.5f
+    val containerBg = if (useDarkCodeTheme) Color(0xFF1E1E1E)
+        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+    val headerBg = if (useDarkCodeTheme) Color(0xFF2D2D2D)
+        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f)
+    val metaColor = if (useDarkCodeTheme) Color(0xFFB5B5B5)
+        else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f)
 
     Column(
         modifier = Modifier
@@ -682,7 +689,7 @@ fun CodeBlockLayout(code: String, language: String) {
         ) {
             Text(
                 text = language.lowercase(),
-                color = Color(0xFFB5B5B5),
+                color = metaColor,
                 fontSize = 12.sp,
                 fontFamily = FontFamily.Monospace
             )
@@ -693,7 +700,7 @@ fun CodeBlockLayout(code: String, language: String) {
                 Icon(
                     imageVector = Icons.Default.ContentCopy,
                     contentDescription = "Copy Code",
-                    tint = Color(0xFFB5B5B5),
+                    tint = metaColor,
                     modifier = Modifier.size(14.dp)
                 )
             }
@@ -706,7 +713,9 @@ fun CodeBlockLayout(code: String, language: String) {
                 .padding(12.dp)
         ) {
             Text(
-                text = highlightCode(code, language),
+                text = highlightCode(code, language, useDarkCodeTheme),
+                color = if (useDarkCodeTheme) Color(0xFFD4D4D4)
+                    else MaterialTheme.colorScheme.onBackground,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 13.sp,
                 lineHeight = 18.sp
@@ -716,24 +725,32 @@ fun CodeBlockLayout(code: String, language: String) {
 }
 
 // 极其轻量且高效的 Kotlin/Java 正则语法高亮引擎
-fun highlightCode(code: String, language: String): AnnotatedString {
+fun highlightCode(code: String, language: String, useDarkTheme: Boolean = true): AnnotatedString {
     val lowerLang = language.lowercase()
     if (lowerLang != "kotlin" && lowerLang != "java" && lowerLang != "kt" && lowerLang != "code" && lowerLang.isNotBlank()) {
         return AnnotatedString(code)
     }
 
+    // 暗色 = Darcula 调色板；亮色 = IntelliJ Light 风格（深底/浅底各有可读配色）
+    val cDefault = if (useDarkTheme) Color(0xFFD4D4D4) else Color(0xFF1F1F1F)
+    val cNumber = if (useDarkTheme) Color(0xFF6897BB) else Color(0xFF1750EB)
+    val cAnnotation = if (useDarkTheme) Color(0xFFBBB529) else Color(0xFF8C8000)
+    val cKeyword = if (useDarkTheme) Color(0xFFCC7832) else Color(0xFF0033B3)
+    val cString = if (useDarkTheme) Color(0xFF6A8759) else Color(0xFF067D17)
+    val cComment = if (useDarkTheme) Color(0xFF808080) else Color(0xFF8C8C8C)
+
     return buildAnnotatedString {
         append(code)
-        addStyle(SpanStyle(color = Color(0xFFD4D4D4)), 0, code.length)
+        addStyle(SpanStyle(color = cDefault), 0, code.length)
 
         val numberRegex = Regex("\\b\\d+\\b")
         numberRegex.findAll(code).forEach { match ->
-            addStyle(SpanStyle(color = Color(0xFF6897BB)), match.range.first, match.range.last + 1)
+            addStyle(SpanStyle(color = cNumber), match.range.first, match.range.last + 1)
         }
 
         val annotationRegex = Regex("@\\w+")
         annotationRegex.findAll(code).forEach { match ->
-            addStyle(SpanStyle(color = Color(0xFFBBB529)), match.range.first, match.range.last + 1)
+            addStyle(SpanStyle(color = cAnnotation), match.range.first, match.range.last + 1)
         }
 
         val keywords = listOf(
@@ -745,22 +762,22 @@ fun highlightCode(code: String, language: String): AnnotatedString {
         )
         val keywordRegex = Regex("\\b(" + keywords.joinToString("|") + ")\\b")
         keywordRegex.findAll(code).forEach { match ->
-            addStyle(SpanStyle(color = Color(0xFFCC7832), fontWeight = FontWeight.Bold), match.range.first, match.range.last + 1)
+            addStyle(SpanStyle(color = cKeyword, fontWeight = FontWeight.Bold), match.range.first, match.range.last + 1)
         }
 
         val stringRegex = Regex("\"[^\n\"\\\\]*(?:\\\\.[^\n\"\\\\]*)*\"")
         stringRegex.findAll(code).forEach { match ->
-            addStyle(SpanStyle(color = Color(0xFF6A8759)), match.range.first, match.range.last + 1)
+            addStyle(SpanStyle(color = cString), match.range.first, match.range.last + 1)
         }
 
         val singleLineCommentRegex = Regex("//.*")
         singleLineCommentRegex.findAll(code).forEach { match ->
-            addStyle(SpanStyle(color = Color(0xFF808080), fontStyle = FontStyle.Italic), match.range.first, match.range.last + 1)
+            addStyle(SpanStyle(color = cComment, fontStyle = FontStyle.Italic), match.range.first, match.range.last + 1)
         }
 
         val multiLineCommentRegex = Regex("/\\*[\\s\\S]*?\\*/")
         multiLineCommentRegex.findAll(code).forEach { match ->
-            addStyle(SpanStyle(color = Color(0xFF808080), fontStyle = FontStyle.Italic), match.range.first, match.range.last + 1)
+            addStyle(SpanStyle(color = cComment, fontStyle = FontStyle.Italic), match.range.first, match.range.last + 1)
         }
     }
 }

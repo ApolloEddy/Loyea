@@ -428,27 +428,33 @@ fun ChatScreen(
 
             // 回到底部气泡（主流 AI Chat 交互：离开底部浮现，点击回最新消息；离底期间新消息攒未读数）
             if (!isAtBottom) {
+                // 外层 Box 不裁剪：角标可越出按钮圆形范围（此前角标被容器 clip 裁掉一半）
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
                         .padding(end = 16.dp, bottom = 8.dp)
                         .size(40.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.background)
-                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), CircleShape)
-                        .clickable {
-                            unseenBottomCount = 0
-                            autoPinActive = true
-                            coroutineScope.launch { listState.animateScrollToItem(messages.size) }
-                        },
-                    contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.KeyboardArrowDown,
-                        contentDescription = if (isEn) "Scroll to bottom" else "回到底部",
-                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-                        modifier = Modifier.size(22.dp)
-                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.background)
+                            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), CircleShape)
+                            .clickable {
+                                unseenBottomCount = 0
+                                autoPinActive = true
+                                coroutineScope.launch { listState.animateScrollToItem(messages.size) }
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.KeyboardArrowDown,
+                            contentDescription = if (isEn) "Scroll to bottom" else "回到底部",
+                            tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
                     if (unseenBottomCount > 0) {
                         Box(
                             modifier = Modifier
@@ -2083,17 +2089,21 @@ fun ChatInputBar(
                         )
                     )
                     if (showExpandBtn) {
+                        // 悬浮覆盖必然可能与文字同行：加不透明芯片底，重叠处文字仍可辨识
                         IconButton(
                             onClick = { showFullEditor = true },
                             modifier = Modifier
                                 .align(Alignment.BottomEnd)
-                                .size(32.dp)
+                                .padding(end = 2.dp, bottom = 4.dp)
+                                .size(30.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f))
                         ) {
                             Icon(
                                 imageVector = Icons.Default.OpenInFull,
                                 contentDescription = if (isEn) "Expand editor" else "放大编辑",
-                                tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
-                                modifier = Modifier.size(18.dp)
+                                tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+                                modifier = Modifier.size(16.dp)
                             )
                         }
                     }

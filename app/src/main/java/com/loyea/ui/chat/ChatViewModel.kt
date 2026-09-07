@@ -1348,7 +1348,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     null
                 }
                 val visionCandidate = targetVisionCfg ?: apiConfig
-                if (providerSupportsVision(visionCandidate.provider, visionModel)) {
+                // 用户显式配置了识图专用卡 = 明确声明该配置具备视觉能力，
+                // 不再被 provider/model 字符串猜测否决（否则新识图模型会被静默降级成 [图片] 文本，
+                // 即"识图模型配置正确却不可用"的根因）；字符串猜测仅用于回落主配置的场景
+                val explicitVisionCard = targetVisionCfg != null
+                if (explicitVisionCard || providerSupportsVision(visionCandidate.provider, visionModel)) {
                     // 视觉路由生效：切到视觉配置与模型
                     apiConfig = if (targetVisionCfg != null) {
                         targetVisionCfg.copy(modelName = visionModel)
