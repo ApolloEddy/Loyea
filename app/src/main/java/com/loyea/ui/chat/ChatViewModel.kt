@@ -696,22 +696,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun saveApiConfigList(newList: List<ApiConfig>) {
         apiConfigList.value = newList
-        prefs.edit().putString("api_config_list", Gson().toJson(newList)).apply()
+        // 唯一落库通道 = 加密库；明文键清除防止历史写回路径复活（GreetingWorker 曾因此读到旧明文）
+        val json = Gson().toJson(newList)
+        com.loyea.storage.ApiConfigVault.saveJson(context, json)
+        prefs.edit().remove("api_config_list").apply()
     }
 
     fun selectActiveConfig(activeId: String) {
         activeConfigId.value = activeId
         prefs.edit().putString("active_config_id", activeId).apply()
-        
-        val activeConfig = apiConfigList.value.find { it.id == activeId }
-        if (activeConfig != null) {
-            prefs.edit()
-                .putString("api_provider", activeConfig.provider)
-                .putString("api_url", activeConfig.apiUrl)
-                .putString("api_key", activeConfig.apiKey)
-                .putString("api_model", activeConfig.modelName)
-                .apply()
-        }
+        // 仅记录激活 id：api_key/provider/url/model 的散装明文键无任何读方，纯泄露面，不再写入
     }
 
     fun changeAppLanguage(newLang: String) {

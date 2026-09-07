@@ -30,13 +30,20 @@ object ApiConfigVault {
         if (migrated) return
         migrated = true
         runCatching {
-            val legacy = context.getSharedPreferences("loyea_prefs", Context.MODE_PRIVATE)
-                .getString("api_config_list", null)
+            val prefs = context.getSharedPreferences("loyea_prefs", Context.MODE_PRIVATE)
+            val legacy = prefs.getString("api_config_list", null)
             if (!legacy.isNullOrBlank()) {
+                // 覆盖写入：历史 saveApiConfigList 明文写回的较新配置借此自愈进加密库
                 securePrefs(context)?.edit()?.putString(SECURE_KEY, legacy)?.apply()
-                context.getSharedPreferences("loyea_prefs", Context.MODE_PRIVATE)
-                    .edit().remove("api_config_list").apply()
             }
+            // 无条件清除明文配置与散装残留（api_key 等为 selectActiveConfig 历史死写入，无读方）
+            prefs.edit()
+                .remove("api_config_list")
+                .remove("api_key")
+                .remove("api_provider")
+                .remove("api_url")
+                .remove("api_model")
+                .apply()
         }
     }
 

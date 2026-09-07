@@ -63,24 +63,37 @@ class GreetingWorker(
             val storageManager = ChatStorageManager(context)
             val llmClient = LlmClient()
 
-            // 1. Get API config
+            // 1. Get API config（配置在加密库 ApiConfigVault——明文键迁移后已删，读旧键会永远为空）
             val activeConfigId = prefs.getString("active_config_id", "") ?: ""
-            val savedConfigsJson = prefs.getString("api_config_list", "") ?: ""
-            if (savedConfigsJson.isBlank()) return@withContext Result.failure()
+            val savedConfigsJson = com.loyea.storage.ApiConfigVault.loadJson(context) ?: ""
+            // 本 Worker 为链式自排调度：任何"本轮无事可做"都必须续排下一次，failure 会断链致问候永久失效
+            if (savedConfigsJson.isBlank()) {
+                scheduleNextGreeting(60)
+                return@withContext Result.success()
+            }
             val type = object : TypeToken<List<ApiConfig>>() {}.type
             val apiConfigList = Gson().fromJson<List<ApiConfig>>(savedConfigsJson, type) ?: emptyList()
             val activeConfig = apiConfigList.find { it.id == activeConfigId } ?: apiConfigList.firstOrNull()
-            if (activeConfig == null) return@withContext Result.failure()
+            if (activeConfig == null) {
+                scheduleNextGreeting(60)
+                return@withContext Result.success()
+            }
 
             // 2. Get active session and character
             var sessionId = prefs.getString("current_session_id", "") ?: ""
             val sessions = storageManager.loadSessionList()
             
             if (sessionId.isBlank() || sessions.none { it.id == sessionId }) {
-                sessionId = sessions.firstOrNull()?.id ?: return@withContext Result.failure()
+                sessionId = sessions.firstOrNull()?.id ?: run {
+                    scheduleNextGreeting(60)
+                    return@withContext Result.success()
+                }
             }
-            
-            val currentSession = sessions.find { it.id == sessionId } ?: return@withContext Result.failure()
+
+            val currentSession = sessions.find { it.id == sessionId } ?: run {
+                scheduleNextGreeting(60)
+                return@withContext Result.success()
+            }
             
             val charId = currentSession.characterId
             val allCards = storageManager.loadCharacterCards()
