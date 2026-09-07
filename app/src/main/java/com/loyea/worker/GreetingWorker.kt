@@ -118,7 +118,15 @@ class GreetingWorker(
                 userName
             )
             val eventInput = BackgroundPromptTemplates.greetingEventInput(promptParts.turnContextSnapshot)
-            val requestHistory = history + Message(
+            // 图片消息以 [图片｜自动图注] 形式进入问候历史（无图注时退回占位）
+            val appLangForHistory = prefs.getString("app_language", "zh") ?: "zh"
+            val requestHistory = history.map { m ->
+                if (!m.imageUrl.isNullOrBlank()) {
+                    val tag = if (m.imageDesc.isNullOrBlank()) (if (appLangForHistory == "en") "[Image]" else "[图片]")
+                        else (if (appLangForHistory == "en") "[Image | ${m.imageDesc}]" else "[图片｜${m.imageDesc}]")
+                    m.copy(content = (m.content.ifBlank { "" } + (if (m.content.isBlank()) "" else "\n") + tag))
+                } else m
+            } + Message(
                 id = "background-greeting-event",
                 content = eventInput,
                 sender = Sender.USER,

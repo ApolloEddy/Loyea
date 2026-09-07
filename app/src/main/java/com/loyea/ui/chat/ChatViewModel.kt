@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.util.Log
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.derivedStateOf
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -45,6 +46,34 @@ import androidx.work.OutOfQuotaPolicy
 import androidx.work.workDataOf
 import androidx.work.WorkInfo
 
+
+
+/**
+ * 消息列表状态：对外保持 .value 读写语义兼容既有调用点；底层 SnapshotStateList
+ * 支持流式热路径的 O(1) 原地更新（此前每个文字块全表复制，是长会话卡顿的根源之一）。
+ */
+class MessageListState {
+    private val backing = mutableStateListOf<Message>()
+
+    val size: Int get() = backing.size
+
+    operator fun get(index: Int): Message = backing[index]
+    fun indexOfId(id: String): Int = backing.indexOfFirst { it.id == id }
+    fun updateAt(index: Int, transform: (Message) -> Message) {
+        if (index in backing.indices) backing[index] = transform(backing[index])
+    }
+
+    var value: List<Message>
+        get() = backing
+        set(newValue) {
+            // 原地更新路径传入的正是底层列表自身（同一实例）→ 已可见，跳过重建
+            if (newValue === backing as List<Message>) return
+            backing.clear()
+            backing.addAll(newValue)
+        }
+
+    operator fun getValue(thisRef: Any?, property: Any?): List<Message> = backing
+}
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val context = application.applicationContext
@@ -122,8 +151,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // 7. 消息列表状态管理
-    var messages = mutableStateOf<List<Message>>(emptyList())
-        private set
+    val messages = MessageListState()
 
     // 8. 角色卡片列表与当前角色卡片
     var characterCardList = mutableStateOf<List<CharacterCard>>(emptyList())
@@ -386,7 +414,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         userName.value = prefs.getString("user_name", "Loyea Developer") ?: "Loyea Developer"
 
         // 加载 API 列表与激活 ID
-        val savedConfigsJson = prefs.getString("api_config_list", "") ?: ""
+        val savedConfigsJson = com.loyea.storage.ApiConfigVault.loadJson(context) ?: ""
         var list = if (savedConfigsJson.isNotBlank()) {
             try {
                 val type = object : TypeToken<List<ApiConfig>>() {}.type
@@ -408,7 +436,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 if (updated) {
-                    prefs.edit().putString("api_config_list", Gson().toJson(upgraded)).apply()
+                    com.loyea.storage.ApiConfigVault.saveJson(context, Gson().toJson(upgraded))
                 }
                 upgraded
             } catch (e: Exception) {
@@ -454,7 +482,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 enableReasoning = true
             )
             list = listOf(deepseekPro, deepseekFlash, mimoPro)
-            prefs.edit().putString("api_config_list", Gson().toJson(list)).apply()
+            com.loyea.storage.ApiConfigVault.saveJson(context, Gson().toJson(list))
         }
         apiConfigList.value = list.filter { !it.provider.equals("Anthropic", ignoreCase = true) }
 
@@ -939,6 +967,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 updateSessionTitleIfNeeded(sessionId, finalMsgs)
                 // SSE 流式接收
                 startAiResponseStream(sessionId, finalMsgs, activeCard)
+                // 后台自动图注：识图消息异步生成短描述（避让主回复请求）
+                if (!imageUrl.isNullOrBlank()) {
+                    viewModelScope.launch(Dispatchers.IO) {
+                        kotlinx.coroutines.delay(1_500)
+                        generateImageCaptionAsync(sessionId, userMsg.id, imageUrl)
+                    }
+                }
             }
         }
     }
@@ -1692,19 +1727,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                     val duration = ((System.currentTimeMillis() - startTime) / 1000).toInt()
                                     calculatedDuration = if (accumulatedThoughts.isNotEmpty()) duration else 0
                                 }
-                                currentList = messages.value.map { msg ->
-                                    if (msg.id == aiMessageId) {
+                                val hotIdx = messages.indexOfId(aiMessageId)
+                                if (hotIdx >= 0) {
+                                    messages.updateAt(hotIdx) { msg ->
                                         msg.copy(
                                             content = cleanFinalContent(displayContent),
                                             contentSegments = currentSegments(),
                                             isStillThinking = false,
                                             thoughtDurationSeconds = calculatedDuration ?: 0
                                         )
-                                    } else {
-                                        msg
                                     }
                                 }
-                                messages.value = currentList
                             }
                             is StreamEvent.ToolCalls -> {
                                 // 本轮回文本段到此收拢（此后进入工具执行阶段，文本段在分段序列中定格）
@@ -2948,6 +2981,115 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             "tool_auth_haptic" -> toolAuthHaptic.value = enabled
         }
         prefs.edit().putBoolean(key, enabled).apply()
+    }
+
+    /** 后台自动图注：为识图消息生成短描述并存入 Message.imageDesc（失败静默跳过）。 */
+    private fun generateImageCaptionAsync(sessionId: String, messageId: String, imagePath: String) {
+        val targetVisionCfg = visionConfigId.value.takeIf { it.isNotBlank() }
+            ?.let { id -> apiConfigList.value.find { it.id == id } }
+        val cfg = targetVisionCfg ?: activeApiConfig.value
+        if (!enableMultimodal.value || cfg.apiKey.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val desc = llmClient.describeImage(cfg, imagePath) ?: return@launch
+                val base = if (currentSessionId.value == sessionId) messages.value
+                    else runCatching { storageManager.loadSessionMessages(sessionId) }.getOrDefault(emptyList())
+                val updated = base.map { if (it.id == messageId) it.copy(imageDesc = desc) else it }
+                if (currentSessionId.value == sessionId) messages.value = updated
+                saveMessagesAsync(sessionId, updated)
+            }.onFailure { it.printStackTrace() }
+        }
+    }
+
+    // ---------- 会话导出 / 导入（备份，2026-09-07） ----------
+
+    data class SessionExportPayload(val session: ChatSession, val messages: List<Message>)
+
+    fun exportSessionMarkdown(sessionId: String, onReady: (File?) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val session = sessions.value.find { it.id == sessionId }
+            val msgs = runCatching { storageManager.loadSessionMessages(sessionId) }.getOrDefault(emptyList())
+            if (session == null) {
+                withContext(Dispatchers.Main) { onReady(null) }
+                return@launch
+            }
+            val df = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+            val aiName = activeCharacterCard.value.name.ifBlank { "AI" }
+            val user = userName.value.ifBlank { "用户" }
+            val sb = StringBuilder("# ${session.title}\n\n")
+            msgs.forEach { m ->
+                if (m.content.isBlank() && m.imageUrl.isNullOrBlank()) return@forEach
+                val who = if (m.sender == Sender.USER) user else aiName
+                sb.append("**").append(who).append("** · ").append(df.format(java.util.Date(m.timestamp))).append("\n\n")
+                if (m.content.isNotBlank()) sb.append(m.content).append("\n\n")
+                if (!m.imageUrl.isNullOrBlank()) {
+                    sb.append(if (m.imageDesc.isNullOrBlank()) "[图片]" else "[图片｜${m.imageDesc}]").append("\n\n")
+                }
+            }
+            val dir = File(context.cacheDir, "exports").apply { mkdirs() }
+            val safeTitle = session.title.replace(Regex("[\\/:*?\"<>|]"), "_").take(40).ifBlank { "session" }
+            val f = File(dir, "$safeTitle-${System.currentTimeMillis()}.md")
+            runCatching { f.writeText(sb.toString()) }
+            withContext(Dispatchers.Main) { onReady(f.takeIf { it.exists() }) }
+        }
+    }
+
+    fun exportSessionJson(sessionId: String, onReady: (File?) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val session = sessions.value.find { it.id == sessionId }
+            val msgs = runCatching { storageManager.loadSessionMessages(sessionId) }.getOrDefault(emptyList())
+            if (session == null) {
+                withContext(Dispatchers.Main) { onReady(null) }
+                return@launch
+            }
+            val dir = File(context.cacheDir, "exports").apply { mkdirs() }
+            val safeTitle = session.title.replace(Regex("[\\/:*?\"<>|]"), "_").take(40).ifBlank { "session" }
+            val f = File(dir, "$safeTitle-${System.currentTimeMillis()}.json")
+            runCatching { f.writeText(Gson().toJson(SessionExportPayload(session, msgs))) }
+            withContext(Dispatchers.Main) { onReady(f.takeIf { it.exists() }) }
+        }
+    }
+
+    /** 导入会话备份 JSON：生成新会话 id 与新消息 id；图片/音频等外部媒体不迁移（仅保留文本与描述）。 */
+    fun importSessionJson(uri: android.net.Uri, onDone: (String?) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val newId = runCatching {
+                val text = context.contentResolver.openInputStream(uri)?.use {
+                    it.bufferedReader().readText()
+                } ?: error("empty")
+                val payload = Gson().fromJson(text, SessionExportPayload::class.java)
+                    ?: error("invalid")
+                requireNotNull(payload.session)
+                val sid = "sess_" + java.util.UUID.randomUUID().toString().replace("-", "").take(12)
+                val imported = payload.session.copy(id = sid, lastActiveTime = System.currentTimeMillis())
+                val newMsgs = payload.messages.map { m ->
+                    m.copy(
+                        id = newMessageId(),
+                        imageUrl = null,
+                        audioUrl = null,
+                        imageDesc = null,
+                        audioDuration = 0,
+                        isAudioPlaying = false,
+                        isAudioSynthesizing = false,
+                        versions = emptyList(),
+                        activeVersionIndex = 0,
+                        contentSegments = emptyList()
+                    )
+                }
+                storageManager.saveSessionMessages(sid, newMsgs)
+                storageManager.saveSessionList(listOf(imported) + storageManager.loadSessionList().filter { it.id != sid })
+                sid
+            }.getOrNull()
+            withContext(Dispatchers.Main) {
+                if (newId != null) {
+                    viewModelScope.launch(Dispatchers.IO) {
+                        val refreshed = storageManager.loadSessionList()
+                        withContext(Dispatchers.Main) { sessions.value = refreshed }
+                    }
+                }
+                onDone(newId)
+            }
+        }
     }
 
     fun updateMediaCacheCleanDays(days: Int) {

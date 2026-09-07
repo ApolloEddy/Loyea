@@ -93,7 +93,7 @@ class MemoryConsolidationWorker(
             )
 
             val memoryApiId = prefs.getString("memory_api_config_id", "") ?: ""
-            val savedConfigsJson = prefs.getString("api_config_list", "") ?: ""
+            val savedConfigsJson = com.loyea.storage.ApiConfigVault.loadJson(context) ?: ""
             val apiConfigList = if (savedConfigsJson.isNotBlank()) {
                 val type = object : TypeToken<List<ApiConfig>>() {}.type
                 Gson().fromJson<List<ApiConfig>>(savedConfigsJson, type) ?: emptyList()

@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -1715,6 +1716,30 @@ class LlmClient {
             throw ImageGenException(e.message ?: e.javaClass.simpleName)
         }
     }
+
+    /**
+     * 自动图注：让视觉模型用 ≤15 字概括图片内容（仅输出短语）。
+     * 失败/超时返回 null，调用方静默跳过。
+     */
+    suspend fun describeImage(config: com.loyea.ui.settings.ApiConfig, imagePath: String): String? =
+        withContext(Dispatchers.IO) {
+            if (config.apiKey.isBlank()) return@withContext null
+            withTimeoutOrNull(20_000L) {
+                val sb = StringBuilder()
+                val messages = listOf(
+                    LlmChatMessage(
+                        role = "user",
+                        content = "用不超过 15 个字概括这张图片的内容。只输出这个短语本身，不要引号、句号或任何解释。",
+                        imageUrl = imagePath
+                    )
+                )
+                sendChatCompletionStream(config = config, messages = messages, tools = emptyList())
+                    .collect { event ->
+                        if (event is StreamEvent.Content) sb.append(event.text)
+                    }
+                sb.toString().trim().take(60).ifBlank { null }
+            }
+        }
 
     data class ParsedStreamState(
         val thoughts: String,

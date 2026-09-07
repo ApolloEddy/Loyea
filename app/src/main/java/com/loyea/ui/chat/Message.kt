@@ -58,6 +58,8 @@ data class Message(
 
     // 多模态 Vision 与 Speech 新增字段，带默认值以兼容旧数据
     val imageUrl: String? = null,
+    /** 图片的短描述（后台自动图注生成，≤15 字）；文本模型降级与问候历史以 [图片｜描述] 引用 */
+    val imageDesc: String? = null,
     val audioUrl: String? = null,
     val audioDuration: Int = 0,
     val isAudioPlaying: Boolean = false,

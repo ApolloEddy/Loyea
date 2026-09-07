@@ -125,6 +125,8 @@ fun MainScreen(
                             onToggleSystemTime = onToggleSystemTime,
                             onUserNameSave = onUserNameChange,
                             onUpdateCoreMemories = onUpdateCoreMemories,
+                            onExportSession = { id, cb -> viewModel?.exportSessionMarkdown(id, cb) },
+                            onImportSession = { uri, cb -> viewModel?.importSessionJson(uri, cb) },
                             onTriggerManualMemorySummary = onTriggerManualMemorySummary,
                             onRenameSession = onRenameSession,
                             onRegenerateSessionTitle = onRegenerateSessionTitle,
@@ -197,6 +199,8 @@ fun MainScreen(
                             onToggleSystemTime = onToggleSystemTime,
                             onUserNameSave = onUserNameChange,
                             onUpdateCoreMemories = onUpdateCoreMemories,
+                            onExportSession = { id, cb -> viewModel?.exportSessionMarkdown(id, cb) },
+                            onImportSession = { uri, cb -> viewModel?.importSessionJson(uri, cb) },
                             onTriggerManualMemorySummary = onTriggerManualMemorySummary,
                             onRenameSession = onRenameSession,
                             onRegenerateSessionTitle = onRegenerateSessionTitle
@@ -276,7 +280,9 @@ fun SidebarContent(
     onTriggerManualMemorySummary: (String) -> Boolean = { false },
     onRenameSession: (String, String) -> Unit = { _, _ -> },
     onRegenerateSessionTitle: (String) -> Unit = {},
-    onCloseDrawer: () -> Unit = {}
+    onCloseDrawer: () -> Unit = {},
+    onExportSession: (String, (java.io.File?) -> Unit) -> Unit = { _, _ -> },
+    onImportSession: (android.net.Uri, (String?) -> Unit) -> Unit = { _, _ -> }
 ) {
     val isEn = appLanguage == "en"
     var sessionToDelete by remember { mutableStateOf<String?>(null) }
@@ -564,6 +570,21 @@ fun SidebarContent(
                         modifier = Modifier.weight(1f)
                     )
                     var menuExpanded by remember { mutableStateOf(false) }
+                    val mediaContext = LocalContext.current
+                    val importLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+                        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+                    ) { uri ->
+                        if (uri != null) {
+                            onImportSession(uri) { newId ->
+                                Toast.makeText(
+                                    mediaContext,
+                                    if (newId != null) (if (isEn) "Session imported" else "会话已导入")
+                                    else (if (isEn) "Import failed" else "导入失败"),
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }
+                    }
                     Box {
                         IconButton(
                             onClick = { menuExpanded = true },
@@ -604,6 +625,54 @@ fun SidebarContent(
                                 onClick = {
                                     menuExpanded = false
                                     onRegenerateSessionTitle(session.id)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (isEn) "Export Markdown" else "导出 Markdown", fontSize = 13.sp) },
+                                leadingIcon = { Icon(Icons.Default.Notes, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onExportSession(session.id) { file ->
+                                        file?.let { f ->
+                                            val fileUri = androidx.core.content.FileProvider.getUriForFile(
+                                                mediaContext, mediaContext.packageName + ".fileprovider", f
+                                            )
+                                            val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                                type = "text/markdown"
+                                                putExtra(android.content.Intent.EXTRA_STREAM, fileUri)
+                                                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                            }
+                                            mediaContext.startActivity(android.content.Intent.createChooser(send, f.name))
+                                        }
+                                    }
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (isEn) "Export JSON (backup)" else "导出 JSON (备份)", fontSize = 13.sp) },
+                                leadingIcon = { Icon(Icons.Default.SaveAlt, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onExportSession(session.id) { file ->
+                                        file?.let { f ->
+                                            val fileUri = androidx.core.content.FileProvider.getUriForFile(
+                                                mediaContext, mediaContext.packageName + ".fileprovider", f
+                                            )
+                                            val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                                type = "application/json"
+                                                putExtra(android.content.Intent.EXTRA_STREAM, fileUri)
+                                                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                            }
+                                            mediaContext.startActivity(android.content.Intent.createChooser(send, f.name))
+                                        }
+                                    }
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (isEn) "Import session backup" else "导入会话备份", fontSize = 13.sp) },
+                                leadingIcon = { Icon(Icons.Default.FileOpen, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                                onClick = {
+                                    menuExpanded = false
+                                    runCatching { importLauncher.launch(arrayOf("application/json")) }
                                 }
                             )
                             DropdownMenuItem(

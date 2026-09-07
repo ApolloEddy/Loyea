@@ -52,7 +52,9 @@ object LlmConversationBuilder {
 
             var textContent = message.content
             if (effectiveImage == null && !message.imageUrl.isNullOrBlank()) {
-                textContent = (if (textContent.isBlank()) "" else "$textContent\n") + "[图片]"
+                // 有自动图注时以 [图片｜描述] 提供给文本模型（可理解图片语境），否则退回占位
+                val tag = if (message.imageDesc.isNullOrBlank()) "[图片]" else "[图片｜${message.imageDesc}]"
+                textContent = (if (textContent.isBlank()) "" else "$textContent\n") + tag
             }
             if (effectiveAudio == null && !message.audioUrl.isNullOrBlank() && textContent.isBlank()) {
                 textContent = "[语音消息]"
