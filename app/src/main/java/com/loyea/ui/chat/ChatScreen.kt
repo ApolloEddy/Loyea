@@ -229,29 +229,42 @@ fun ChatScreen(
         }
     }
 
-    // 窗口扩展/释放：上滑近头部补载 20 条、远离头部释放；下滑对称（流式期间不释放底部）
+    // 窗口扩展/释放：上滑近头部补载 20 条、远离头部释放；下滑对称（流式期间不释放底部）。
+    // firstIdx/lastIdx 是 LazyColumn 窗口内下标（0 位是顶部 Spacer），+windowStart 才是全局下标；
+    // 锚定进行中不介入（否则"尚未滚到锚点"会被误判为用户滑到窗口头，把 windowStart 级联砍回 0）
     LaunchedEffect(windowStart, windowEnd, messages.size, activeStreaming) {
         snapshotFlow { listState.firstVisibleItemIndex }.collect { firstIdx ->
+            if (anchorPending) return@collect
             val lastIdx = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: firstIdx
-            if (firstIdx - windowStart <= 4 && windowStart > 0) {
-                windowStart = (windowStart - 20).coerceAtLeast(0)
-            } else if (firstIdx - windowStart > 60) {
-                windowStart = (firstIdx - 40).coerceAtLeast(0)
+            if (firstIdx - 1 <= 4 && windowStart > 0) {
+                val target = (windowStart - 20).coerceAtLeast(0)
+                val inserted = windowStart - target
+                windowStart = target
+                // 头插后同下标内容整体后移，补偿滚动防止视口跳动
+                if (inserted > 0) runCatching { listState.scrollToItem(firstIdx + inserted) }
+            } else if (firstIdx - 1 > 60) {
+                val target = ((firstIdx - 1 + windowStart) - 40).coerceAtLeast(0)
+                val released = target - windowStart
+                windowStart = target
+                if (released > 0) runCatching { listState.scrollToItem((firstIdx - released).coerceAtLeast(0)) }
                 if (windowEnd == Int.MAX_VALUE) windowEnd = messages.size
             }
-            if (windowEnd < messages.size && lastIdx >= windowEnd - 4) {
+            val globalLast = lastIdx - 1 + windowStart
+            if (windowEnd < messages.size && globalLast >= windowEnd - 4) {
                 windowEnd = minOf(messages.size, windowEnd + 20)
-            } else if (!activeStreaming && windowEnd in 1 until messages.size && windowEnd - lastIdx > 60) {
-                windowEnd = (lastIdx + 40).coerceAtMost(messages.size)
+            } else if (!activeStreaming && windowEnd in 1 until messages.size && windowEnd - globalLast > 60) {
+                windowEnd = (globalLast + 40).coerceAtMost(messages.size)
             }
         }
     }
 
-    // 窗口切片：LazyColumn 只渲染窗口内消息（key 仍为全局唯一消息 id）
-    val displayMessages = remember(messages, windowStart, windowEnd) {
+    // 窗口切片：LazyColumn 只渲染窗口内消息（key 仍为全局唯一消息 id）。
+    // 必须是隔离副本而非 subList 视图：视图随 backing 收缩变形，LazyColumn 预取器
+    // 持旧下标异步取项时会越界崩溃（窗口只有几十条，复制成本可忽略）
+    val displayMessages = remember(messages.size, windowStart, windowEnd) {
         val from = windowStart.coerceIn(0, messages.size)
         val to = windowEnd.coerceIn(from, messages.size)
-        messages.subList(from, to)
+        messages.subList(from, to).toList()
     }
 
     // 会话载入/切换：等待新会话消息到达（VM 切换时已先清空列表），定位到最后一次
@@ -386,9 +399,11 @@ fun ChatScreen(
                 // 占位，防止贴顶
                 item { Spacer(modifier = Modifier.height(8.dp)) }
 
-                itemsIndexed(displayMessages, key = { _, m -> m.id }) { index, message ->
+                itemsIndexed(displayMessages, key = { _, m -> m.id }) { index, item ->
                     val globalIndex = windowStart + index
-                    val prev = if (globalIndex > 0) messages[globalIndex - 1] else null
+                    // 读最新 backing 保证流式文字实时刷新；预取竞态/切换瞬间越界时回落副本值
+                    val message = messages.getOrNull(globalIndex) ?: item
+                    val prev = messages.getOrNull(globalIndex - 1)
                     // 时间间隔分隔：与上一条消息间隔超过阈值时，居中显示当前时间（参考 ChatGPT/豆包）
                     if (prev != null) {
                         val gap = message.timestamp - prev.timestamp

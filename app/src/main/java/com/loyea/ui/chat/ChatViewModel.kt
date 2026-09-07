@@ -58,6 +58,7 @@ class MessageListState {
     val size: Int get() = backing.size
 
     operator fun get(index: Int): Message = backing[index]
+    fun getOrNull(index: Int): Message? = backing.getOrNull(index)
     fun indexOfId(id: String): Int = backing.indexOfFirst { it.id == id }
     fun updateAt(index: Int, transform: (Message) -> Message) {
         if (index in backing.indices) backing[index] = transform(backing[index])
