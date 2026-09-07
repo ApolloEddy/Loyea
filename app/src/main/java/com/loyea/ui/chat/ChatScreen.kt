@@ -164,13 +164,20 @@ fun ChatScreen(
     var autoPinActive by remember { mutableStateOf(true) }
     // 会话锚定进行中标记：锚定完成前自动滚动让位（冷启动即视为待锚定）
     var anchorPending by remember { mutableStateOf(true) }
+    // 显示窗口（April 式懒加载）：VM 持有全量历史供 payload；UI 只渲染窗口内消息，
+    // 上滑近窗口头则向前补载 20 条、远离则释放；下滑对称（流式期间不释放底部）
+    var windowStart by remember { mutableIntStateOf(0) }
+    var windowEnd by remember { mutableIntStateOf(Int.MAX_VALUE) }
     // 回到底部气泡：底部判定容差（dp 换算像素，避免密度差异）
     val bottomTolerancePx = with(LocalDensity.current) { 64.dp.toPx() }
     val isAtBottom by remember {
         derivedStateOf {
             val info = listState.layoutInfo
             val last = info.visibleItemsInfo.lastOrNull() ?: return@derivedStateOf true
-            last.index >= info.totalItemsCount - 1 && last.offset + last.size <= info.viewportEndOffset + bottomTolerancePx
+            // 全局判定：可见末条的全局下标（-1 去顶部 Spacer 偏移）到最后一条消息才算底——
+            // 窗口化后 LazyColumn 列表尾 ≠ 消息底
+            last.index - 1 + windowStart >= messages.size - 1 &&
+                last.offset + last.size <= info.viewportEndOffset + bottomTolerancePx
         }
     }
     // 角标计数按「最后一条消息是否在屏幕上」判定：锚定阅读位不算离底，
@@ -180,15 +187,9 @@ fun ChatScreen(
     val isLastVisible by remember {
         derivedStateOf {
             val info = listState.layoutInfo
-            val lastContentIdx = info.totalItemsCount - 2 // 末位是底部 Spacer
-            info.visibleItemsInfo.any { it.index >= lastContentIdx }
+            info.visibleItemsInfo.any { it.index - 1 + windowStart >= messages.size - 1 }
         }
     }
-    // 显示窗口（April 式懒加载）：VM 持有全量历史供 payload；UI 只渲染窗口内消息，
-    // 上滑近窗口头则向前补载 20 条、远离则释放；下滑对称（流式期间不释放底部）
-    var windowStart by remember { mutableIntStateOf(0) }
-    var windowEnd by remember { mutableIntStateOf(Int.MAX_VALUE) }
-
     // 流式响应中的占位气泡（isThinking 每轮流前置位，工具执行期由 isMcpRunning 补位，覆盖整个多轮响应）
     val activeStreaming = isThinking || isMcpRunning
     val streamingMsg = if (activeStreaming) messages.lastOrNull { it.sender == Sender.AI } else null
@@ -231,22 +232,17 @@ fun ChatScreen(
 
     // 窗口扩展/释放：上滑近头部补载 20 条、远离头部释放；下滑对称（流式期间不释放底部）。
     // firstIdx/lastIdx 是 LazyColumn 窗口内下标（0 位是顶部 Spacer），+windowStart 才是全局下标；
-    // 锚定进行中不介入（否则"尚未滚到锚点"会被误判为用户滑到窗口头，把 windowStart 级联砍回 0）
+    // 锚定进行中不介入（否则"尚未滚到锚点"会被误判为用户滑到窗口头，把 windowStart 级联砍回 0）。
+    // 此处只做纯赋值：collect 内若先滚后赋值，赋值改变本 effect 的 key 会当场取消协程，
+    // 补偿的 scrollToItem 未执行完就被掐死（此前视口跳动的根源）——补偿在下方独立 effect
     LaunchedEffect(windowStart, windowEnd, messages.size, activeStreaming) {
         snapshotFlow { listState.firstVisibleItemIndex }.collect { firstIdx ->
             if (anchorPending) return@collect
             val lastIdx = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: firstIdx
             if (firstIdx - 1 <= 4 && windowStart > 0) {
-                val target = (windowStart - 20).coerceAtLeast(0)
-                val inserted = windowStart - target
-                windowStart = target
-                // 头插后同下标内容整体后移，补偿滚动防止视口跳动
-                if (inserted > 0) runCatching { listState.scrollToItem(firstIdx + inserted) }
+                windowStart = (windowStart - 20).coerceAtLeast(0)
             } else if (firstIdx - 1 > 60) {
-                val target = ((firstIdx - 1 + windowStart) - 40).coerceAtLeast(0)
-                val released = target - windowStart
-                windowStart = target
-                if (released > 0) runCatching { listState.scrollToItem((firstIdx - released).coerceAtLeast(0)) }
+                windowStart = ((firstIdx - 1 + windowStart) - 40).coerceAtLeast(0)
                 if (windowEnd == Int.MAX_VALUE) windowEnd = messages.size
             }
             val globalLast = lastIdx - 1 + windowStart
@@ -254,6 +250,24 @@ fun ChatScreen(
                 windowEnd = minOf(messages.size, windowEnd + 20)
             } else if (!activeStreaming && windowEnd in 1 until messages.size && windowEnd - globalLast > 60) {
                 windowEnd = (globalLast + 40).coerceAtMost(messages.size)
+            }
+        }
+    }
+
+    // 头部补载/释放的视口补偿：窗口头移动 delta 后同内容下标平移 delta。等 LazyColumn
+    // 布局真正长出/收掉对应条目（totalItemsCount 门禁）后瞬移回原内容——独立常驻
+    // effect，不会被窗口赋值取消
+    LaunchedEffect(Unit) {
+        var prevStart = windowStart
+        snapshotFlow { windowStart }.collect { newStart ->
+            val delta = newStart - prevStart
+            val prevCount = listState.layoutInfo.totalItemsCount
+            prevStart = newStart
+            if (delta == 0 || anchorPending) return@collect
+            snapshotFlow { listState.layoutInfo.totalItemsCount }
+                .first { it >= prevCount - delta }
+            runCatching {
+                listState.scrollToItem((listState.firstVisibleItemIndex - delta).coerceAtLeast(0))
             }
         }
     }
@@ -280,6 +294,14 @@ fun ChatScreen(
         autoPinActive = false // 抑制载入即滚到底，让位给锚点
         unseenBottomCount = 0
         lastSeenBottomId = messages.lastOrNull()?.id
+        // 先等窗口切片真正提交进 LazyColumn（布局可见项里出现窗口头消息的 key），
+        // 否则 scrollToItem 落在旧数据上下标上，随后数据一变位置就漂移（载入不在锚点的根源）。
+        // 不能用 totalItemsCount 判断：从全量切到窗口 count 变小，旧计数值会立即满足条件
+        val headId = messages.getOrNull(windowStart)?.id
+        if (headId != null) {
+            snapshotFlow { listState.layoutInfo.visibleItemsInfo.map { it.key } }
+                .first { keys -> keys.any { it == headId } }
+        }
         runCatching {
             listState.scrollToItem((targetIdx + 1 - windowStart).coerceAtLeast(0))
         }
@@ -551,8 +573,13 @@ fun ChatScreen(
                                 unseenBottomCount = 0
                                 autoPinActive = true
                                 coroutineScope.launch {
-                                    windowEnd = Int.MAX_VALUE // 展开窗口至最新，再滚动回底
-                                    listState.animateScrollToItem((messages.size + 1 - windowStart).coerceAtLeast(0))
+                                    // 先展开窗口并等数据真正提交进 LazyColumn，再动画回底——
+                                    // 否则动画在旧窗口切片上起跑，目标下标越界被钳停半路
+                                    val target = (messages.size + 1 - windowStart).coerceAtLeast(0)
+                                    windowEnd = Int.MAX_VALUE
+                                    snapshotFlow { listState.layoutInfo.totalItemsCount }
+                                        .first { it >= target }
+                                    listState.animateScrollToItem(target)
                                 }
                             },
                         contentAlignment = Alignment.Center
