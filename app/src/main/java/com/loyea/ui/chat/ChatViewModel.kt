@@ -1889,8 +1889,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                             toolCall.name.endsWith("__read_url", ignoreCase = true) ||
                                             toolCall.name.endsWith(".read_url", ignoreCase = true)
 
+                            // 联网开关关闭时禁止 web_search/read_url 执行（XML 文本兜底不经过
+                            // 工具列表过滤，此处统一兜底检查，防止绕过用户联网开关）
+                            val webAccessAllowed = apiConfig.enableSearch
                             if (isDuplicate) {
                                 toolOutput = "[系统拦截] 检测到重复的工具调用。您在本次回答中已调用过 ${toolCall.name} 且参数完全一致，请不要重复调用，直接根据已有信息组织最终语言回复用户。"
+                                success = false
+                            } else if ((isWebSearch || isReadUrl) && !webAccessAllowed) {
+                                toolOutput = "Permission Denied: Web search/reading is disabled by the user."
                                 success = false
                             } else if (isVoiceReply) {
                                 executedToolsSignature.add(toolSignature)

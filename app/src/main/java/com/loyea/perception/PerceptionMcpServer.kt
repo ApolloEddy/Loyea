@@ -164,6 +164,9 @@ class PerceptionMcpServer(private val context: Context) {
                 "get_environment_light" -> if (!prefs.getBoolean("tool_auth_environment", true)) "Permission Denied: Environment light access is unauthorized by the user." else null
                 "get_battery_status" -> if (!prefs.getBoolean("tool_auth_device", true)) "Permission Denied: Device battery/power access is unauthorized by the user." else null
                 "get_bluetooth_status" -> if (!prefs.getBoolean("tool_auth_bluetooth_activity", true)) "Permission Denied: Bluetooth status access is unauthorized by the user." else null
+                // 此前缺失：XML 文本兜底路径不经过工具列表过滤，wifi/noise 曾可绕过授权直调
+                "get_wifi_status" -> if (!prefs.getBoolean("tool_auth_device", true)) "Permission Denied: Network status access is unauthorized by the user." else null
+                "get_noise_level" -> if (!prefs.getBoolean("tool_auth_environment", true)) "Permission Denied: Ambient noise access is unauthorized by the user." else null
                 "get_activity_state" -> if (!prefs.getBoolean("tool_auth_bluetooth_activity", true)) "Permission Denied: Activity state access is unauthorized by the user." else null
                 "get_health_data" -> if (!prefs.getBoolean("tool_auth_health", true)) "Permission Denied: Health data access is unauthorized by the user." else null
                 else -> null
