@@ -283,31 +283,34 @@ fun ChatScreen(
         messages.subList(from, to).toList()
     }
 
-    // 会话载入/切换：等待新会话消息到达（VM 切换时已先清空列表），定位到最后一次
-    // 用户消息处；初始窗口只从锚点向前留少量上文，更早历史上滑时再动态载入
+    // 会话载入/切换：等待新会话消息到达（VM 切换时已先清空列表），落位到会话末尾。
+    // 不再锚定"最后用户消息"：长回复（思考条/工具卡/语音）比一屏高时结尾落在折叠线
+    // 以下，被感知为"打开不是最后一条对话"；初始窗口只保留尾部若干条，更早历史
+    // 上滑时再动态载入
     LaunchedEffect(currentSessionId) {
         if (currentSessionId.isEmpty()) return@LaunchedEffect
         anchorPending = true
         snapshotFlow { messages.size }.first { it > 0 }
-        val lastUserIdx = messages.indexOfLast { it.sender == Sender.USER }
-        val targetIdx = if (lastUserIdx >= 0) lastUserIdx else messages.size - 1
-        windowStart = (targetIdx - 8).coerceAtLeast(0)
+        windowStart = (messages.size - 30).coerceAtLeast(0)
         windowEnd = Int.MAX_VALUE
-        autoPinActive = false // 抑制载入即滚到底，让位给锚点
+        autoPinActive = false // 落位滚动由本 effect 独占执行，抑制自动滚动并发介入
         unseenBottomCount = 0
         lastSeenBottomId = messages.lastOrNull()?.id
         // 先等窗口切片真正提交进 LazyColumn（布局可见项里出现窗口头消息的 key），
-        // 否则 scrollToItem 落在旧数据上下标上，随后数据一变位置就漂移（载入不在锚点的根源）。
+        // 否则 scrollToItem 落在旧数据上下标上，随后数据一变位置就漂移。
         // 不能用 totalItemsCount 判断：从全量切到窗口 count 变小，旧计数值会立即满足条件
         val headId = messages.getOrNull(windowStart)?.id
         if (headId != null) {
             snapshotFlow { listState.layoutInfo.visibleItemsInfo.map { it.key } }
                 .first { keys -> keys.any { it == headId } }
         }
+        // 滚到列表末项即会话底（LazyColumn 钳制最大滚动位，内容不足一屏时自然贴顶）
         runCatching {
-            listState.scrollToItem((targetIdx + 1 - windowStart).coerceAtLeast(0))
+            listState.scrollToItem((messages.size - windowStart).coerceAtLeast(0))
         }
         anchorPending = false
+        // 已停在底部：恢复流式跟随；用户一触摸列表即交还控制权（pointerInput 置 false）
+        autoPinActive = true
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -2662,7 +2665,7 @@ fun McpVoiceReplyItem(
     val isPlaying = currentlyPlayingAudioId == call.id
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
 
-    val cleanedText = remember(call.input) { cleanVoiceText(call.input) }
+    val cleanedText = remember(call.input) { VoiceTextExtractor.extractTranscript(call.input) }
     var isTextExpanded by remember { mutableStateOf(false) }
 
     var duration = 0
@@ -2925,35 +2928,6 @@ fun McpVoiceReplyItem(
             McpCallItem(mcpCall = call, modifier = modifier, isEn = isEn)
         }
     }
-}
-
-private fun cleanVoiceText(inputJson: String?): String {
-    if (inputJson.isNullOrBlank()) return ""
-    val text = try {
-        val regex = Regex("""\"text\"\s*:\s*\"([\s\S]*?)\"""")
-        val match = regex.find(inputJson)
-        match?.groupValues?.get(1) ?: ""
-    } catch (e: Exception) {
-        ""
-    }
-    
-    if (text.isBlank()) return ""
-    
-    // 净化Style语气标签和吸气等呼吸音标签 (支持小括号、中括号、大括号、尖括号)
-    var result = text.replace(Regex("\\([\\s\\S]*?\\)"), "")
-    result = result.replace(Regex("（[\\s\\S]*?）"), "")
-    result = result.replace(Regex("\\[[\\s\\S]*?\\]"), "")
-    result = result.replace(Regex("【[\\s\\S]*?】"), "")
-    result = result.replace(Regex("\\{[\\s\\S]*?\\}"), "")
-    result = result.replace(Regex("<[\\s\\S]*?>"), "")
-    
-    // 还原JSON转义
-    result = result.replace("\\\"", "\"")
-        .replace("\\n", "\n")
-        .replace("\\t", "    ")
-        .replace("\\\\", "\\")
-        
-    return result.trim()
 }
 
 private fun formatTime(timestamp: Long, appLanguage: String): String =

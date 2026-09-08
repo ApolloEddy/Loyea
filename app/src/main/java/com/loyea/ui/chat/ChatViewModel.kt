@@ -4046,39 +4046,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val lastAsrError: String?
         get() = llmClient.lastAsrError
 
-    private fun cleanVoiceText(inputJson: String?): String {
-        if (inputJson.isNullOrBlank()) return ""
-        val isJsonLike = inputJson.contains("\"text\"") && inputJson.contains(":")
-        val text = if (isJsonLike) {
-            try {
-                val regex = Regex("""\"text\"\s*:\s*\"([\s\S]*?)\"""")
-                val match = regex.find(inputJson)
-                val extracted = match?.groupValues?.get(1)
-                if (!extracted.isNullOrBlank()) extracted else inputJson
-            } catch (e: Exception) {
-                inputJson
-            }
-        } else {
-            inputJson
-        }
-        
-        if (text.isBlank()) return ""
-        
-        var result = text.replace(Regex("\\([\\s\\S]*?\\)"), "")
-        result = result.replace(Regex("（[\\s\\S]*?）"), "")
-        result = result.replace(Regex("\\[[\\s\\SLock]*?\\]"), "")
-        result = result.replace(Regex("【[\\s\\S]*?】"), "")
-        result = result.replace(Regex("\\{[\\s\\S]*?\\}"), "")
-        result = result.replace(Regex("<[\\s\\S]*?>"), "")
-        
-        result = result.replace("\\\"", "\"")
-            .replace("\\n", "\n")
-            .replace("\\t", "    ")
-            .replace("\\\\", "\\")
-            
-        return result.trim()
-    }
-
     /**
      * 解析语音转写目标配置：
      * 显式指定了 stt_config_id 时优先使用它；未指定时自动优先使用已配置的小米 MiMo
@@ -4202,7 +4169,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val targetSttConfig = resolveSttConfig()
         val rawText = llmClient.transcribeAudio(targetSttConfig, file, sttModelName.value, sttProviderTemplate.value)
         return if (targetSttConfig.provider.contains("mimo", ignoreCase = true) || sttProviderTemplate.value.contains("mimo", ignoreCase = true)) {
-            cleanVoiceText(rawText)
+            VoiceTextExtractor.cleanSttText(rawText)
         } else {
             rawText
         }
@@ -4230,7 +4197,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val text = llmClient.transcribeAudio(targetSttConfig, file, sttModelName.value, sttProviderTemplate.value)
 
                 val cleanedText = if (targetSttConfig.provider.contains("mimo", ignoreCase = true) || sttProviderTemplate.value.contains("mimo", ignoreCase = true)) {
-                    cleanVoiceText(text)
+                    VoiceTextExtractor.cleanSttText(text)
                 } else {
                     text
                 }
