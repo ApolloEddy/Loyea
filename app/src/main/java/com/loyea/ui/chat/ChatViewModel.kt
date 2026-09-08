@@ -1405,6 +1405,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     useVisionRoute = true
                     includeVision = true
                 }
+                android.util.Log.d("LoyeaVision",
+                    "route: lastMsgHasImage=$currentMsgHasImage multimodal=${enableMultimodal.value} " +
+                        "explicitCard=${targetVisionCfg != null} useVisionRoute=$useVisionRoute includeVision=$includeVision " +
+                        "model=${apiConfig.modelName} baseUrl=${apiConfig.apiUrl}"
+                )
                 // 视觉配置缺失或目标提供商不支持视觉 → includeVision 保持 false，
                 // 图片将以 [图片] 文本占位随消息发送，会话继续正常进行，不报错。
             }

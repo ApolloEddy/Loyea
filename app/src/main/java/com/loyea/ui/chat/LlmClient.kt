@@ -165,6 +165,10 @@ class LlmClient {
 
             // 智能补全 completions 请求地址路由
             val baseUrl = resolveChatCompletionsUrl(config)
+            android.util.Log.d("LoyeaVision",
+                "POST $baseUrl model=$targetModel msgs=${processedMessages.size} " +
+                    "imageMsgs=${processedMessages.count { !it.imageUrl.isNullOrBlank() }} tools=${tools.size}"
+            )
 
             val requestBuilder = Request.Builder()
                 .url(baseUrl)
@@ -612,8 +616,9 @@ class LlmClient {
                 return android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
             }
             
-            // 2. 计算缩放因子，使得最大边不超过 800 像素
-            val maxSide = 800
+            // 2. 计算缩放因子：上限 1280px——800px 会把整页密排小字压到 4-6px 高，
+            // 模型"看得见图读不了字"（行测卷面识别失败根因之一）；1280 对文档 OCR 明显更稳
+            val maxSide = 1280
             var inSampleSize = 1
             if (srcWidth > maxSide || srcHeight > maxSide) {
                 val widerSampleSize = Math.round(srcWidth.toFloat() / maxSide.toFloat())
@@ -625,21 +630,30 @@ class LlmClient {
             // 3. 解码 bitmap
             options.inJustDecodeBounds = false
             options.inSampleSize = inSampleSize
-            val bitmap = android.graphics.BitmapFactory.decodeFile(filePath, options) ?: return ""
-            
-            // 4. 等比例缩放到最大边 800 像素
-            val finalBitmap = if (bitmap.width > maxSide || bitmap.height > maxSide) {
-                val ratio = Math.min(maxSide.toFloat() / bitmap.width, maxSide.toFloat() / bitmap.height)
-                val destWidth = (bitmap.width * ratio).toInt()
-                val destHeight = (bitmap.height * ratio).toInt()
-                android.graphics.Bitmap.createScaledBitmap(bitmap, destWidth, destHeight, true)
-            } else {
-                bitmap
+            val bitmap = android.graphics.BitmapFactory.decodeFile(filePath, options)
+            if (bitmap == null) {
+                android.util.Log.w("LoyeaVision",
+                    "bitmap decode FAILED: $filePath bounds=${options.outWidth}x${options.outHeight} mime=${options.outMimeType}"
+                )
+                return ""
             }
             
-            // 5. 压缩为 JPEG 字节流
+            // 4. EXIF 方向：BitmapFactory 不应用旋转标记，竖拍照片会横着发给模型
+            val orientedBitmap = applyExifRotation(filePath, bitmap)
+
+            // 5. 等比例缩放到上限内
+            val finalBitmap = if (orientedBitmap.width > maxSide || orientedBitmap.height > maxSide) {
+                val ratio = Math.min(maxSide.toFloat() / orientedBitmap.width, maxSide.toFloat() / orientedBitmap.height)
+                val destWidth = (orientedBitmap.width * ratio).toInt()
+                val destHeight = (orientedBitmap.height * ratio).toInt()
+                android.graphics.Bitmap.createScaledBitmap(orientedBitmap, destWidth, destHeight, true)
+            } else {
+                orientedBitmap
+            }
+
+            // 6. 压缩为 JPEG 字节流
             val baos = java.io.ByteArrayOutputStream()
-            finalBitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, baos)
+            finalBitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, baos)
             val bytes = baos.toByteArray()
             
             if (finalBitmap != bitmap) {
@@ -660,6 +674,29 @@ class LlmClient {
         }
     }
 
+    /** EXIF 方向矫正：按照片的旋转标记摆正 bitmap，失败时原样返回 */
+    private fun applyExifRotation(filePath: String, bitmap: android.graphics.Bitmap): android.graphics.Bitmap {
+        return try {
+            val exif = android.media.ExifInterface(filePath)
+            val degrees = when (exif.getAttributeInt(
+                android.media.ExifInterface.TAG_ORIENTATION,
+                android.media.ExifInterface.ORIENTATION_NORMAL
+            )) {
+                android.media.ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+                android.media.ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+                android.media.ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+                else -> 0f
+            }
+            if (degrees == 0f) return bitmap
+            val matrix = android.graphics.Matrix().apply { postRotate(degrees) }
+            val rotated = android.graphics.Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+            if (rotated != bitmap) bitmap.recycle()
+            rotated
+        } catch (e: Exception) {
+            bitmap
+        }
+    }
+
     private fun toProviderMessages(messages: List<LlmChatMessage>): JsonArray {
         val array = JsonArray()
         messages.forEach { msg ->
@@ -667,6 +704,7 @@ class LlmClient {
                 addProperty("role", msg.role)
                 if (!msg.imageUrl.isNullOrBlank()) {
                     val base64 = encodeFileToBase64(msg.imageUrl)
+                    android.util.Log.d("LoyeaVision", "image part: path=${msg.imageUrl} base64Len=${base64.length}")
                     if (base64.isBlank()) {
                         // 图片文件读取/解码失败：绝不发送空 base64 的畸形 data URL（服务端必 400），
                         // 退化为占位文本，让本轮请求照常继续
