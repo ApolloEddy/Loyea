@@ -108,6 +108,57 @@ class LlmConversationBuilderTest {
     }
 
     @Test
+    fun visionRouteCarriesImageAndTextWithoutPlaceholder() {
+        // 视觉通路契约：includeVision=true 时图片与文字原样进入 payload 消息，
+        // 不注入 [图片] 占位（占位只允许出现在降级/无视觉路径）——
+        // 带字拍照场景（图 + 行测题文字）逐字段验证
+        val photo = Message(
+            id = "u1",
+            content = "这道行测题选什么？",
+            sender = Sender.USER,
+            imageUrl = "/cache/vision_123.jpg",
+            timestamp = 1_725_000_000_000L
+        )
+
+        val built = LlmConversationBuilder.build(
+            systemPrompt = "stable",
+            history = listOf(photo),
+            includeVision = true,
+            includeMessageTimestamps = false
+        )
+
+        assertEquals(2, built.size)
+        assertEquals("user", built[1].role)
+        assertEquals("/cache/vision_123.jpg", built[1].imageUrl)
+        assertTrue(built[1].content!!.contains("这道行测题选什么？"))
+        assertFalse(built[1].content!!.contains("[图片]"))
+    }
+
+    @Test
+    fun visionDisabledKeepsPlaceholderAndStripsImageUrlFromPayload() {
+        // 降级契约：includeVision=false → 文本占位 + imageUrl 置空（图片不得进入 payload）
+        val photo = Message("u1", "看图答题", Sender.USER, imageUrl = "/cache/vision_123.jpg")
+
+        val built = LlmConversationBuilder.build(
+            systemPrompt = "stable",
+            history = listOf(photo),
+            includeVision = false
+        )
+
+        assertEquals(null, built[1].imageUrl)
+        assertTrue(built[1].content!!.contains("看图答题\n[图片]"))
+    }
+
+    @Test
+    fun imageMessageSurvivesBudgetSelectionAsLastMessage() {
+        // 预算契约：最后一条（当前输入）无条件保留——带图消息不会被 token 预算裁剪出请求
+        val photo = Message("u1", "看图答题", Sender.USER, imageUrl = "/cache/vision_123.jpg", timestamp = 1L)
+
+        assertEquals(1, LlmConversationBuilder.selectWithinBudget(listOf(photo), 0L).size)
+        assertEquals(1, LlmConversationBuilder.selectWithinBudget(listOf(photo), 1L).size)
+    }
+
+    @Test
     fun disablingPhysicalPerceptionStripsOldPhysicalSnapshotButKeepsWorldContext() {
         val message = Message(
             id = "u",
