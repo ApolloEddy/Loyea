@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
@@ -40,6 +41,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.loyea.R
 import com.loyea.ui.theme.LoyeaTheme
 import com.loyea.ui.settings.ApiConfig
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -324,23 +326,17 @@ fun ChatScreen(
                 },
                 navigationIcon = {
                     if (useAvatarMenu) {
-                        // 平板侧栏完全收起态：顶部保留用户头像作为展开入口（仿 UserInfoBar 圆形首字母头像）
-                        Box(
+                        // 平板侧栏完全收起态：顶部保留用户头像作为展开入口（Loyea 应用图标圆形头像）
+                        Image(
+                            painter = painterResource(R.mipmap.ic_avatar),
+                            contentDescription = "Menu",
+                            contentScale = ContentScale.Crop,
                             modifier = Modifier
                                 .padding(start = 4.dp)
                                 .size(36.dp)
                                 .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
-                                .clickable { onMenuClick() },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = if (userName.isNotBlank()) userName.take(1).uppercase() else "L",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
+                                .clickable { onMenuClick() }
+                        )
                     } else if (showMenuIcon) {
                         IconButton(onClick = onMenuClick) {
                             Icon(
