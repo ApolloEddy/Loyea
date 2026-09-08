@@ -1253,8 +1253,8 @@ fun AddOrEditSheet(
     var modelFetchMessage by remember { mutableStateOf<String?>(null) }
 
     val providersList = listOf(
-        "DeepSeek", "OpenAI", 
-        "MiMo", "Kimi (Moonshot)", "Qwen (千问)", "MiniMax", "Ollama (Local)", "Groq", "Custom"
+        "DeepSeek", "OpenAI",
+        "MiMo", "Kimi (Moonshot)", "Qwen (千问)", "Zhipu (智谱)", "MiniMax", "Ollama (Local)", "Groq", "Custom"
     )
 
     val recommendedModels = remember(selectedProvider) {
@@ -1264,6 +1264,7 @@ fun AddOrEditSheet(
             "MiMo" -> listOf("mimo-v2.5-pro", "mimo-v2.5-pro-ultraspeed")
             "Kimi (Moonshot)" -> listOf("moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k")
             "Qwen (千问)" -> listOf("qwen-plus", "qwen-turbo", "qwen-max")
+            "Zhipu (智谱)" -> listOf("glm-5.3-flash", "glm-4.5v", "glm-4v-plus")
             "MiniMax" -> listOf("abab6.5g-alias", "abab7-chat")
             "Ollama (Local)" -> listOf("qwen2.5", "llama3", "mistral", "gemma2")
             "Groq" -> listOf("llama-3.3-70b-versatile", "llama-3.1-8b-instant")
@@ -1396,6 +1397,10 @@ fun AddOrEditSheet(
                                     "Qwen (千问)" -> {
                                         apiUrlInput = "https://dashscope.aliyuncs.com/compatible-mode/v1"
                                         modelInput = "qwen-plus"
+                                    }
+                                    "Zhipu (智谱)" -> {
+                                        apiUrlInput = "https://open.bigmodel.cn/api/paas/v4"
+                                        modelInput = "glm-5.3-flash"
                                     }
                                     "MiniMax" -> {
                                         apiUrlInput = "https://api.minimax.chat/v1"

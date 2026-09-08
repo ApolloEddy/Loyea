@@ -1387,9 +1387,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 // 即"识图模型配置正确却不可用"的根因）；字符串猜测仅用于回落主配置的场景
                 val explicitVisionCard = targetVisionCfg != null
                 if (explicitVisionCard || providerSupportsVision(visionCandidate.provider, visionModel)) {
-                    // 视觉路由生效：切到视觉配置与模型
+                    // 视觉路由生效：切到视觉配置与模型。
+                    // 视觉模型名仍是内置默认（gpt-4o-mini）且显式识图卡自带模型名时，卡模型优先——
+                    // 否则选了卡但从未改过"视觉模型"的用户，识图请求被打向服务商不存在的 gpt-4o-mini（必 400，
+                    // 智谱自配 Custom 用户踩中的正是这颗雷）。用户显式改过视觉模型名 → 仍以显式值为准。
+                    val legacyVisionDefault = "gpt-4o-mini"
                     apiConfig = if (targetVisionCfg != null) {
-                        targetVisionCfg.copy(modelName = visionModel)
+                        val m = if (visionModel == legacyVisionDefault && targetVisionCfg.modelName.isNotBlank()) {
+                            targetVisionCfg.modelName
+                        } else {
+                            visionModel
+                        }
+                        targetVisionCfg.copy(modelName = m)
                     } else {
                         apiConfig.copy(modelName = visionModel)
                     }
@@ -4097,7 +4106,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             p.contains("openai") ->
                 listOf("4o", "4.1", "4.5", "omni", "gpt-4-vision", "gpt-4-turbo").any { m.contains(it) }
             p.contains("alibaba") || p.contains("zhipu") || p.contains("moonshot") ->
-                listOf("vl", "vision", "4v", "glm-4v", "kimi").any { m.contains(it) }
+                // glm-4.5v 含 "4.5v" 而非 "4v"；GLM-5.3-Flash 为原生多模态（智谱官方 VLM 分类）
+                listOf("vl", "vision", "4v", "glm-4v", "kimi", "4.5v", "glm-5.3").any { m.contains(it) }
             p.contains("openrouter") ->
                 listOf("vision", "vl", "4o", "4.5", "omni", "gemini", "claude").any { m.contains(it) }
             else -> false
