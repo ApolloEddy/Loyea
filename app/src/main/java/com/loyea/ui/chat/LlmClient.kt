@@ -674,10 +674,13 @@ class LlmClient {
                         addProperty("content", text)
                     } else {
                         val contentArray = JsonArray()
-                        contentArray.add(JsonObject().apply {
-                            addProperty("type", "text")
-                            addProperty("text", msg.content ?: "")
-                        })
+                        // 纯图片消息（无文字）不给 text 块塞空串：严格网关会判 content 结构非法（智谱 1214 一类）
+                        if (!msg.content.isNullOrBlank()) {
+                            contentArray.add(JsonObject().apply {
+                                addProperty("type", "text")
+                                addProperty("text", msg.content)
+                            })
+                        }
                         contentArray.add(JsonObject().apply {
                             addProperty("type", "image_url")
                             add("image_url", JsonObject().apply {
@@ -694,10 +697,12 @@ class LlmClient {
                     }
                 } else if (!msg.audioUrl.isNullOrBlank()) {
                     val contentArray = JsonArray()
-                    contentArray.add(JsonObject().apply {
-                        addProperty("type", "text")
-                        addProperty("text", msg.content ?: "")
-                    })
+                    if (!msg.content.isNullOrBlank()) {
+                        contentArray.add(JsonObject().apply {
+                            addProperty("type", "text")
+                            addProperty("text", msg.content)
+                        })
+                    }
                     contentArray.add(JsonObject().apply {
                         addProperty("type", "input_audio")
                         val inputAudioObj = JsonObject().apply {

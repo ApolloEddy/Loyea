@@ -1776,11 +1776,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                         if (!msg.audioUrl.isNullOrBlank() && c.isBlank()) c = "[语音消息]"
                                         msg.copy(content = c, imageUrl = null, audioUrl = null)
                                     }
-                                    // 降级对用户可见（反馈式修复优于静默放宽）：图片/语音未送达模型
+                                    // 降级对用户可见（反馈式修复优于静默放宽）：图片/语音未送达模型，
+                                    // Toast 携带服务商标错原话（截断），否则用户永远不知道请求为何被拒
+                                    android.util.Log.e("ChatViewModel", "Multimodal request failed, degrading to text-only: ${event.message}")
                                     android.widget.Toast.makeText(
                                         context,
-                                        if (appLanguage.value == "en") "Media request failed — retrying in text-only mode"
-                                        else "图片/语音请求失败，已自动降级为纯文本模式重试",
+                                        (if (appLanguage.value == "en") "Media request failed — retrying in text-only mode: "
+                                        else "图片/语音请求失败，已自动降级为纯文本模式重试：") +
+                                            event.message.removePrefix("[错误] ").take(120),
                                         android.widget.Toast.LENGTH_LONG
                                     ).show()
                                     // 清除错误气泡状态并进入下一轮自动重试
