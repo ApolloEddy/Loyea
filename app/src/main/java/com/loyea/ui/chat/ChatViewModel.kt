@@ -1361,6 +1361,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             // 获取 API 配置和 MCP 工具列表
             var apiConfig = activeApiConfig.value
+            val mainApiConfig = apiConfig // 识图路由改写前的主配置，降级重试时还原
             
             // ===== 多模态智能路由与降级 =====
             // 仅当「当前正在发送的这条消息」携带图片时才考虑视觉路由。
@@ -1649,8 +1650,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val maxRounds = 5
             var lastRoundHadTools = false // 标记最后一轮是否为工具轮，maxRounds 耗尽时需收尾占位气泡
             val executedToolsSignature = mutableSetOf<String>()
-            // 多模态失败降级重试标记：带图/带音频请求报错后，仅允许自动去掉媒体重试一次
-            var degradedRetried = false
+                    // 多模态失败降级重试标记：带图/带音频请求报错后，仅允许自动去掉媒体重试一次
+                    var degradedRetried = false
+                    // 降级重试待执行标记：置位后本轮 collect 结束必须 continue 重发请求。
+                    // （历史缺陷：只置 degradedRetried 而无 continue，循环在无工具分支 break，
+                    //  重试从未发生 —— 带图请求失败直接留下空气泡，表现为"发图后没有任何回复"）
+                    var degradedRetryPending = false
 
             try {
                 while (round < maxRounds) {
@@ -1747,6 +1752,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                                 if (carriesMedia && !degradedRetried) {
                                     degradedRetried = true
+                                    degradedRetryPending = true
+                                    // 识图路由失败 → 一并还原主配置/主模型并恢复工具能力：
+                                    // 若失败原因正是识图模型本身不可用，仍打在原模型上的重试必然二次失败
+                                    if (useVisionRoute) {
+                                        useVisionRoute = false
+                                        apiConfig = mainApiConfig
+                                    }
                                     conversation = conversation.map { msg ->
                                         var c = msg.content ?: ""
                                         if (!msg.imageUrl.isNullOrBlank()) {
@@ -1755,6 +1767,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                         if (!msg.audioUrl.isNullOrBlank() && c.isBlank()) c = "[语音消息]"
                                         msg.copy(content = c, imageUrl = null, audioUrl = null)
                                     }
+                                    // 降级对用户可见（反馈式修复优于静默放宽）：图片/语音未送达模型
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        if (appLanguage.value == "en") "Media request failed — retrying in text-only mode"
+                                        else "图片/语音请求失败，已自动降级为纯文本模式重试",
+                                        android.widget.Toast.LENGTH_LONG
+                                    ).show()
                                     // 清除错误气泡状态并进入下一轮自动重试
                                     currentList = messages.value.map { msg ->
                                         if (msg.id == aiMessageId) {
@@ -1833,6 +1852,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                             }
                         }
+                    }
+
+                    // 降级重试必须真正重发：剥媒体后的会话已就绪，continue 回到循环顶部重入流式请求
+                    if (degradedRetryPending) {
+                        degradedRetryPending = false
+                        isThinking.value = true
+                        continue
                     }
 
                     if (hasError) {

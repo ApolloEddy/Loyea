@@ -666,25 +666,32 @@ class LlmClient {
             val obj = JsonObject().apply {
                 addProperty("role", msg.role)
                 if (!msg.imageUrl.isNullOrBlank()) {
-                    val contentArray = JsonArray()
-                    contentArray.add(JsonObject().apply {
-                        addProperty("type", "text")
-                        addProperty("text", msg.content ?: "")
-                    })
-                    contentArray.add(JsonObject().apply {
-                        addProperty("type", "image_url")
-                        add("image_url", JsonObject().apply {
-                            val base64 = encodeFileToBase64(msg.imageUrl)
-                            val mimeType = when {
-                                msg.imageUrl.endsWith(".png", true) -> "image/png"
-                                msg.imageUrl.endsWith(".webp", true) -> "image/webp"
-                                msg.imageUrl.endsWith(".gif", true) -> "image/gif"
-                                else -> "image/jpeg"
-                            }
-                            addProperty("url", "data:$mimeType;base64,$base64")
+                    val base64 = encodeFileToBase64(msg.imageUrl)
+                    if (base64.isBlank()) {
+                        // 图片文件读取/解码失败：绝不发送空 base64 的畸形 data URL（服务端必 400），
+                        // 退化为占位文本，让本轮请求照常继续
+                        val text = (msg.content?.takeIf { it.isNotBlank() }?.plus("\n") ?: "") + "[图片]"
+                        addProperty("content", text)
+                    } else {
+                        val contentArray = JsonArray()
+                        contentArray.add(JsonObject().apply {
+                            addProperty("type", "text")
+                            addProperty("text", msg.content ?: "")
                         })
-                    })
-                    add("content", contentArray)
+                        contentArray.add(JsonObject().apply {
+                            addProperty("type", "image_url")
+                            add("image_url", JsonObject().apply {
+                                val mimeType = when {
+                                    msg.imageUrl.endsWith(".png", true) -> "image/png"
+                                    msg.imageUrl.endsWith(".webp", true) -> "image/webp"
+                                    msg.imageUrl.endsWith(".gif", true) -> "image/gif"
+                                    else -> "image/jpeg"
+                                }
+                                addProperty("url", "data:$mimeType;base64,$base64")
+                            })
+                        })
+                        add("content", contentArray)
+                    }
                 } else if (!msg.audioUrl.isNullOrBlank()) {
                     val contentArray = JsonArray()
                     contentArray.add(JsonObject().apply {
