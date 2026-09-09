@@ -1,5 +1,6 @@
 package com.loyea.ui.chat
 
+import com.loyea.llm.NonSseBodyOutcome
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -96,7 +97,7 @@ class LlmClientStreamSilentFailureTest {
         val completion = outcome as? NonSseBodyOutcome.Completion
         assertNotNull("整包 choices JSON 必须降级为 Completion 而非报错", completion)
         assertEquals("你好呀", completion!!.response.content)
-        assertEquals(3L, completion.response.completionTokens)
+        assertEquals(3L, completion.response.usage?.completionTokens)
     }
 
     @Test

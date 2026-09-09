@@ -83,7 +83,10 @@ data class ApiConfig(
     val useIndependentSearch: Boolean = false,
     val searchProvider: String = "Tavily",
     val searchApiUrl: String = "https://api.tavily.com",
-    val searchApiKey: String = ""
+    val searchApiKey: String = "",
+    // 流式模式（Spec §8.1）：AUTO 优先流式并在确证不支持时降级；STREAM 强制；NON_STREAM 整包。
+    // Gson 缺字段回落 AUTO，与 v0.8.x 及之前数据完全兼容
+    val streamMode: com.loyea.llm.StreamMode = com.loyea.llm.StreamMode.AUTO
 )
 
 @OptIn(ExperimentalMaterial3Api::class)

@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.MediaType.Companion.toMediaType
@@ -42,19 +43,12 @@ sealed class StreamEvent {
     object Done : StreamEvent()
 }
 
-/**
- * 解析出的 usage 计量（OpenAI 兼容；DeepSeek 额外带前缀缓存命中/未命中）。
- */
-data class LlmUsage(
-    val promptTokens: Long?,
-    val completionTokens: Long?,
-    val totalTokens: Long?,
-    val promptCacheHitTokens: Long? = null,
-    val promptCacheMissTokens: Long? = null
-)
+/** usage 计量统一为 llm.Usage（字段同形，历史调用点零改动） */
+typealias LlmUsage = com.loyea.llm.Usage
 
 /**
- * 远程 LLM 服务非流式响应实体
+ * 远程 LLM 服务非流式响应实体（业务层契约保持不变；
+ * Transport 层使用同形的 com.loyea.llm.ChatResponse，errorKind 额外携带错误分类）。
  */
 data class LlmResponse(
     val content: String,
@@ -65,24 +59,26 @@ data class LlmResponse(
     val completionTokens: Long? = null,
     val totalTokens: Long? = null,
     val promptCacheHitTokens: Long? = null,
-    val promptCacheMissTokens: Long? = null
+    val promptCacheMissTokens: Long? = null,
+    val errorKind: com.loyea.llm.LlmErrorKind? = null
 )
 
-data class LlmToolCall(
-    val id: String,
-    val name: String,
-    val argumentsJson: String
+fun com.loyea.llm.ChatResponse.toLlmResponse(): LlmResponse = LlmResponse(
+    content = content,
+    thoughts = thoughts,
+    isError = isError,
+    toolCalls = toolCalls,
+    promptTokens = usage?.promptTokens,
+    completionTokens = usage?.completionTokens,
+    totalTokens = usage?.totalTokens,
+    promptCacheHitTokens = usage?.promptCacheHitTokens,
+    promptCacheMissTokens = usage?.promptCacheMissTokens,
+    errorKind = errorKind
 )
 
-data class LlmChatMessage(
-    val role: String,
-    val content: String? = null,
-    val toolCallId: String? = null,
-    val name: String? = null,
-    val toolCalls: List<LlmToolCall> = emptyList(),
-    val imageUrl: String? = null,
-    val audioUrl: String? = null
-)
+typealias LlmToolCall = com.loyea.llm.ToolCall
+
+typealias LlmChatMessage = com.loyea.llm.ChatMessage
 
 /**
  * 大模型 API 网络通信客户端
@@ -93,29 +89,11 @@ class ImageGenException(message: String) : Exception(message)
 /** 生图结果：远程 URL（需下载）或 base64 编码图片（直接解码落盘）二选一。 */
 data class ImageGenResult(val remoteUrl: String?, val base64Png: String?)
 
-/** "响应非 SSE 格式"判定的原始报文累积上限：超过即停止累积（仅保留溢出标记），防止巨型 HTML 撑爆内存 */
-private const val NON_SSE_CAPTURE_LIMIT = 2_000_000
+typealias NonSseBodyOutcome = com.loyea.llm.NonSseBodyOutcome
 
-/**
- * SSE data 行载荷提取：兼容 "data: {...}"（标准，带空格）与 "data:{...}"（部分网关省略空格）。
- * 后者此前被整行忽略——对接此类中转时表现为零内容零报错的静默空回复。非 data 行返回 null。
- */
-internal fun extractSseDataPayload(trimmedLine: String): String? {
-    if (!trimmedLine.startsWith("data:")) return null
-    return trimmedLine.substring(5).trim()
-}
-
-/** 非 SSE 响应体（HTTP 200 却读不到任何 data 事件）的判定结果 */
-internal sealed class NonSseBodyOutcome {
-    /** 空响应体：连接正常但零字节 */
-    object Empty : NonSseBodyOutcome()
-    /** JSON error 体：message 为服务商标错原文（部分网关以 200 包错误返回） */
-    data class ApiError(val message: String) : NonSseBodyOutcome()
-    /** JSON 带 choices：渠道忽略 stream 参数回整包 JSON，降级为非流式解析后回复仍可用 */
-    data class Completion(val response: LlmResponse) : NonSseBodyOutcome()
-    /** 其余（HTML/纯文本/损坏 JSON）：附响应体采样供透出 */
-    data class Unrecognized(val sample: String) : NonSseBodyOutcome()
-}
+/** SSE data 行载荷提取（统一实现移至 llm 包；保留此处供既有测试引用） */
+internal fun extractSseDataPayload(trimmedLine: String): String? =
+    com.loyea.llm.extractSseDataPayload(trimmedLine)
 
 class LlmClient {
     @Volatile
@@ -131,18 +109,59 @@ class LlmClient {
     private val mediaType = "application/json; charset=utf-8".toMediaType()
     private val mapType = object : TypeToken<Map<String, Any>>() {}.type
 
-    // 会话内已知不支持 SSE 流式的渠道键（端点+模型）：跳过注定失败的流式往返，直接整包请求。
-    // 仅内存态、应用重启即清；服务商恢复流式支持后重启自愈
-    private val nonStreamOnlyKeys = java.util.Collections.synchronizedSet(HashSet<String>())
+    /** 统一 Chat Completion Transport：全应用唯一的聊天补全 HTTP 实现（Spec §10） */
+    private val transport = com.loyea.llm.UnifiedChatTransport(client)
+    private val parser = com.loyea.llm.ResponseParser(gson)
 
-    private fun streamCapabilityKey(config: com.loyea.ui.settings.ApiConfig): String =
-        "${resolveChatCompletionsUrl(config)}|${resolveTargetModel(config)}"
+    /** 多模态部件（图片/音频 base64）编码回调：注入统一 Transport */
+    private val messageEncoder = object : com.loyea.llm.MessageEncoder {
+        override fun encodeMessages(messages: List<LlmChatMessage>): JsonArray = toProviderMessages(messages)
+        override fun encodeTools(tools: List<com.loyea.llm.ToolSchema>): JsonArray = toProviderTools(
+            tools.map { McpTool(name = it.name, description = it.description, inputSchema = it.inputSchema) }
+        )
+    }
+
+    private fun buildExecutionRequest(
+        config: com.loyea.ui.settings.ApiConfig,
+        messages: List<LlmChatMessage>,
+        tools: List<McpTool>,
+        streamMode: com.loyea.llm.StreamMode
+    ): com.loyea.llm.ChatExecutionRequest {
+        val targetModel = resolveTargetModel(config)
+        return com.loyea.llm.ChatExecutionRequest(
+            configId = config.id,
+            apiUrl = config.apiUrl,
+            apiKey = config.apiKey,
+            providerPreset = config.provider,
+            model = targetModel,
+            messages = messages,
+            tools = tools.map { com.loyea.llm.ToolSchema(it.name, it.description, it.inputSchema) },
+            streamMode = streamMode,
+            nativeSearchRequested = config.enableSearch && !config.useIndependentSearch
+        )
+    }
+
+    private fun com.loyea.llm.TransportEvent.toStreamEvent(): StreamEvent = when (this) {
+        is com.loyea.llm.TransportEvent.Content -> StreamEvent.Content(text)
+        is com.loyea.llm.TransportEvent.Thoughts -> StreamEvent.Thoughts(text)
+        is com.loyea.llm.TransportEvent.ToolCalls -> StreamEvent.ToolCalls(calls)
+        is com.loyea.llm.TransportEvent.Notice -> StreamEvent.Notice(text)
+        is com.loyea.llm.TransportEvent.UsageEvent -> StreamEvent.Usage(
+            promptTokens = usage.promptTokens ?: 0L,
+            completionTokens = usage.completionTokens ?: 0L,
+            totalTokens = usage.totalTokens ?: 0L,
+            promptCacheHitTokens = usage.promptCacheHitTokens ?: 0L,
+            promptCacheMissTokens = usage.promptCacheMissTokens ?: 0L
+        )
+        is com.loyea.llm.TransportEvent.Error -> StreamEvent.Error(message)
+        com.loyea.llm.TransportEvent.Done -> StreamEvent.Done
+    }
 
     /**
-     * 将 HTTP 错误码转化为对用户可操作的分级提示。
-     * 原始错误体截断后附带，防止部分网关在错误响应中回显请求体/内部堆栈。
+     * 将 HTTP 错误码转化为对用户可操作的分级提示（旧调用点兼容保留；
+     * 统一 Transport 内部已使用 LlmErrorKind 分类）。
      */
-    private fun buildFriendlyHttpError(code: Int, rawDetail: String): String {
+    internal fun buildFriendlyHttpError(code: Int, rawDetail: String): String {
         val safeDetail = rawDetail.trim().take(300)
         return when (code) {
             401, 403 -> "[错误] 鉴权失败 (HTTP $code)：请检查 API Key 是否正确或账户额度是否有效。$safeDetail"
@@ -154,344 +173,18 @@ class LlmClient {
     }
 
     /**
-     * 发送 Chat Completion 流式对话请求 (SSE)
+     * 发送 Chat Completion 流式对话请求（统一 Transport 状态机分派）。
      */
     fun sendChatCompletionStream(
         config: com.loyea.ui.settings.ApiConfig,
         messages: List<LlmChatMessage>,
         tools: List<McpTool> = emptyList()
-    ): Flow<StreamEvent> = flow {
-        if (config.apiKey.isBlank()) {
-            emit(StreamEvent.Error("[错误] API Key 未配置，请在设置中配置您的 Key 后重试。"))
-            return@flow
-        }
-
-        try {
-            // 当本次请求 tools 为空（例如传图时），对 messages 历史做自愈翻译，将 tool_calls 翻译为普通文本 XML 格式，防止 API 400 报错
-            val processedMessages = sanitizeMessages(messages, tools.isNotEmpty())
-
-            // 会话内已知不支持流式的渠道：跳过注定失败的流式往返直接整包请求
-            // （首次自动降级时记录；Toast 只在首降级出现，后续静默走快速路径）
-            if (nonStreamOnlyKeys.contains(streamCapabilityKey(config))) {
-                emitNonStreamCompletion(config, processedMessages, tools, notifyDowngrade = false)
-                return@flow
-            }
-
-            // 根据深度思考状态，对 DeepSeek 进行智能路由（仅在开启智能模型路由时生效）
-            val targetModel = resolveTargetModel(config)
-
-            val requestJson = JsonObject().apply {
-                addProperty("model", targetModel)
-                add("messages", toProviderMessages(processedMessages))
-                addProperty("stream", true)
-                // 仅在明确支持的 provider 上请求流式 usage（DeepSeek/OpenAI 官方支持 stream_options），
-                // 其它 provider（如 MiMo）不发送该字段，避免严格网关 400；无 usage 时上层用字符估算兜底
-                if (config.provider.equals("DeepSeek", ignoreCase = true) ||
-                    config.provider.equals("OpenAI", ignoreCase = true)) {
-                    add("stream_options", JsonObject().apply { addProperty("include_usage", true) })
-                }
-                if (tools.isNotEmpty()) {
-                    add("tools", toProviderTools(tools))
-                    addProperty("tool_choice", "auto")
-                }
-
-                // 开启联网搜索 (非独立搜索时才写入 web_search 参数，避免中转冲突；排除 MiMo 避免 401 鉴权问题)
-                if (config.enableSearch && !config.useIndependentSearch && !config.provider.equals("MiMo", ignoreCase = true)) {
-                    addProperty("web_search", true)
-                    addProperty("enable_search", true)
-                }
-            }
-
-            val requestBody = gson.toJson(requestJson).toRequestBody(mediaType)
-
-            // 智能补全 completions 请求地址路由
-            val baseUrl = resolveChatCompletionsUrl(config)
-            android.util.Log.d("LoyeaVision",
-                "POST $baseUrl model=$targetModel msgs=${processedMessages.size} " +
-                    "imageMsgs=${processedMessages.count { !it.imageUrl.isNullOrBlank() }} tools=${tools.size}"
-            )
-
-            val requestBuilder = Request.Builder()
-                .url(baseUrl)
-                .addHeader("Authorization", "Bearer ${config.apiKey}")
-                .addHeader("Content-Type", "application/json")
-            // MiMo 网关对聊天请求同样要求 api-key 头（ASR/TTS 路径已验证该写法），补发以规避 401
-            if (config.provider.equals("MiMo", ignoreCase = true)) {
-                requestBuilder.addHeader("api-key", config.apiKey)
-            }
-            val request = requestBuilder.post(requestBody).build()
-
-            // 自动重试：429 限流 / 5xx 服务端故障 / 网络瞬时异常时退避重试，避免一次失败直接终结整轮对话
-            val maxAttempts = 3
-            var attempt = 0
-            while (true) {
-                attempt++
-                var retryHttp: Pair<Int, String>? = null
-                var streamStarted = false // 收到首个 SSE 事件后置位：流中段断流不再重试（避免与半截内容保留冲突）
-                try {
-                    client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    val errorMsg = response.body?.string() ?: ""
-                    val displayError = try {
-                        val errJson = gson.fromJson(errorMsg, JsonObject::class.java)
-                        errJson.getAsJsonObject("error")?.get("message")?.asString ?: errorMsg
-                    } catch (e: Exception) {
-                        errorMsg
-                    }
-                    // 429/5xx 属可恢复性故障：退避后重试（request 未消费，可安全重发）
-                    if ((response.code == 429 || response.code >= 500) && attempt < maxAttempts) {
-                        retryHttp = response.code to displayError
-                        return@use
-                    }
-                    emit(StreamEvent.Error(buildFriendlyHttpError(response.code, displayError)))
-                    return@flow
-                }
-
-                val body = response.body
-                if (body == null) {
-                    emit(StreamEvent.Error("[错误] 大模型接口返回了空响应"))
-                    return@flow
-                }
-
-                val reader = BufferedReader(InputStreamReader(body.byteStream()))
-                var line: String?
-                
-                // 使用增量解析器，防范分块边界截断标签
-                val fullContentBuilder = StringBuilder()
-                var emittedThoughtsLength = 0
-                var emittedContentLength = 0
-
-                // 非 data 行的原始报文累积：整条流读完却没有任何 data 事件时，作为"响应不是 SSE 格式"
-                // 的判定与报错证据（网关 200+HTML/error JSON、空流、渠道强制非流式——旧行为是静默吞掉整条回复）
-                val nonSseRaw = StringBuilder()
-                // 上游终态原因：length/content_filter 表示回复被输出上限截断。旧逻辑不解析该字段，
-                // 截断与自然结束无法区分，用户看到的是"说到一半就没了且无任何提示"
-                var truncatedBy: String? = null
-                
-                class ToolCallBuffer(
-                    var id: String? = null,
-                    var name: String? = null,
-                    val arguments: StringBuilder = StringBuilder()
-                )
-                val toolCallBuffers = mutableMapOf<Int, ToolCallBuffer>()
-
-                while (reader.readLine().also { line = it } != null) {
-                    val trimmedLine = line!!.trim()
-                    val data = extractSseDataPayload(trimmedLine)
-                    if (data != null) {
-                        streamStarted = true
-                        if (data == "[DONE]") {
-                            break
-                        }
-                        try {
-                            val chunkJson = gson.fromJson(data, JsonObject::class.java)
-                            // 终态 usage 块：{"choices":[],"usage":{...}}，当前 choices 为空数组时会被下方守卫跳过，需提前识别
-                            val usage = chunkJson.get("usage")?.takeIf { !it.isJsonNull && it.isJsonObject }?.asJsonObject
-                            if (usage != null) {
-                                emit(StreamEvent.Usage(
-                                    promptTokens = usage.get("prompt_tokens")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
-                                    completionTokens = usage.get("completion_tokens")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
-                                    totalTokens = usage.get("total_tokens")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
-                                    promptCacheHitTokens = usage.get("prompt_cache_hit_tokens")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
-                                    promptCacheMissTokens = usage.get("prompt_cache_miss_tokens")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
-                                ))
-                            }
-                            val choices = chunkJson.getAsJsonArray("choices")
-                            if (choices != null && choices.size() > 0) {
-                                val choiceObj = choices.get(0).asJsonObject
-                                val finishReason = choiceObj.get("finish_reason")?.takeIf { !it.isJsonNull }?.asString
-                                if (finishReason == "length" || finishReason == "content_filter") {
-                                    truncatedBy = finishReason
-                                }
-                                val delta = choiceObj.getAsJsonObject("delta")
-                                if (delta != null) {
-                                    // 1. 官方 reasoning_content 推理流 (Deepseek R1 官方标准字段)
-                                    val reasoningContent = delta.get("reasoning_content")?.takeIf { !it.isJsonNull }?.asString
-                                    if (!reasoningContent.isNullOrEmpty()) {
-                                        emit(StreamEvent.Thoughts(reasoningContent))
-                                    }
-
-                                    // 2. 正文流 (兼容内嵌式 <think> 与 <tool_call> 标签并增量提取)
-                                    val content = delta.get("content")?.takeIf { !it.isJsonNull }?.asString
-                                    if (!content.isNullOrEmpty()) {
-                                        fullContentBuilder.append(content)
-                                        val fullStr = fullContentBuilder.toString()
-                                        
-                                        val parsedState = parseIncrementalStreamState(fullStr)
-                                        
-                                        if (parsedState.thoughts.length > emittedThoughtsLength) {
-                                            val newThoughts = parsedState.thoughts.substring(emittedThoughtsLength)
-                                            emit(StreamEvent.Thoughts(newThoughts))
-                                            emittedThoughtsLength = parsedState.thoughts.length
-                                        }
-                                        
-                                        if (parsedState.visibleContent.length > emittedContentLength) {
-                                            val newContent = parsedState.visibleContent.substring(emittedContentLength)
-                                            emit(StreamEvent.Content(newContent))
-                                            emittedContentLength = parsedState.visibleContent.length
-                                        }
-
-                                        // 若发现已经解析出完整闭合的 XML 工具调用，立即主动 break 跳出流，触发调用，避免大模型脑补后续内容
-                                        if (parsedState.completedXmlCalls.isNotEmpty()) {
-                                            break
-                                        }
-                                    }
-
-                                    // 3. 工具调用流
-                                    val toolCallsJson = delta.get("tool_calls")?.takeIf { it.isJsonArray }?.asJsonArray
-                                    if (toolCallsJson != null && toolCallsJson.size() > 0) {
-                                        toolCallsJson.forEach { element ->
-                                            val tcObj = element.asJsonObject
-                                            val index = tcObj.get("index")?.asInt ?: 0
-                                            val tcId = tcObj.get("id")?.takeIf { !it.isJsonNull }?.asString
-                                            val functionObj = tcObj.getAsJsonObject("function")
-                                            val funcName = functionObj?.get("name")?.takeIf { !it.isJsonNull }?.asString
-                                            val funcArgs = functionObj?.get("arguments")?.takeIf { !it.isJsonNull }?.asString
-
-                                            val buffer = toolCallBuffers.getOrPut(index) { ToolCallBuffer() }
-                                            if (tcId != null) {
-                                                buffer.id = tcId
-                                            }
-                                            if (funcName != null) {
-                                                buffer.name = funcName
-                                            }
-                                            if (funcArgs != null) {
-                                                buffer.arguments.append(funcArgs)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        } catch (e: Exception) {
-                            // 忽略解析失败的行（可能是心跳/注释报文）；JSON 形态解析失败时记录一次，便于排查网关格式变体
-                            if (line?.startsWith("{") == true) {
-                                android.util.Log.w("LlmClient", "SSE chunk parse failed: ${e.message}")
-                            }
-                        }
-                    } else if (trimmedLine.isNotEmpty()) {
-                        // 空行是 SSE 事件分隔符，不累积；其余非 data 行（HTML/JSON/注释）暂存作非流式判定证据
-                        if (nonSseRaw.length < NON_SSE_CAPTURE_LIMIT) {
-                            nonSseRaw.append(line).append('\n')
-                        }
-                    }
-                }
-
-                // 响应体不是 SSE（整条流无任何 data 事件）：网关 200+HTML / 200+error JSON、空流、
-                // 或渠道不支持流式直接回整包 JSON——旧行为一律当正常结束，零内容零报错误导排障方向。
-                // 现分三类：error 体透出服务商标错原文（明说不支持流式的自动降级非流式重试）、
-                // 整包 JSON 降级解析（回复仍可用）、其余报错并附响应体采样
-                if (!streamStarted) {
-                    val rawBody = nonSseRaw.toString().trim()
-                    when (val outcome = interpretNonSseBody(rawBody)) {
-                        is NonSseBodyOutcome.Completion -> {
-                            val resp = outcome.response
-                            if (resp.isError) {
-                                emit(StreamEvent.Error(resp.content))
-                                return@flow
-                            }
-                            if (!resp.thoughts.isNullOrBlank()) emit(StreamEvent.Thoughts(resp.thoughts))
-                            if (resp.content.isNotBlank()) emit(StreamEvent.Content(resp.content))
-                            if (resp.promptTokens != null || resp.completionTokens != null) {
-                                emit(StreamEvent.Usage(
-                                    promptTokens = resp.promptTokens ?: 0L,
-                                    completionTokens = resp.completionTokens ?: 0L,
-                                    totalTokens = resp.totalTokens ?: ((resp.promptTokens ?: 0L) + (resp.completionTokens ?: 0L)),
-                                    promptCacheHitTokens = resp.promptCacheHitTokens ?: 0L,
-                                    promptCacheMissTokens = resp.promptCacheMissTokens ?: 0L
-                                ))
-                            }
-                            emit(StreamEvent.Done)
-                            return@flow
-                        }
-                        else -> {
-                            // 诊断细节留 logcat（响应体采样），用户侧 Toast 只说降级事实
-                            android.util.Log.w("LlmClient",
-                                "Non-SSE 200 body (${outcome::class.simpleName}), sample: ${rawBody.take(300)}")
-                            val shouldFallback = when (outcome) {
-                                is NonSseBodyOutcome.ApiError ->
-                                    outcome.message.contains("stream", ignoreCase = true) ||
-                                        outcome.message.contains("流式")
-                                is NonSseBodyOutcome.Empty -> true
-                                is NonSseBodyOutcome.Unrecognized -> true
-                                is NonSseBodyOutcome.Completion -> false
-                            }
-                            if (!shouldFallback) {
-                                emit(StreamEvent.Error(
-                                    "[错误] 服务商返回错误 (HTTP 200)：${(outcome as NonSseBodyOutcome.ApiError).message}"))
-                                return@flow
-                            }
-                            // 渠道不支持 SSE：自动降级整包请求重试一次，回复照常入会话（反馈式透出，不静默放宽）。
-                            // 同时记录会话内标记：本配置后续消息跳过流式往返直达整包（延迟减半）
-                            nonStreamOnlyKeys.add(streamCapabilityKey(config))
-                            emitNonStreamCompletion(config, processedMessages, tools, notifyDowngrade = true)
-                            return@flow
-                        }
-                    }
-                }
-
-                // 发射收集到的完整 Tool Calls
-                val finalState = parseIncrementalStreamState(fullContentBuilder.toString(), isDone = true)
-                
-                // 彻底防范并补发在 Done 释放时可能滞留/改变的 thoughts 和 visibleContent，杜绝丢字漏字
-                if (finalState.thoughts.length > emittedThoughtsLength) {
-                    val finalThoughts = finalState.thoughts.substring(emittedThoughtsLength)
-                    emit(StreamEvent.Thoughts(finalThoughts))
-                    emittedThoughtsLength = finalState.thoughts.length
-                }
-                if (finalState.visibleContent.length > emittedContentLength) {
-                    val finalContent = finalState.visibleContent.substring(emittedContentLength)
-                    emit(StreamEvent.Content(finalContent))
-                    emittedContentLength = finalState.visibleContent.length
-                }
-
-                val finalToolCalls = toolCallBuffers.entries.sortedBy { it.key }.mapNotNull { (_, buffer) ->
-                    val id = buffer.id ?: "call_${System.currentTimeMillis()}"
-                    val name = buffer.name ?: return@mapNotNull null
-                    LlmToolCall(id = id, name = name, argumentsJson = buffer.arguments.toString())
-                }
-                val combinedCalls = finalToolCalls + finalState.completedXmlCalls
-                if (combinedCalls.isNotEmpty()) {
-                    emit(StreamEvent.ToolCalls(combinedCalls))
-                }
-
-                // 终态可见性：两类静默失败不再伪装成正常结束——
-                // 1) 全程零内容（连接成功却一个字没收到，含只发 usage 的空跑）；2) finish_reason=length/content_filter（输出上限截断）。
-                // 以 Error 事件收尾：上层"半截内容保留"逻辑会把 ⚠️ 原因拼在已生成内容之后并落盘，用户第一次能看到真实原因
-                if (emittedContentLength == 0 && emittedThoughtsLength == 0 && combinedCalls.isEmpty()) {
-                    emit(StreamEvent.Error("[错误] 服务商返回了空回复 (HTTP 200)：连接正常但未收到任何文本内容，请检查渠道是否故障或稍后重试"))
-                    return@flow
-                }
-                if (truncatedBy != null) {
-                    emit(StreamEvent.Error("[错误] 回复因输出上限被截断 (finish_reason=$truncatedBy)：请在服务商侧调大 max_tokens 或更换输出上限更高的渠道"))
-                    return@flow
-                }
-
-                emit(StreamEvent.Done)
-                }
-                    if (retryHttp != null) {
-                        kotlinx.coroutines.delay(1000L * attempt) // 简单线性退避：1s / 2s
-                        continue
-                    }
-                    return@flow
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    // 网络瞬时异常（断网/超时）：退避重试；但已开始流式输出后的断流不重试，
-                    // 交由上层"保留半截内容"逻辑处理，避免重试内容与半截内容重复拼接
-                    if (attempt < maxAttempts && !streamStarted) {
-                        kotlinx.coroutines.delay(1000L * attempt)
-                        continue
-                    }
-                    e.printStackTrace()
-                    emit(StreamEvent.Error("[错误] 网络请求故障: ${e.localizedMessage ?: e.message}"))
-                    return@flow
-                }
-            }
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            e.printStackTrace()
-            emit(StreamEvent.Error("[错误] 网络请求故障: ${e.localizedMessage ?: e.message}"))
-        }
-    }.flowOn(Dispatchers.IO)
+    ): Flow<StreamEvent> {
+        // 当本次请求 tools 为空（例如传图时），对 messages 历史做自愈翻译，将 tool_calls 翻译为普通文本 XML 格式，防止 API 400 报错
+        val processedMessages = sanitizeMessages(messages, tools.isNotEmpty())
+        val request = buildExecutionRequest(config, processedMessages, tools, config.streamMode)
+        return transport.stream(request, messageEncoder).map { it.toStreamEvent() }
+    }
 
     fun sendChatCompletionStream(
         config: com.loyea.ui.settings.ApiConfig,
@@ -517,225 +210,52 @@ class LlmClient {
     }
 
     /**
-     * 整包（非流式）请求以流事件形态发射：流式不支持的自动降级与会话内已知非流式的快速路径共用。
-     * 零内容与流式路径同规则透出错误（可见性一致），notifyDowngrade 控制首降级 Toast 反馈
-     */
-    private suspend fun FlowCollector<StreamEvent>.emitNonStreamCompletion(
-        config: com.loyea.ui.settings.ApiConfig,
-        messages: List<LlmChatMessage>,
-        tools: List<McpTool>,
-        notifyDowngrade: Boolean
-    ) {
-        val fallback = sendRawChatCompletion(config, messages, tools, stream = false)
-        if (fallback.isError) {
-            emit(StreamEvent.Error(
-                "[错误] 渠道不支持流式，且非流式请求也失败：${fallback.content.removePrefix("[错误] ")}"))
-            return
-        }
-        if (fallback.content.isBlank() && fallback.thoughts.isNullOrBlank() && fallback.toolCalls.isEmpty()) {
-            emit(StreamEvent.Error("[错误] 服务商返回了空回复 (HTTP 200)：响应解析正常但未包含任何文本内容"))
-            return
-        }
-        if (notifyDowngrade) {
-            emit(StreamEvent.Notice(if (java.util.Locale.getDefault().language == "zh")
-                "当前渠道不支持流式传输，已自动改用整包模式" else
-                "This channel doesn't support streaming; switched to non-streaming mode"))
-        }
-        if (!fallback.thoughts.isNullOrBlank()) emit(StreamEvent.Thoughts(fallback.thoughts))
-        if (fallback.content.isNotBlank()) emit(StreamEvent.Content(fallback.content))
-        if (fallback.toolCalls.isNotEmpty()) emit(StreamEvent.ToolCalls(fallback.toolCalls))
-        if (fallback.promptTokens != null || fallback.completionTokens != null) {
-            emit(StreamEvent.Usage(
-                promptTokens = fallback.promptTokens ?: 0L,
-                completionTokens = fallback.completionTokens ?: 0L,
-                totalTokens = fallback.totalTokens ?: ((fallback.promptTokens ?: 0L) + (fallback.completionTokens ?: 0L)),
-                promptCacheHitTokens = fallback.promptCacheHitTokens ?: 0L,
-                promptCacheMissTokens = fallback.promptCacheMissTokens ?: 0L
-            ))
-        }
-        emit(StreamEvent.Done)
-    }
-
-    /**
-     * 发送 Chat Completion 同步对话请求 (保留用于某些测试或旧调用)
+     * 发送 Chat Completion 同步对话请求：已迁移到统一 Transport（Spec §10）。
+     * 相比旧实现补齐了：MiMo api-key 头、429/5xx 退避重试、180s 非流式读超时、统一错误分类，
+     * 且 Memory/压缩等后台路径与前台共享同一套解析与重试行为。
      */
     suspend fun sendChatCompletion(
         config: com.loyea.ui.settings.ApiConfig,
         systemPrompt: String?,
         history: List<Message>
-    ): LlmResponse = withContext(Dispatchers.IO) {
-        if (config.apiKey.isBlank()) {
-            return@withContext LlmResponse(
-                content = "[错误] API Key 未配置，请在设置中配置您的 Key 后重试。",
-                isError = true
-            )
+    ): LlmResponse {
+        val chatMessages = mutableListOf<LlmChatMessage>()
+        if (!systemPrompt.isNullOrBlank()) {
+            chatMessages.add(LlmChatMessage(role = "system", content = systemPrompt))
         }
-
-        try {
-            val chatHistory = mutableListOf<Map<String, String>>()
-            if (!systemPrompt.isNullOrBlank()) {
-                chatHistory.add(mapOf("role" to "system", "content" to systemPrompt))
-            }
-            chatHistory.addAll(
-                history.filter { 
-                    it.content.isNotBlank() && !it.content.startsWith("[错误]") && !it.content.startsWith("[Error]")
-                }.map { msg ->
-                    mapOf(
-                        "role" to if (msg.sender == Sender.USER) "user" else "assistant",
-                        "content" to msg.content
-                    )
-                }
-            )
-
-            // 根据深度思考状态，对 DeepSeek 进行智能路由（仅在开启智能模型路由时生效）
-            var targetModel = config.modelName
-            if (config.provider.equals("DeepSeek", ignoreCase = true) && config.enableSmartRouting) {
-                if (config.enableReasoning) {
-                    if (targetModel == "deepseek-chat") targetModel = "deepseek-reasoner"
-                    else if (targetModel == "deepseek-v4-flash") targetModel = "deepseek-v4-pro"
-                } else {
-                    if (targetModel == "deepseek-reasoner") targetModel = "deepseek-chat"
-                    else if (targetModel == "deepseek-v4-pro") targetModel = "deepseek-v4-flash"
-                }
-            }
-
-            val requestJson = JsonObject().apply {
-                addProperty("model", targetModel)
-                add("messages", gson.toJsonTree(chatHistory))
-                if (config.enableSearch && !config.provider.equals("MiMo", ignoreCase = true)) {
-                    addProperty("web_search", true)
-                }
-            }
-
-            val requestBody = gson.toJson(requestJson).toRequestBody(mediaType)
-            
-            var baseUrl = config.apiUrl.trim()
-            if (!baseUrl.endsWith("/chat/completions")) {
-                if (baseUrl.endsWith("/")) {
-                    baseUrl += "chat/completions"
-                } else {
-                    baseUrl += "/chat/completions"
-                }
-            }
-
-            val request = Request.Builder()
-                .url(baseUrl)
-                .addHeader("Authorization", "Bearer ${config.apiKey}")
-                .addHeader("Content-Type", "application/json")
-                .post(requestBody)
-                .build()
-
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    val errorMsg = response.body?.string() ?: ""
-                    val displayError = try {
-                        val errJson = gson.fromJson(errorMsg, JsonObject::class.java)
-                        errJson.getAsJsonObject("error")?.get("message")?.asString ?: errorMsg
-                    } catch (e: Exception) {
-                        errorMsg
-                    }
-                    return@withContext LlmResponse(
-                        content = "[错误] 服务器返回 HTTP 错误 ${response.code}: $displayError",
-                        isError = true
-                    )
-                }
-
-                val responseBody = response.body?.string()
-                if (responseBody.isNullOrBlank()) {
-                    return@withContext LlmResponse(
-                        content = "[错误] 大模型接口返回了空响应",
-                        isError = true
-                    )
-                }
-
-                val responseJson = gson.fromJson(responseBody, JsonObject::class.java)
-                val choices = responseJson.getAsJsonArray("choices")
-                if (choices == null || choices.size() == 0) {
-                    return@withContext LlmResponse(
-                        content = "[错误] 未能从接口解析出有效文本选择支，服务器输出：$responseBody",
-                        isError = true
-                    )
-                }
-
-                val messageObj = choices.get(0).asJsonObject.getAsJsonObject("message")
-                val rawContent = messageObj?.get("content")?.takeIf { !it.isJsonNull }?.asString ?: ""
-                val reasoningContent = messageObj?.get("reasoning_content")?.takeIf { !it.isJsonNull }?.asString
-
-                var finalThoughts: String? = null
-                var finalContent = rawContent
-
-                if (!reasoningContent.isNullOrBlank()) {
-                    finalThoughts = reasoningContent
-                }
-
-                val thinkRegex = Regex("<think>([\\s\\S]*?)</think>")
-                val matchResult = thinkRegex.find(rawContent)
-                if (matchResult != null) {
-                    if (finalThoughts == null) {
-                        finalThoughts = matchResult.groupValues[1].trim()
-                    }
-                    finalContent = rawContent.replace(thinkRegex, "").trim()
-                }
-
-                val usage = parseUsage(responseJson)
-                return@withContext LlmResponse(
-                    content = finalContent,
-                    thoughts = finalThoughts,
-                    promptTokens = usage?.promptTokens,
-                    completionTokens = usage?.completionTokens,
-                    totalTokens = usage?.totalTokens,
-                    promptCacheHitTokens = usage?.promptCacheHitTokens,
-                    promptCacheMissTokens = usage?.promptCacheMissTokens
+        chatMessages.addAll(
+            history.filter {
+                it.content.isNotBlank() && !it.content.startsWith("[错误]") && !it.content.startsWith("[Error]")
+            }.map { msg ->
+                LlmChatMessage(
+                    role = if (msg.sender == Sender.USER) "user" else "assistant",
+                    content = msg.content
                 )
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            return@withContext LlmResponse(
-                content = "[错误] 网络请求故障: ${e.localizedMessage ?: e.message}",
-                isError = true
-            )
-        }
+        )
+        val request = buildExecutionRequest(config, chatMessages, emptyList(), com.loyea.llm.StreamMode.NON_STREAM)
+        return transport.once(request, messageEncoder).toLlmResponse()
     }
 
     suspend fun sendChatCompletionWithTools(
         config: com.loyea.ui.settings.ApiConfig,
         messages: List<LlmChatMessage>,
         tools: List<McpTool>
-    ): LlmResponse = withContext(Dispatchers.IO) {
-        sendRawChatCompletion(config, messages, tools, stream = false)
+    ): LlmResponse {
+        val request = buildExecutionRequest(config, messages, tools, com.loyea.llm.StreamMode.NON_STREAM)
+        return transport.once(request, messageEncoder).toLlmResponse()
     }
 
+    /**
+     * 显式整包模式的流事件包装（业务命名保留；底层与流式路径共用同一 Transport）。
+     */
     fun sendRawChatCompletionStream(
         config: com.loyea.ui.settings.ApiConfig,
         messages: List<LlmChatMessage>
-    ): Flow<StreamEvent> = flow {
-        val response = sendRawChatCompletion(config, messages, emptyList(), stream = false)
-        if (response.isError) {
-            emit(StreamEvent.Error(response.content))
-            return@flow
-        }
-        if (!response.thoughts.isNullOrBlank()) {
-            emit(StreamEvent.Thoughts(response.thoughts))
-        }
-        if (response.content.isNotBlank()) {
-            emit(StreamEvent.Content(response.content))
-        }
-        // 非流式零内容（choices 有但正文空）：与流式路径同规则，错误透出而非静默成功
-        if (response.content.isBlank() && response.thoughts.isNullOrBlank() && response.toolCalls.isEmpty()) {
-            emit(StreamEvent.Error("[错误] 服务商返回了空回复 (HTTP 200)：响应解析正常但未包含任何文本内容"))
-            return@flow
-        }
-        if (response.promptTokens != null || response.completionTokens != null) {
-            emit(StreamEvent.Usage(
-                promptTokens = response.promptTokens ?: 0L,
-                completionTokens = response.completionTokens ?: 0L,
-                totalTokens = response.totalTokens ?: ((response.promptTokens ?: 0L) + (response.completionTokens ?: 0L)),
-                promptCacheHitTokens = response.promptCacheHitTokens ?: 0L,
-                promptCacheMissTokens = response.promptCacheMissTokens ?: 0L
-            ))
-        }
-        emit(StreamEvent.Done)
-    }.flowOn(Dispatchers.IO)
+    ): Flow<StreamEvent> {
+        val request = buildExecutionRequest(config, messages, emptyList(), com.loyea.llm.StreamMode.NON_STREAM)
+        return transport.stream(request, messageEncoder).map { it.toStreamEvent() }
+    }
 
     private fun resolveTargetModel(config: com.loyea.ui.settings.ApiConfig): String {
         var targetModel = config.modelName
@@ -965,229 +485,19 @@ class LlmClient {
         return array
     }
 
-    private suspend fun sendRawChatCompletion(
-        config: com.loyea.ui.settings.ApiConfig,
-        messages: List<LlmChatMessage>,
-        tools: List<McpTool>,
-        stream: Boolean
-    ): LlmResponse = withContext(Dispatchers.IO) {
-        if (config.apiKey.isBlank()) {
-            return@withContext LlmResponse(
-                content = "[错误] API Key 未配置，请在设置中配置您的 Key 后重试。",
-                isError = true
-            )
-        }
-
-        try {
-            val processedMessages = messages
-
-            val requestJson = JsonObject().apply {
-                addProperty("model", resolveTargetModel(config))
-                add("messages", toProviderMessages(processedMessages))
-                addProperty("stream", stream)
-                if (tools.isNotEmpty()) {
-                    add("tools", toProviderTools(tools))
-                    addProperty("tool_choice", "auto")
-                }
-                if (config.enableSearch && !config.useIndependentSearch && !config.provider.equals("MiMo", ignoreCase = true)) {
-                    addProperty("web_search", true)
-                    addProperty("enable_search", true)
-                }
-            }
-
-            val requestBuilder = Request.Builder()
-                .url(resolveChatCompletionsUrl(config))
-                .addHeader("Authorization", "Bearer ${config.apiKey}")
-                .addHeader("Content-Type", "application/json")
-            // MiMo 网关对聊天请求同样要求 api-key 头（与 ASR/TTS 路径保持一致），补发以规避 401
-            if (config.provider.equals("MiMo", ignoreCase = true)) {
-                requestBuilder.addHeader("api-key", config.apiKey)
-            }
-            val request = requestBuilder.post(gson.toJson(requestJson).toRequestBody(mediaType)).build()
-
-            // 与流式路径一致：429/5xx/网络瞬时异常退避重试，保障后台任务（记忆提炼等）的可靠性
-            val maxAttempts = 3
-            var attempt = 0
-            while (true) {
-                attempt++
-                val shouldRetry = attempt < maxAttempts
-                var retryHttp = false
-                try {
-                    client.newCall(request).execute().use { response ->
-                        if (!response.isSuccessful) {
-                            val errorMsg = response.body?.string() ?: ""
-                            val displayError = try {
-                                val errJson = gson.fromJson(errorMsg, JsonObject::class.java)
-                                errJson.getAsJsonObject("error")?.get("message")?.asString ?: errorMsg
-                            } catch (e: Exception) {
-                                errorMsg
-                            }
-                            if ((response.code == 429 || response.code >= 500) && shouldRetry) {
-                                retryHttp = true
-                                return@use
-                            }
-                            return@withContext LlmResponse(
-                                content = buildFriendlyHttpError(response.code, displayError),
-                                isError = true
-                            )
-                        }
-
-                        val responseBody = response.body?.string()
-                        if (responseBody.isNullOrBlank()) {
-                            return@withContext LlmResponse(content = "[错误] 大模型接口返回了空响应", isError = true)
-                        }
-
-                        return@withContext parseChatCompletionResponse(responseBody)
-                    }
-                    if (retryHttp) {
-                        kotlinx.coroutines.delay(1000L * attempt)
-                        continue
-                    }
-                    return@withContext LlmResponse(content = "[错误] 网络请求故障: 无响应", isError = true)
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    if (shouldRetry) {
-                        kotlinx.coroutines.delay(1000L * attempt)
-                        continue
-                    }
-                    e.printStackTrace()
-                    return@withContext LlmResponse(content = "[错误] 网络请求故障: ${e.localizedMessage ?: e.message}", isError = true)
-                }
-            }
-            // 不可达兜底（while(true) 内全部 return/continue），仅用于统一 try 块类型推断
-            LlmResponse(content = "[错误] 未知错误", isError = true)
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            e.printStackTrace()
-            LlmResponse(content = "[错误] 网络请求故障: ${e.localizedMessage ?: e.message}", isError = true)
-        }
-    }
-
-    private fun parseChatCompletionResponse(responseBody: String): LlmResponse {
-        // 逐字段容错：兼容网关响应格式变体（choices 非数组 / content 为多模态数组等），
-        // 单个字段异常不再使整条有效响应作废
-        return try {
-            val responseEl = gson.fromJson(responseBody, JsonElement::class.java)
-            // 非标准渠道可能把正文直接作为顶层裸 JSON 字符串返回（小马渠道 2026-09-09 实测：
-            // 非流式响应体为裸字符串，旧实现 Gson 报 Expected JsonObject but was JsonPrimitive）——按正文文本处理
-            if (responseEl != null && responseEl.isJsonPrimitive && responseEl.asJsonPrimitive.isString) {
-                return LlmResponse(content = responseEl.asJsonPrimitive.asString)
-            }
-            val responseJson = responseEl?.takeIf { it.isJsonObject }?.asJsonObject ?: return LlmResponse(
-                content = "[错误] 接口响应解析失败：响应不是 JSON 对象，响应体开头：${responseBody.take(200)}",
-                isError = true
-            )
-            val choices = if (responseJson.has("choices") && responseJson.get("choices").isJsonArray) {
-                responseJson.getAsJsonArray("choices")
-            } else null
-            if (choices == null || choices.size() == 0) {
-                return LlmResponse(
-                    content = "[错误] 未能从接口解析出有效文本选择支，服务器输出：${responseBody.take(300)}",
-                    isError = true
-                )
-            }
-
-            val firstChoice = choices.get(0)
-            if (!firstChoice.isJsonObject) {
-                return LlmResponse(
-                    content = "[错误] 未能从接口解析出有效文本选择支，服务器输出：${responseBody.take(300)}",
-                    isError = true
-                )
-            }
-            val messageEl = firstChoice.asJsonObject.get("message")?.takeIf { !it.isJsonNull }
-            // message 直接是字符串的网关变体：{"choices":[{"message":"正文"}]}
-            if (messageEl != null && messageEl.isJsonPrimitive && messageEl.asJsonPrimitive.isString) {
-                return LlmResponse(content = messageEl.asJsonPrimitive.asString)
-            }
-            val messageObj = messageEl?.takeIf { it.isJsonObject }?.asJsonObject
-            val rawContent = messageObj?.get("content")?.takeIf { !it.isJsonNull }
-                ?.let { if (it.isJsonArray) it.asJsonArray.joinToString("") { el -> el.takeIf { e -> e.isJsonPrimitive && e.asJsonPrimitive.isString }?.asString ?: "" } else it.asString }
-                ?: ""
-            val reasoningContent = messageObj?.get("reasoning_content")?.takeIf { !it.isJsonNull }?.asString
-            val apiToolCalls = if (messageObj?.has("tool_calls") == true && messageObj.get("tool_calls").isJsonArray) {
-                parseToolCalls(messageObj.getAsJsonArray("tool_calls"))
-            } else emptyList()
-
-            val parsedState = parseIncrementalStreamState(rawContent, isDone = true)
-            val finalThoughts = if (!reasoningContent.isNullOrBlank()) reasoningContent else parsedState.thoughts.takeIf { it.isNotBlank() }
-            val finalContent = parsedState.visibleContent.trim()
-            val combinedToolCalls = apiToolCalls + parsedState.completedXmlCalls
-            val usage = parseUsage(responseJson)
-
-            LlmResponse(
-                content = finalContent,
-                thoughts = finalThoughts,
-                toolCalls = combinedToolCalls,
-                promptTokens = usage?.promptTokens,
-                completionTokens = usage?.completionTokens,
-                totalTokens = usage?.totalTokens,
-                promptCacheHitTokens = usage?.promptCacheHitTokens,
-                promptCacheMissTokens = usage?.promptCacheMissTokens
-            )
-        } catch (e: Exception) {
-            e.printStackTrace()
-            // 解析失败时留档响应体采样：非标准网关格式现场不再依赖复现才能定位
-            android.util.Log.w("LlmClient", "ChatCompletion parse failed, body sample: ${responseBody.take(300)}")
-            LlmResponse(content = "[错误] 接口响应解析失败: ${e.localizedMessage ?: e.message}；响应体开头：${responseBody.take(120)}", isError = true)
-        }
-    }
-
     /**
-     * 从非流式响应 JSON 中解析 usage（OpenAI 兼容格式），缺失时返回 null。
-     * 供 sendChatCompletion 与 parseChatCompletionResponse 两个解析点共用。
+     * 整包响应解析已收敛至 com.loyea.llm.ResponseParser（Spec §12.1：
+     * parser 只回答「这是什么」，降级/学习决策由 Transport 状态机承担）。
+     * 此处保留兼容委托。
      */
-    /**
-     * 非 SSE 响应体判定（HTTP 200 却整条流无 data 事件）：
-     * 网关 200+HTML / 200+error JSON、空流、渠道忽略 stream 参数回整包 JSON，均在此归类。
-     */
-    internal fun interpretNonSseBody(rawBody: String): NonSseBodyOutcome {
-        if (rawBody.isEmpty()) return NonSseBodyOutcome.Empty
-        // 顶层裸 JSON 字符串（非标准渠道，小马实测）：按正文文本直接降级为可用回复
-        if (rawBody.startsWith("\"")) {
-            val bare = runCatching { gson.fromJson(rawBody, String::class.java) }.getOrNull()
-            if (!bare.isNullOrEmpty()) return NonSseBodyOutcome.Completion(LlmResponse(content = bare))
-        }
-        if (!rawBody.startsWith("{") && !rawBody.startsWith("[")) {
-            return NonSseBodyOutcome.Unrecognized(rawBody.take(200))
-        }
-        val parsed = runCatching { gson.fromJson(rawBody, JsonObject::class.java) }.getOrNull()
-            ?: return NonSseBodyOutcome.Unrecognized(rawBody.take(200))
-        val errObj = parsed.getAsJsonObject("error")
-        if (errObj != null) {
-            val msg = errObj.get("message")?.takeIf { !it.isJsonNull }?.asString ?: rawBody.take(300)
-            return NonSseBodyOutcome.ApiError(msg)
-        }
-        if (parsed.has("choices") && parsed.get("choices").isJsonArray) {
-            return NonSseBodyOutcome.Completion(parseChatCompletionResponse(rawBody))
-        }
-        return NonSseBodyOutcome.Unrecognized(rawBody.take(200))
-    }
+    private fun parseChatCompletionResponse(responseBody: String): LlmResponse =
+        parser.parseChatCompletionResponse(responseBody).toLlmResponse()
 
-    private fun parseUsage(responseJson: JsonObject): LlmUsage? {
-        val usage = responseJson.get("usage")?.takeIf { !it.isJsonNull && it.isJsonObject }?.asJsonObject ?: return null
-        return LlmUsage(
-            promptTokens = usage.get("prompt_tokens")?.takeIf { !it.isJsonNull }?.asLong,
-            completionTokens = usage.get("completion_tokens")?.takeIf { !it.isJsonNull }?.asLong,
-            totalTokens = usage.get("total_tokens")?.takeIf { !it.isJsonNull }?.asLong,
-            promptCacheHitTokens = usage.get("prompt_cache_hit_tokens")?.takeIf { !it.isJsonNull }?.asLong,
-            promptCacheMissTokens = usage.get("prompt_cache_miss_tokens")?.takeIf { !it.isJsonNull }?.asLong
-        )
-    }
+    internal fun interpretNonSseBody(rawBody: String): NonSseBodyOutcome =
+        parser.interpretNonSseBody(rawBody)
 
-    private fun parseToolCalls(toolCallsArray: JsonArray?): List<LlmToolCall> {
-        if (toolCallsArray == null || toolCallsArray.size() == 0) return emptyList()
-        val calls = mutableListOf<LlmToolCall>()
-        toolCallsArray.forEachIndexed { index, element ->
-            val obj = element.asJsonObject
-            val functionObj = obj.getAsJsonObject("function") ?: return@forEachIndexed
-            val id = obj.get("id")?.takeIf { !it.isJsonNull }?.asString
-                ?: "tool_${System.currentTimeMillis()}_$index"
-            val name = functionObj.get("name")?.takeIf { !it.isJsonNull }?.asString ?: return@forEachIndexed
-            val arguments = functionObj.get("arguments")?.takeIf { !it.isJsonNull }?.let(::jsonElementToString) ?: "{}"
-            calls.add(LlmToolCall(id = id, name = name, argumentsJson = arguments))
-        }
-        return calls
-    }
+    private fun parseUsage(responseJson: JsonObject): LlmUsage? =
+        parser.parseUsage(responseJson)
 
     fun parseArgumentsMap(argumentsJson: String): Map<String, Any> {
         return try {
@@ -1198,14 +508,6 @@ class LlmClient {
     }
 
     fun toJson(value: Any?): String = gson.toJson(value)
-
-    private fun jsonElementToString(element: JsonElement): String {
-        return if (element.isJsonPrimitive && element.asJsonPrimitive.isString) {
-            element.asString
-        } else {
-            gson.toJson(element)
-        }
-    }
 
     suspend fun performIndependentWebSearch(searchProvider: String, searchApiUrl: String, searchApiKey: String, query: String): String = withContext(Dispatchers.IO) {
         if (searchApiKey.isBlank()) return@withContext "\n\n[联网搜索失败: 未配置搜索 API Key]\n\n"
@@ -2012,178 +1314,12 @@ class LlmClient {
             }
         }
 
-    data class ParsedStreamState(
-        val thoughts: String,
-        val visibleContent: String,
-        val completedXmlCalls: List<LlmToolCall>
-    )
-
-    fun parseIncrementalStreamState(fullStr: String, isDone: Boolean = false): ParsedStreamState {
-        var thoughtsAccumulator = ""
-        var visibleContentAccumulator = ""
-        val completedXmlCalls = mutableListOf<LlmToolCall>()
-
-        // 1. 寻找未闭合的 <tool_call> 或 <tool_invocation>。如果有且尚未 Done，截断后续正在生成的文本，挂起不发射
-        val lastToolCallStart = fullStr.lastIndexOf("<tool_call>")
-        val lastToolCallEnd = fullStr.lastIndexOf("</tool_call>")
-        val isToolCallUnclosed = !isDone && lastToolCallStart != -1 && lastToolCallStart > lastToolCallEnd
-
-        val lastToolInvocationStart = fullStr.lastIndexOf("<tool_invocation")
-        var lastToolInvocationEnd = -1
-        if (lastToolInvocationStart != -1) {
-            val endIdx = fullStr.indexOf("/>", lastToolInvocationStart)
-            if (endIdx != -1) {
-                lastToolInvocationEnd = endIdx + 2
-            }
-        }
-        val isToolInvocationUnclosed = !isDone && lastToolInvocationStart != -1 && lastToolInvocationEnd == -1
-
-        var processLimit = fullStr.length
-        if (isToolCallUnclosed && isToolInvocationUnclosed) {
-            processLimit = minOf(lastToolCallStart, lastToolInvocationStart)
-        } else if (isToolCallUnclosed) {
-            processLimit = lastToolCallStart
-        } else if (isToolInvocationUnclosed) {
-            processLimit = lastToolInvocationStart
-        }
-
-        val safeStr = fullStr.substring(0, processLimit)
-
-        // 2. 提取并滤除安全文本中所有已就绪的工具调用
-        var cleanStr = safeStr
-
-        // 2.1 处理 <tool_call>... (使用超强自愈正则，适配传统闭合、残缺、或连续不闭合)
-        val toolCallRegex = Regex("<tool_call>([\\s\\S]*?)(?:</tool_call>|(?=<tool_call>|$))")
-        val matches = toolCallRegex.findAll(cleanStr)
-        for (match in matches) {
-            val xmlBlock = match.value
-            val parsedCalls = parseXmlToolCallsOnly(xmlBlock)
-            completedXmlCalls.addAll(parsedCalls)
-            cleanStr = cleanStr.replace(xmlBlock, "")
-        }
-
-        // 2.2 处理 <tool_invocation ... />
-        val toolInvocationRegex = Regex("""<tool_invocation\s+name="([^"]+)"\s+arguments=["']?(\{[\s\S]*?\})["']?\s*/>""")
-        val invocationMatches = toolInvocationRegex.findAll(cleanStr)
-        for (match in invocationMatches) {
-            val xmlBlock = match.value
-            val funcName = match.groupValues[1]
-            val argumentsJson = match.groupValues[2]
-            completedXmlCalls.add(
-                LlmToolCall(
-                    id = "xml_call_${System.currentTimeMillis()}_${(0..1000).random()}",
-                    name = funcName,
-                    argumentsJson = argumentsJson
-                )
-            )
-            cleanStr = cleanStr.replace(xmlBlock, "")
-        }
-
-        // 3. 在已经滤除掉工具调用的 cleanStr 中，进行 <think> 与正文的处理
-        var cursor = 0
-        var trimLeadingFromClose = false   // 紧跟 </think> 之后的正文段需去掉剥离残留的首行空行
-        val len = cleanStr.length
-        while (cursor < len) {
-            val thinkStart = cleanStr.indexOf("<think>", cursor)
-            if (thinkStart == -1) {
-                val tail = cleanStr.substring(cursor)
-                visibleContentAccumulator += if (trimLeadingFromClose) tail.trimStart('\n', '\r', ' ') else tail
-                break
-            }
-
-            if (thinkStart > cursor) {
-                val seg = cleanStr.substring(cursor, thinkStart)
-                if (trimLeadingFromClose) {
-                    visibleContentAccumulator += seg.trimStart('\n', '\r', ' ')
-                    trimLeadingFromClose = false
-                } else {
-                    visibleContentAccumulator += seg
-                }
-            }
-
-            val thinkEnd = cleanStr.indexOf("</think>", thinkStart)
-            if (thinkEnd != -1) {
-                thoughtsAccumulator += cleanStr.substring(thinkStart + 7, thinkEnd)
-                cursor = thinkEnd + 8
-                trimLeadingFromClose = true
-            } else {
-                thoughtsAccumulator += cleanStr.substring(thinkStart + 7)
-                break
-            }
-        }
-
-        return ParsedStreamState(
-            thoughts = thoughtsAccumulator.trim(),
-            visibleContent = visibleContentAccumulator,
-            completedXmlCalls = completedXmlCalls
-        )
-    }
-
-    private fun parseXmlToolCallsOnly(xmlBlock: String): List<LlmToolCall> {
-        val calls = mutableListOf<LlmToolCall>()
-        
-        // 1. 支持自愈残缺不闭合的标签正则
-        val blockContentRegex = Regex("<tool_call>([\\s\\S]*?)(?:</tool_call>|$)")
-        val match = blockContentRegex.find(xmlBlock) ?: return emptyList()
-        val block = match.groupValues[1].trim()
-
-        // 2. 优先尝试解析函数风格：name(key="value", ...)
-        val funcStyleRegex = Regex("^([a-zA-Z0-9_]+)\\(([\\s\\S]*)\\)$")
-        val funcMatch = funcStyleRegex.matchEntire(block)
-        if (funcMatch != null) {
-            val funcName = funcMatch.groupValues[1]
-            val argsStr = funcMatch.groupValues[2]
-            
-            val paramRegex = Regex("([a-zA-Z0-9_]+)\\s*=\\s*['\"]([\\s\\S]*?)['\"](?=\\s*,|\\s*$)")
-            val argsMap = mutableMapOf<String, Any>()
-            paramRegex.findAll(argsStr).forEach { paramMatch ->
-                val key = paramMatch.groupValues[1]
-                val valStr = paramMatch.groupValues[2]
-                argsMap[key] = valStr
-            }
-            
-            if (funcName.isNotBlank()) {
-                calls.add(
-                    LlmToolCall(
-                        id = "xml_call_${System.currentTimeMillis()}_${(0..1000).random()}",
-                        name = funcName,
-                        argumentsJson = gson.toJson(argsMap)
-                    )
-                )
-                return calls
-            }
-        }
-
-        // 3. 兜底走原本的 XML 风格解析：<function=name> <parameter=val>...</parameter>
-        val oldFuncRegex = Regex("<function\\s*=\\s*([^>\\s]+)>|<function\\s+name\\s*=\\s*\"([^\"]+)\">")
-        val oldFuncMatch = oldFuncRegex.find(block)
-        val funcName = oldFuncMatch?.groupValues?.get(1)?.takeIf { it.isNotEmpty() }
-            ?: oldFuncMatch?.groupValues?.get(2)?.takeIf { it.isNotEmpty() }
-            ?: ""
-
-        if (funcName.isNotBlank()) {
-            val paramRegex = Regex("<parameter\\s*=\\s*([^>\\s]+)>([\\s\\S]*?)</parameter>|<parameter\\s+name\\s*=\\s*\"([^\"]+)\">([\\s\\S]*?)</parameter>")
-            val argsMap = mutableMapOf<String, Any>()
-            paramRegex.findAll(block).forEach { paramMatch ->
-                val key = paramMatch.groupValues[1].takeIf { it.isNotEmpty() }
-                    ?: paramMatch.groupValues[3].takeIf { it.isNotEmpty() }
-                val value = paramMatch.groupValues[2].takeIf { paramMatch.groupValues[1].isNotEmpty() }
-                    ?: paramMatch.groupValues[4]
-                if (key != null) {
-                    argsMap[key] = value.trim()
-                }
-            }
-            val argumentsJson = gson.toJson(argsMap)
-            calls.add(
-                LlmToolCall(
-                    id = "xml_call_${System.currentTimeMillis()}_${(0..1000).random()}",
-                    name = funcName,
-                    argumentsJson = argumentsJson
-                )
-            )
-        }
-        return calls
-    }
+    /**
+     * 增量流解析（<think> 剥离 + XML 工具调用）统一实现移至 com.loyea.llm.StreamContentParser，
+     * 此处保留委托避免双实现漂移。
+     */
+    fun parseIncrementalStreamState(fullStr: String, isDone: Boolean = false): com.loyea.llm.ParsedStreamState =
+        com.loyea.llm.StreamContentParser.parseIncrementalStreamState(fullStr, isDone)
 
     private fun sanitizeMessages(messages: List<LlmChatMessage>, hasTools: Boolean): List<LlmChatMessage> {
         if (hasTools) return messages
