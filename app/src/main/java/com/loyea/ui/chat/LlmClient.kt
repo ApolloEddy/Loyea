@@ -8,6 +8,7 @@ import com.google.gson.reflect.TypeToken
 import com.loyea.mcp.McpTool
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
@@ -130,6 +131,13 @@ class LlmClient {
     private val mediaType = "application/json; charset=utf-8".toMediaType()
     private val mapType = object : TypeToken<Map<String, Any>>() {}.type
 
+    // 会话内已知不支持 SSE 流式的渠道键（端点+模型）：跳过注定失败的流式往返，直接整包请求。
+    // 仅内存态、应用重启即清；服务商恢复流式支持后重启自愈
+    private val nonStreamOnlyKeys = java.util.Collections.synchronizedSet(HashSet<String>())
+
+    private fun streamCapabilityKey(config: com.loyea.ui.settings.ApiConfig): String =
+        "${resolveChatCompletionsUrl(config)}|${resolveTargetModel(config)}"
+
     /**
      * 将 HTTP 错误码转化为对用户可操作的分级提示。
      * 原始错误体截断后附带，防止部分网关在错误响应中回显请求体/内部堆栈。
@@ -161,6 +169,13 @@ class LlmClient {
         try {
             // 当本次请求 tools 为空（例如传图时），对 messages 历史做自愈翻译，将 tool_calls 翻译为普通文本 XML 格式，防止 API 400 报错
             val processedMessages = sanitizeMessages(messages, tools.isNotEmpty())
+
+            // 会话内已知不支持流式的渠道：跳过注定失败的流式往返直接整包请求
+            // （首次自动降级时记录；Toast 只在首降级出现，后续静默走快速路径）
+            if (nonStreamOnlyKeys.contains(streamCapabilityKey(config))) {
+                emitNonStreamCompletion(config, processedMessages, tools, notifyDowngrade = false)
+                return@flow
+            }
 
             // 根据深度思考状态，对 DeepSeek 进行智能路由（仅在开启智能模型路由时生效）
             val targetModel = resolveTargetModel(config)
@@ -405,29 +420,10 @@ class LlmClient {
                                     "[错误] 服务商返回错误 (HTTP 200)：${(outcome as NonSseBodyOutcome.ApiError).message}"))
                                 return@flow
                             }
-                            // 渠道不支持 SSE：自动降级整包请求重试一次，回复照常入会话（反馈式透出，不静默放宽）
-                            val fallback = sendRawChatCompletion(config, processedMessages, tools, stream = false)
-                            if (fallback.isError) {
-                                emit(StreamEvent.Error(
-                                    "[错误] 渠道不支持流式传输，且非流式重试也失败：${fallback.content.removePrefix("[错误] ")}"))
-                                return@flow
-                            }
-                            emit(StreamEvent.Notice(if (java.util.Locale.getDefault().language == "zh")
-                                "当前渠道不支持流式传输，已自动改用整包模式" else
-                                "This channel doesn't support streaming; switched to non-streaming mode"))
-                            if (!fallback.thoughts.isNullOrBlank()) emit(StreamEvent.Thoughts(fallback.thoughts))
-                            if (fallback.content.isNotBlank()) emit(StreamEvent.Content(fallback.content))
-                            if (fallback.toolCalls.isNotEmpty()) emit(StreamEvent.ToolCalls(fallback.toolCalls))
-                            if (fallback.promptTokens != null || fallback.completionTokens != null) {
-                                emit(StreamEvent.Usage(
-                                    promptTokens = fallback.promptTokens ?: 0L,
-                                    completionTokens = fallback.completionTokens ?: 0L,
-                                    totalTokens = fallback.totalTokens ?: ((fallback.promptTokens ?: 0L) + (fallback.completionTokens ?: 0L)),
-                                    promptCacheHitTokens = fallback.promptCacheHitTokens ?: 0L,
-                                    promptCacheMissTokens = fallback.promptCacheMissTokens ?: 0L
-                                ))
-                            }
-                            emit(StreamEvent.Done)
+                            // 渠道不支持 SSE：自动降级整包请求重试一次，回复照常入会话（反馈式透出，不静默放宽）。
+                            // 同时记录会话内标记：本配置后续消息跳过流式往返直达整包（延迟减半）
+                            nonStreamOnlyKeys.add(streamCapabilityKey(config))
+                            emitNonStreamCompletion(config, processedMessages, tools, notifyDowngrade = true)
                             return@flow
                         }
                     }
@@ -518,6 +514,46 @@ class LlmClient {
             }
         )
         return sendChatCompletionStream(config, chatHistory, tools)
+    }
+
+    /**
+     * 整包（非流式）请求以流事件形态发射：流式不支持的自动降级与会话内已知非流式的快速路径共用。
+     * 零内容与流式路径同规则透出错误（可见性一致），notifyDowngrade 控制首降级 Toast 反馈
+     */
+    private suspend fun FlowCollector<StreamEvent>.emitNonStreamCompletion(
+        config: com.loyea.ui.settings.ApiConfig,
+        messages: List<LlmChatMessage>,
+        tools: List<McpTool>,
+        notifyDowngrade: Boolean
+    ) {
+        val fallback = sendRawChatCompletion(config, messages, tools, stream = false)
+        if (fallback.isError) {
+            emit(StreamEvent.Error(
+                "[错误] 渠道不支持流式，且非流式请求也失败：${fallback.content.removePrefix("[错误] ")}"))
+            return
+        }
+        if (fallback.content.isBlank() && fallback.thoughts.isNullOrBlank() && fallback.toolCalls.isEmpty()) {
+            emit(StreamEvent.Error("[错误] 服务商返回了空回复 (HTTP 200)：响应解析正常但未包含任何文本内容"))
+            return
+        }
+        if (notifyDowngrade) {
+            emit(StreamEvent.Notice(if (java.util.Locale.getDefault().language == "zh")
+                "当前渠道不支持流式传输，已自动改用整包模式" else
+                "This channel doesn't support streaming; switched to non-streaming mode"))
+        }
+        if (!fallback.thoughts.isNullOrBlank()) emit(StreamEvent.Thoughts(fallback.thoughts))
+        if (fallback.content.isNotBlank()) emit(StreamEvent.Content(fallback.content))
+        if (fallback.toolCalls.isNotEmpty()) emit(StreamEvent.ToolCalls(fallback.toolCalls))
+        if (fallback.promptTokens != null || fallback.completionTokens != null) {
+            emit(StreamEvent.Usage(
+                promptTokens = fallback.promptTokens ?: 0L,
+                completionTokens = fallback.completionTokens ?: 0L,
+                totalTokens = fallback.totalTokens ?: ((fallback.promptTokens ?: 0L) + (fallback.completionTokens ?: 0L)),
+                promptCacheHitTokens = fallback.promptCacheHitTokens ?: 0L,
+                promptCacheMissTokens = fallback.promptCacheMissTokens ?: 0L
+            ))
+        }
+        emit(StreamEvent.Done)
     }
 
     /**
@@ -1031,7 +1067,16 @@ class LlmClient {
         // 逐字段容错：兼容网关响应格式变体（choices 非数组 / content 为多模态数组等），
         // 单个字段异常不再使整条有效响应作废
         return try {
-            val responseJson = gson.fromJson(responseBody, JsonObject::class.java)
+            val responseEl = gson.fromJson(responseBody, JsonElement::class.java)
+            // 非标准渠道可能把正文直接作为顶层裸 JSON 字符串返回（小马渠道 2026-09-09 实测：
+            // 非流式响应体为裸字符串，旧实现 Gson 报 Expected JsonObject but was JsonPrimitive）——按正文文本处理
+            if (responseEl != null && responseEl.isJsonPrimitive && responseEl.asJsonPrimitive.isString) {
+                return LlmResponse(content = responseEl.asJsonPrimitive.asString)
+            }
+            val responseJson = responseEl?.takeIf { it.isJsonObject }?.asJsonObject ?: return LlmResponse(
+                content = "[错误] 接口响应解析失败：响应不是 JSON 对象，响应体开头：${responseBody.take(200)}",
+                isError = true
+            )
             val choices = if (responseJson.has("choices") && responseJson.get("choices").isJsonArray) {
                 responseJson.getAsJsonArray("choices")
             } else null
@@ -1042,7 +1087,19 @@ class LlmClient {
                 )
             }
 
-            val messageObj = choices.get(0).asJsonObject.getAsJsonObject("message")
+            val firstChoice = choices.get(0)
+            if (!firstChoice.isJsonObject) {
+                return LlmResponse(
+                    content = "[错误] 未能从接口解析出有效文本选择支，服务器输出：${responseBody.take(300)}",
+                    isError = true
+                )
+            }
+            val messageEl = firstChoice.asJsonObject.get("message")?.takeIf { !it.isJsonNull }
+            // message 直接是字符串的网关变体：{"choices":[{"message":"正文"}]}
+            if (messageEl != null && messageEl.isJsonPrimitive && messageEl.asJsonPrimitive.isString) {
+                return LlmResponse(content = messageEl.asJsonPrimitive.asString)
+            }
+            val messageObj = messageEl?.takeIf { it.isJsonObject }?.asJsonObject
             val rawContent = messageObj?.get("content")?.takeIf { !it.isJsonNull }
                 ?.let { if (it.isJsonArray) it.asJsonArray.joinToString("") { el -> el.takeIf { e -> e.isJsonPrimitive && e.asJsonPrimitive.isString }?.asString ?: "" } else it.asString }
                 ?: ""
@@ -1069,7 +1126,9 @@ class LlmClient {
             )
         } catch (e: Exception) {
             e.printStackTrace()
-            LlmResponse(content = "[错误] 接口响应解析失败: ${e.localizedMessage ?: e.message}", isError = true)
+            // 解析失败时留档响应体采样：非标准网关格式现场不再依赖复现才能定位
+            android.util.Log.w("LlmClient", "ChatCompletion parse failed, body sample: ${responseBody.take(300)}")
+            LlmResponse(content = "[错误] 接口响应解析失败: ${e.localizedMessage ?: e.message}；响应体开头：${responseBody.take(120)}", isError = true)
         }
     }
 
@@ -1083,6 +1142,11 @@ class LlmClient {
      */
     internal fun interpretNonSseBody(rawBody: String): NonSseBodyOutcome {
         if (rawBody.isEmpty()) return NonSseBodyOutcome.Empty
+        // 顶层裸 JSON 字符串（非标准渠道，小马实测）：按正文文本直接降级为可用回复
+        if (rawBody.startsWith("\"")) {
+            val bare = runCatching { gson.fromJson(rawBody, String::class.java) }.getOrNull()
+            if (!bare.isNullOrEmpty()) return NonSseBodyOutcome.Completion(LlmResponse(content = bare))
+        }
         if (!rawBody.startsWith("{") && !rawBody.startsWith("[")) {
             return NonSseBodyOutcome.Unrecognized(rawBody.take(200))
         }

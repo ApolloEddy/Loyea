@@ -109,4 +109,25 @@ class LlmClientStreamSilentFailureTest {
         assertEquals("正文", completion.response.content)
         assertEquals("推理", completion.response.thoughts)
     }
+
+    // ===== 非标准响应体容错（小马渠道 2026-09-09 实测形态）=====
+
+    @Test
+    fun `bare json string body classified as Completion with string content`() {
+        // 小马非流式响应实测：顶层裸 JSON 字符串——旧实现 Gson 报
+        // "Expected JsonObject but was JsonPrimitive"，降级重试也失败
+        val outcome = LlmClient().interpretNonSseBody("\"你好，我在呢\"")
+        val completion = outcome as? NonSseBodyOutcome.Completion
+        assertNotNull("裸 JSON 字符串必须按正文降级为 Completion", completion)
+        assertEquals("你好，我在呢", completion!!.response.content)
+    }
+
+    @Test
+    fun `message as plain string inside choices is tolerated`() {
+        // 网关变体：choices[0].message 直接是字符串而非对象
+        val body = """{"choices":[{"index":0,"message":"直接正文"}]}"""
+        val completion = LlmClient().interpretNonSseBody(body) as? NonSseBodyOutcome.Completion
+        assertNotNull(completion)
+        assertEquals("直接正文", completion!!.response.content)
+    }
 }
