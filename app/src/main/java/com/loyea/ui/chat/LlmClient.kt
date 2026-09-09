@@ -29,6 +29,8 @@ sealed class StreamEvent {
     data class Thoughts(val text: String) : StreamEvent()
     data class Error(val message: String) : StreamEvent()
     data class ToolCalls(val calls: List<LlmToolCall>) : StreamEvent()
+    /** 非致命提示（如"渠道不支持流式已自动降级"）：不打断流，UI 以 Toast 告知 */
+    data class Notice(val text: String) : StreamEvent()
     data class Usage(
         val promptTokens: Long,
         val completionTokens: Long,
@@ -247,7 +249,6 @@ class LlmClient {
                 // 非 data 行的原始报文累积：整条流读完却没有任何 data 事件时，作为"响应不是 SSE 格式"
                 // 的判定与报错证据（网关 200+HTML/error JSON、空流、渠道强制非流式——旧行为是静默吞掉整条回复）
                 val nonSseRaw = StringBuilder()
-                var nonSseOverflow = false
                 // 上游终态原因：length/content_filter 表示回复被输出上限截断。旧逻辑不解析该字段，
                 // 截断与自然结束无法区分，用户看到的是"说到一半就没了且无任何提示"
                 var truncatedBy: String? = null
@@ -356,22 +357,17 @@ class LlmClient {
                         // 空行是 SSE 事件分隔符，不累积；其余非 data 行（HTML/JSON/注释）暂存作非流式判定证据
                         if (nonSseRaw.length < NON_SSE_CAPTURE_LIMIT) {
                             nonSseRaw.append(line).append('\n')
-                        } else {
-                            nonSseOverflow = true
                         }
                     }
                 }
 
                 // 响应体不是 SSE（整条流无任何 data 事件）：网关 200+HTML / 200+error JSON、空流、
                 // 或渠道不支持流式直接回整包 JSON——旧行为一律当正常结束，零内容零报错误导排障方向。
-                // 现分三类透出：错误体/不可识别体报错（附采样），整包 JSON 降级为非流式解析（回复仍可用）
+                // 现分三类：error 体透出服务商标错原文（明说不支持流式的自动降级非流式重试）、
+                // 整包 JSON 降级解析（回复仍可用）、其余报错并附响应体采样
                 if (!streamStarted) {
                     val rawBody = nonSseRaw.toString().trim()
                     when (val outcome = interpretNonSseBody(rawBody)) {
-                        is NonSseBodyOutcome.Empty ->
-                            emit(StreamEvent.Error("[错误] 服务商返回了空响应 (HTTP 200)：连接正常但未收到任何数据，请检查渠道是否故障或稍后重试"))
-                        is NonSseBodyOutcome.ApiError ->
-                            emit(StreamEvent.Error("[错误] 服务商返回错误 (HTTP 200)：${outcome.message}"))
                         is NonSseBodyOutcome.Completion -> {
                             val resp = outcome.response
                             if (resp.isError) {
@@ -392,12 +388,49 @@ class LlmClient {
                             emit(StreamEvent.Done)
                             return@flow
                         }
-                        is NonSseBodyOutcome.Unrecognized -> {
-                            val overflowNote = if (nonSseOverflow) "（响应体过大，已截断）" else ""
-                            emit(StreamEvent.Error("[错误] 服务商响应不是流式数据 (HTTP 200)，响应体开头：${outcome.sample}$overflowNote"))
+                        else -> {
+                            // 诊断细节留 logcat（响应体采样），用户侧 Toast 只说降级事实
+                            android.util.Log.w("LlmClient",
+                                "Non-SSE 200 body (${outcome::class.simpleName}), sample: ${rawBody.take(300)}")
+                            val shouldFallback = when (outcome) {
+                                is NonSseBodyOutcome.ApiError ->
+                                    outcome.message.contains("stream", ignoreCase = true) ||
+                                        outcome.message.contains("流式")
+                                is NonSseBodyOutcome.Empty -> true
+                                is NonSseBodyOutcome.Unrecognized -> true
+                                is NonSseBodyOutcome.Completion -> false
+                            }
+                            if (!shouldFallback) {
+                                emit(StreamEvent.Error(
+                                    "[错误] 服务商返回错误 (HTTP 200)：${(outcome as NonSseBodyOutcome.ApiError).message}"))
+                                return@flow
+                            }
+                            // 渠道不支持 SSE：自动降级整包请求重试一次，回复照常入会话（反馈式透出，不静默放宽）
+                            val fallback = sendRawChatCompletion(config, processedMessages, tools, stream = false)
+                            if (fallback.isError) {
+                                emit(StreamEvent.Error(
+                                    "[错误] 渠道不支持流式传输，且非流式重试也失败：${fallback.content.removePrefix("[错误] ")}"))
+                                return@flow
+                            }
+                            emit(StreamEvent.Notice(if (java.util.Locale.getDefault().language == "zh")
+                                "当前渠道不支持流式传输，已自动改用整包模式" else
+                                "This channel doesn't support streaming; switched to non-streaming mode"))
+                            if (!fallback.thoughts.isNullOrBlank()) emit(StreamEvent.Thoughts(fallback.thoughts))
+                            if (fallback.content.isNotBlank()) emit(StreamEvent.Content(fallback.content))
+                            if (fallback.toolCalls.isNotEmpty()) emit(StreamEvent.ToolCalls(fallback.toolCalls))
+                            if (fallback.promptTokens != null || fallback.completionTokens != null) {
+                                emit(StreamEvent.Usage(
+                                    promptTokens = fallback.promptTokens ?: 0L,
+                                    completionTokens = fallback.completionTokens ?: 0L,
+                                    totalTokens = fallback.totalTokens ?: ((fallback.promptTokens ?: 0L) + (fallback.completionTokens ?: 0L)),
+                                    promptCacheHitTokens = fallback.promptCacheHitTokens ?: 0L,
+                                    promptCacheMissTokens = fallback.promptCacheMissTokens ?: 0L
+                                ))
+                            }
+                            emit(StreamEvent.Done)
+                            return@flow
                         }
                     }
-                    return@flow
                 }
 
                 // 发射收集到的完整 Tool Calls

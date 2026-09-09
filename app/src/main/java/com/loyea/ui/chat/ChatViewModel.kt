@@ -1836,6 +1836,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 accumulatedCacheMissTokens += event.promptCacheMissTokens
                                 hasRealUsage = true
                             }
+                            is StreamEvent.Notice -> {
+                                // 反馈式透出（不打断流）：渠道不支持流式已自动降级等非致命事件
+                                android.widget.Toast.makeText(context, event.text, android.widget.Toast.LENGTH_LONG).show()
+                            }
                             is StreamEvent.Done -> {
                                 // 最终轮（无工具）时重算总耗时，让 "Thought for Xs" 覆盖整个多轮响应
                                 if (calculatedDuration == null || streamToolCalls.isEmpty()) {
