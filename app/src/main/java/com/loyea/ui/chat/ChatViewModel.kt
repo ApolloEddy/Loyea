@@ -371,11 +371,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         loadAllData()
-        // 通道绑定一次性归一化与显式化回填（Spec §14/§15：遗留默认值清空、存量兜底行为写成显式绑定）
+        // 通道绑定一次性归一化与显式化回填（Spec §14/§15）：同步执行，
+        // 防止首个会话窗口内 TTS/生图被短暂误判为未配置
         configRepository.normalizeLegacyBindings()
-        viewModelScope.launch(Dispatchers.IO) {
-            configRepository.backfillExplicitBindings()
-        }
+        configRepository.backfillExplicitBindings()
         mcpManager.registerImageGenerationProvider { prompt ->
             generateAndStoreImage(prompt) ?: "Error: Image generation failed. Check the ImageGen API configuration."
         }

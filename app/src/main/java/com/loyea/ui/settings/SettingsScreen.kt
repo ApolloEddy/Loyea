@@ -1240,10 +1240,15 @@ fun AddOrEditSheet(
     var apiUrlInput by remember { mutableStateOf(editingConfig?.apiUrl ?: "https://api.deepseek.com/v1") }
     var apiKeyInput by remember { mutableStateOf(editingConfig?.apiKey ?: "") }
     var modelInput by remember { mutableStateOf(editingConfig?.modelName ?: "deepseek-v4-pro") }
-    
+
     var enableSearch by remember { mutableStateOf(editingConfig?.enableSearch ?: false) }
     var enableReasoning by remember { mutableStateOf(editingConfig?.enableReasoning ?: true) }
     var enableSmartRouting by remember { mutableStateOf(editingConfig?.enableSmartRouting ?: true) }
+    // isEnabled / 流式模式（Spec §6.1/§8.1）：编辑时保留原值，避免保存把用户设置冲回默认
+    var isEnabledInput by remember { mutableStateOf(editingConfig?.isEnabled ?: true) }
+    var streamModeInput by remember {
+        mutableStateOf(editingConfig?.streamMode ?: com.loyea.llm.StreamMode.AUTO)
+    }
 
 
     var showApiKey by remember { mutableStateOf(false) }
@@ -1698,6 +1703,36 @@ fun AddOrEditSheet(
             )
         }
 
+        // 启用开关（Spec §6.1）：关闭后该配置不得被任何运行时任务使用（Resolver 强制校验）
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = if (isEn) "Enable This Connection" else "启用此连接",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Text(
+                    text = if (isEn) "Disabled connections are excluded from chat and all background tasks"
+                    else "关闭后聊天与所有后台任务都不会使用该配置",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                )
+            }
+            Switch(
+                checked = isEnabledInput,
+                onCheckedChange = { isEnabledInput = it },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = MaterialTheme.colorScheme.primary
+                )
+            )
+        }
+
         // 智能模型路由开关
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1727,6 +1762,61 @@ fun AddOrEditSheet(
             )
         }
 
+        // 流式模式（Spec §8.1）：AUTO 优先流式并在确证不支持时安全降级；STREAM 强制；NON_STREAM 整包
+        Column {
+            Text(
+                text = if (isEn) "STREAMING MODE" else "流式传输模式",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                listOf(
+                    Triple(com.loyea.llm.StreamMode.AUTO, "AUTO", if (isEn) "Auto fallback" else "自动降级"),
+                    Triple(com.loyea.llm.StreamMode.STREAM, "STREAM", if (isEn) "Force stream" else "强制流式"),
+                    Triple(com.loyea.llm.StreamMode.NON_STREAM, "NON-STREAM", if (isEn) "Non-stream" else "强制整包")
+                ).forEach { (mode, label, desc) ->
+                    val selected = streamModeInput == mode
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(
+                                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.04f)
+                            )
+                            .border(
+                                1.dp,
+                                if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                RoundedCornerShape(10.dp)
+                            )
+                            .clickable { streamModeInput = mode }
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = label,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (selected) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                            )
+                            Text(
+                                text = desc,
+                                fontSize = 9.sp,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         Button(
             onClick = {
                 val finalName = if (nameInput.isBlank()) "${selectedProvider} Model" else nameInput
@@ -1737,10 +1827,11 @@ fun AddOrEditSheet(
                     apiUrl = apiUrlInput,
                     apiKey = apiKeyInput,
                     modelName = modelInput,
-                    isEnabled = true,
+                    isEnabled = isEnabledInput,
                     enableSearch = enableSearch,
                     enableReasoning = enableReasoning,
                     enableSmartRouting = enableSmartRouting,
+                    streamMode = streamModeInput,
                     // 搜索 API 凭据已全局化（设置页「联网搜索」卡片）；旧字段原样保留以兼容历史数据
                     useIndependentSearch = editingConfig?.useIndependentSearch ?: false,
                     searchProvider = editingConfig?.searchProvider ?: "Tavily",
@@ -4528,7 +4619,8 @@ fun MultimodalSettingsLayout(
                         customDialogTitle = if (isEn) "Custom Vision Model" else "自定义视觉模型",
                         customPlaceholder = "e.g. gpt-4o-mini, claude-3-5-sonnet, qwen-vl-max",
                         isEn = isEn,
-                        onValueChange = { viewModel?.updateMultimodalSetting("vision_model_name", it) }
+                        onValueChange = { viewModel?.updateMultimodalSetting("vision_model_name", it) },
+                        emptyText = if (isEn) "Follow connection default model" else "跟随连接默认模型"
                     )
                 }
 
@@ -4752,14 +4844,17 @@ private fun PresetSelector(
     customDialogTitle: String,
     customPlaceholder: String,
     isEn: Boolean,
-    onValueChange: (String) -> Unit
+    onValueChange: (String) -> Unit,
+    emptyText: String? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
     var showCustomDialog by remember { mutableStateOf(false) }
     var customInput by remember(value) { mutableStateOf(value) }
 
     val matched = presets.firstOrNull { it.value == value }
-    val isCustom = matched == null
+    val isCustom = matched == null && value.isNotBlank()
+    val displayValue = matched?.let { if (isEn) it.nameEn else it.name }
+        ?: (if (value.isBlank() && emptyText != null) emptyText else value)
 
     Column {
         Text(
@@ -4785,9 +4880,10 @@ private fun PresetSelector(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                     Text(
-                        text = (if (isEn) matched?.nameEn else matched?.name) ?: value,
+                        text = displayValue,
                         fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onBackground,
+                        color = if (value.isBlank() && emptyText != null) MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f)
+                        else MaterialTheme.colorScheme.onBackground,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
