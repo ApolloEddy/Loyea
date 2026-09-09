@@ -415,7 +415,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         userName.value = prefs.getString("user_name", "Loyea Developer") ?: "Loyea Developer"
 
         // 加载 API 列表与激活 ID
-        val savedConfigsJson = com.loyea.storage.ApiConfigVault.loadJson(context) ?: ""
+        // VaultResult 纪律（Spec §13.3）：读取失败 ≠ 空存储——解析失败时不得把默认列表写回覆盖用户数据，
+        // 仅内存使用默认值；只有确认存储为空（全新安装）才持久化默认配置
+        val vaultLoad = com.loyea.storage.ApiConfigVault.loadJson(context)
+        val savedConfigsJson = (vaultLoad as? com.loyea.storage.VaultResult.Success)?.value ?: ""
+        val vaultStorageWasEmpty = vaultLoad is com.loyea.storage.VaultResult.Success &&
+            (vaultLoad.value.isNullOrBlank())
         var list = if (savedConfigsJson.isNotBlank()) {
             try {
                 val type = object : TypeToken<List<ApiConfig>>() {}.type
@@ -441,10 +446,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 upgraded
             } catch (e: Exception) {
+                // 解析失败：保留 vault 原文不动（可能是新版本字段），内存用默认列表，报错留痕
+                android.util.Log.e("ChatViewModel", "API 配置解析失败，已保留加密库原文等待兼容修复", e)
                 emptyList()
             }
         } else {
             emptyList()
+        }
+        if (vaultLoad is com.loyea.storage.VaultResult.Failure) {
+            android.util.Log.e("ChatViewModel",
+                "API 配置加密库读取失败：${(vaultLoad as com.loyea.storage.VaultResult.Failure).cause}", null)
         }
 
         if (list.isEmpty()) {
@@ -483,7 +494,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 enableReasoning = true
             )
             list = listOf(deepseekPro, deepseekFlash, mimoPro)
-            com.loyea.storage.ApiConfigVault.saveJson(context, Gson().toJson(list))
+            // 仅在确认存储为空（全新安装）时持久化默认配置；读取/解析失败绝不覆盖
+            if (vaultStorageWasEmpty) {
+                com.loyea.storage.ApiConfigVault.saveJson(context, Gson().toJson(list))
+            }
         }
         apiConfigList.value = list.filter { !it.provider.equals("Anthropic", ignoreCase = true) }
 
@@ -698,8 +712,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         apiConfigList.value = newList
         // 唯一落库通道 = 加密库；明文键清除防止历史写回路径复活（GreetingWorker 曾因此读到旧明文）
         val json = Gson().toJson(newList)
-        com.loyea.storage.ApiConfigVault.saveJson(context, json)
+        val result = com.loyea.storage.ApiConfigVault.saveJson(context, json)
         prefs.edit().remove("api_config_list").apply()
+        if (result is com.loyea.storage.VaultResult.Failure) {
+            // 持久化失败必须可见：不假装保存成功，提示用户重试（内存列表保留本次编辑）
+            android.widget.Toast.makeText(
+                context,
+                if (appLanguage.value == "en")
+                    "Failed to persist API config securely. Please re-open settings and save again."
+                else "API 配置加密保存失败，请重新进入设置页再次保存。",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+            android.util.Log.e("ChatViewModel", "saveApiConfigList persist failed", result.cause)
+        }
     }
 
     fun selectActiveConfig(activeId: String) {

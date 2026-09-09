@@ -93,7 +93,13 @@ class MemoryConsolidationWorker(
             )
 
             val memoryApiId = prefs.getString("memory_api_config_id", "") ?: ""
-            val savedConfigsJson = com.loyea.storage.ApiConfigVault.loadJson(context) ?: ""
+            // 加密库读取失败 ≠ 空配置：静默按空处理会把任务标成功且丢记忆提炼，改为可重试失败
+            val vaultLoad = com.loyea.storage.ApiConfigVault.loadJson(context)
+            if (vaultLoad is com.loyea.storage.VaultResult.Failure) {
+                Log.e("MemoryConsolidationWorker", "API config vault read failed", vaultLoad.cause)
+                return@withContext Result.retry()
+            }
+            val savedConfigsJson = (vaultLoad as? com.loyea.storage.VaultResult.Success)?.value ?: ""
             val apiConfigList = if (savedConfigsJson.isNotBlank()) {
                 val type = object : TypeToken<List<ApiConfig>>() {}.type
                 Gson().fromJson<List<ApiConfig>>(savedConfigsJson, type) ?: emptyList()

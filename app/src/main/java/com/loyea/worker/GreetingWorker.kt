@@ -65,7 +65,14 @@ class GreetingWorker(
 
             // 1. Get API config（配置在加密库 ApiConfigVault——明文键迁移后已删，读旧键会永远为空）
             val activeConfigId = prefs.getString("active_config_id", "") ?: ""
-            val savedConfigsJson = com.loyea.storage.ApiConfigVault.loadJson(context) ?: ""
+            // 加密库读取失败 ≠ 空配置：此时发请求会拿不到 Key 且绝不能清库，顺延重试保住链路
+            val vaultLoad = com.loyea.storage.ApiConfigVault.loadJson(context)
+            val savedConfigsJson = (vaultLoad as? com.loyea.storage.VaultResult.Success)?.value ?: ""
+            if (vaultLoad is com.loyea.storage.VaultResult.Failure) {
+                Log.e("GreetingWorker", "API config vault read failed, postponing", vaultLoad.cause)
+                scheduleNextGreeting(60)
+                return@withContext Result.success()
+            }
             // 本 Worker 为链式自排调度：任何"本轮无事可做"都必须续排下一次，failure 会断链致问候永久失效
             if (savedConfigsJson.isBlank()) {
                 scheduleNextGreeting(60)

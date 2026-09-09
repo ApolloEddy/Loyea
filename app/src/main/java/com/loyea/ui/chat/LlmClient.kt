@@ -1662,7 +1662,10 @@ class LlmClient {
             }
             
             val requestBodyStr = gson.toJson(requestJson)
-            android.util.Log.d("LlmClient", "TTS request to $url (provider=$provider): $requestBodyStr")
+            // 隐私红线（Spec §20）：TTS 请求体含完整朗读文本，release 禁止进日志；debug 仅记录尺寸元数据
+            if (com.loyea.BuildConfig.DEBUG) {
+                android.util.Log.d("LlmClient", "TTS request to $url (provider=$provider): ${requestBodyStr.length} chars, model=$targetModel, voice=$targetVoice")
+            }
             val requestBody = requestBodyStr.toRequestBody(mediaType)
             val requestBuilder = Request.Builder()
                 .url(url)
@@ -1689,7 +1692,7 @@ class LlmClient {
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     val errorMsg = response.body?.string() ?: ""
-                    android.util.Log.e("LlmClient", "TTS failed! HTTP ${response.code}, response body: $errorMsg")
+                    android.util.Log.e("LlmClient", "TTS failed! HTTP ${response.code}, body sample: ${errorMsg.trim().take(300)}")
                     val displayError = try {
                         val errJson = gson.fromJson(errorMsg, JsonObject::class.java)
                         errJson.getAsJsonObject("error")?.get("message")?.asString ?: errorMsg
@@ -1862,7 +1865,7 @@ class LlmClient {
                     if (!resp.isSuccessful) {
                         val errorMsg = resp.body?.string() ?: ""
                         lastAsrError = "ASR 请求失败 HTTP ${resp.code}: ${errorMsg.trim().take(300)}"
-                        android.util.Log.e("LlmClient", "ASR failed! HTTP ${resp.code}, response body: $errorMsg")
+                        android.util.Log.e("LlmClient", "ASR failed! HTTP ${resp.code}, body sample: ${errorMsg.trim().take(300)}")
                         return@withContext null
                     }
                     val resBody = resp.body?.string() ?: ""
@@ -1908,7 +1911,7 @@ class LlmClient {
                     if (!response.isSuccessful) {
                         val errorMsg = response.body?.string() ?: ""
                         lastAsrError = "ASR 请求失败 HTTP ${response.code}: ${errorMsg.trim().take(200)}"
-                        android.util.Log.e("LlmClient", "ASR failed! HTTP ${response.code}, response body: $errorMsg")
+                        android.util.Log.e("LlmClient", "ASR failed! HTTP ${response.code}, body sample: ${errorMsg.trim().take(200)}")
                         return@withContext null
                     }
                     val resBody = response.body?.string() ?: ""
