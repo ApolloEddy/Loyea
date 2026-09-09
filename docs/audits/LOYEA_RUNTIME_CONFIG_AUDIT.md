@@ -5,6 +5,34 @@
 - 审计日期：2026-09-10（Phase 0 只读审计，未修改任何生产代码）
 - 审计方法：核心运行时文件（LlmClient / ChatViewModel / SettingsScreen / 存储层 / Worker / MCP / 感知 / 健康 / MainActivity）逐文件完整阅读；纯展示型 UI 文件（ChatScreen 渲染部分、MainScreen、TavernScreen、WorldInfoLibraryScreen、MarkdownText、HtmlPanel、ThinkingAndMcpComponents、theme）经全文 grep 验证无 SharedPreferences 写入、无网络调用、无 ApiConfigVault 访问，并对其中与 ApiConfig 相关的段落（ModelSelector 等）定点完整阅读。
 
+## 0. 处理结论（2026-09-10 重构完成后回填）
+
+| ID | 结论 |
+|---|---|
+| P0-01 | ✅ 已修（a6d3d80）：Vault 原子迁移 + VaultResult + 7 场景故障注入测试 |
+| P0-02 | ✅ 已修（a6d3d80）：解析/读取失败不再写回默认列表 |
+| P0-03 | ✅ 已修（a588bdc）：删除配置反查并清理全部通道绑定 |
+| P0-04 | ✅ 已修（a6d3d80）：TTS 请求体日志 debug 门控 + 错误体截断 |
+| P1-01~03 | ✅ 已修（760a5cf）：双状态流式状态机 + 明确 unsupported-stream 判定 + 缓存写入纪律 |
+| P1-04 | ✅ 已修（a588bdc Resolver 校验 + 16a4ebb UI 开关） |
+| P1-05 | ✅ 已修（760a5cf）：旧 sendChatCompletion 迁入统一 Transport |
+| P1-06 | ✅ 已修（a588bdc）：VISION 通道 Binding 化 + Caption 同源；gpt-4o-mini 归一化 |
+| P1-07 | ✅ 已修（a588bdc）：STT/TTS/生图显式绑定 + 明确不可用；存量回填 |
+| P1-08 | ✅ 已修（760a5cf）：LlmErrorKind 全覆盖，降级判定不再依赖 message.contains |
+| P1-09 | ✅ 已修（760a5cf）：非流式 180s 独立读超时 |
+| P1-10 | ✅ 已修（a588bdc）：两 Worker 改经 ApiConfigRepository |
+| P1-11 | ✅ 已修（a588bdc）：Anthropic 隐藏配置保存时合并回全量列表 |
+| P1-12 | ⚠️ 保留（v0.8.x 产品决策：旧 DeepSeek 模型名升级迁移；已在迁移文档记录取舍） |
+| P2-01/02 | ✅ 已修（760a5cf）：native search/stream_options 由 Adapter 声明 |
+| P2-03 | ⚠️ 记录未修（搜索 Key 明文迁加密库涉存储结构变化，留独立变更） |
+| P2-04 | ⚠️ 记录（Spec §16.4 允许的过渡期兼容只读字段） |
+| P2-05 | ✅ 已修（a588bdc）：能力判断改走 Resolver Ready + Key 校验 |
+| P2-06 | ⚠️ 记录（onStop 停止生成疑为节流设计，保持现状） |
+| P2-07 | ⚠️ 记录（MiMo gpt-4o-mini 自愈保留于 LlmClient，Spec §27 禁止新增） |
+| P2-08 | ⚠️ 记录（UI 过滤与设置页差异为合理行为） |
+| 新发现 | ✅ 已修（16a4ebb 后）：WorldInfoLibrary 空书单 fresh-install 迁移 ENOENT 无限重试（worldinfo/ 目录未建）；实机复现 → 修复 → 复验消失 |
+
+---
 ---
 
 ## 1. 通道 / Config 调用图（每个模型相关功能的配置来源）

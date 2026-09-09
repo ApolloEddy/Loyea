@@ -527,6 +527,9 @@ class WorldInfoLibrary(private val storageRoot: File) {
                 if (!booksDir.exists()) booksDir.mkdirs()
                 atomicWrite(bookFile(book.id), WorldInfoBookJson.toJson(book))
             }
+            // 全新安装无任何书时 booksDir 不会被创建，manifest 写入前必须先确保 worldinfo/ 目录存在，
+            // 否则 atomicWrite 的 tmp 文件 ENOENT → 迁移永远"中止"并每轮重试（实机 fresh-install 实测）
+            if (!worldinfoDir.exists()) worldinfoDir.mkdirs()
             val manifest = JsonObject().apply {
                 addProperty("version", MANIFEST_VERSION)
                 addProperty("migratedAt", now)
