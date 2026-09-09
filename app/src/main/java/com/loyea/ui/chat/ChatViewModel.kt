@@ -81,6 +81,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = context.getSharedPreferences("loyea_prefs", Context.MODE_PRIVATE)
     private val storageManager = ChatStorageManager(context)
 
+    /** 配置仓库：配置存取与通道解析的唯一入口（VM 与 Worker 共用，Spec §19） */
+    private val configRepository = com.loyea.storage.ApiConfigRepository(context)
+
     /** WorldInfo 2.0 统一书库门面（书库页 / 生效书面板直接使用，Spec §7）。 */
     val worldInfoLibrary: com.loyea.storage.worldinfo.WorldInfoLibrary
         get() = storageManager.worldInfoLibrary
@@ -368,6 +371,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         loadAllData()
+        // 通道绑定一次性归一化与显式化回填（Spec §14/§15：遗留默认值清空、存量兜底行为写成显式绑定）
+        configRepository.normalizeLegacyBindings()
+        viewModelScope.launch(Dispatchers.IO) {
+            configRepository.backfillExplicitBindings()
+        }
         mcpManager.registerImageGenerationProvider { prompt ->
             generateAndStoreImage(prompt) ?: "Error: Image generation failed. Check the ImageGen API configuration."
         }
@@ -414,42 +422,34 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // 加载用户名
         userName.value = prefs.getString("user_name", "Loyea Developer") ?: "Loyea Developer"
 
-        // 加载 API 列表与激活 ID
-        // VaultResult 纪律（Spec §13.3）：读取失败 ≠ 空存储——解析失败时不得把默认列表写回覆盖用户数据，
+        // 加载 API 列表与激活 ID（统一经 ApiConfigRepository；Spec §19）
+        // VaultResult 纪律：读取/解析失败 ≠ 空存储——不得把默认列表写回覆盖用户数据，
         // 仅内存使用默认值；只有确认存储为空（全新安装）才持久化默认配置
-        val vaultLoad = com.loyea.storage.ApiConfigVault.loadJson(context)
-        val savedConfigsJson = (vaultLoad as? com.loyea.storage.VaultResult.Success)?.value ?: ""
+        val vaultLoad = configRepository.loadConfigs()
         val vaultStorageWasEmpty = vaultLoad is com.loyea.storage.VaultResult.Success &&
-            (vaultLoad.value.isNullOrBlank())
-        var list = if (savedConfigsJson.isNotBlank()) {
-            try {
-                val type = object : TypeToken<List<ApiConfig>>() {}.type
-                val parsed = Gson().fromJson<List<ApiConfig>>(savedConfigsJson, type) ?: emptyList()
-                var updated = false
-                val upgraded = parsed.map { config ->
-                    if (config.provider.equals("DeepSeek", ignoreCase = true)) {
-                        if (config.modelName == "deepseek-chat") {
-                            updated = true
-                            config.copy(modelName = "deepseek-v4-flash")
-                        } else if (config.modelName == "deepseek-reasoner") {
-                            updated = true
-                            config.copy(modelName = "deepseek-v4-pro")
-                        } else {
-                            config
-                        }
+            (vaultLoad as com.loyea.storage.VaultResult.Success).value.isEmpty()
+        var list = if (vaultLoad is com.loyea.storage.VaultResult.Success) {
+            val parsed = (vaultLoad as com.loyea.storage.VaultResult.Success).value
+            var updated = false
+            val upgraded = parsed.map { config ->
+                if (config.provider.equals("DeepSeek", ignoreCase = true)) {
+                    if (config.modelName == "deepseek-chat") {
+                        updated = true
+                        config.copy(modelName = "deepseek-v4-flash")
+                    } else if (config.modelName == "deepseek-reasoner") {
+                        updated = true
+                        config.copy(modelName = "deepseek-v4-pro")
                     } else {
                         config
                     }
+                } else {
+                    config
                 }
-                if (updated) {
-                    com.loyea.storage.ApiConfigVault.saveJson(context, Gson().toJson(upgraded))
-                }
-                upgraded
-            } catch (e: Exception) {
-                // 解析失败：保留 vault 原文不动（可能是新版本字段），内存用默认列表，报错留痕
-                android.util.Log.e("ChatViewModel", "API 配置解析失败，已保留加密库原文等待兼容修复", e)
-                emptyList()
             }
+            if (updated) {
+                configRepository.saveConfigs(upgraded)
+            }
+            upgraded
         } else {
             emptyList()
         }
@@ -709,10 +709,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveApiConfigList(newList: List<ApiConfig>) {
+        // UI 列表不含历史隐藏 Provider（Anthropic 曾被加载时静默剔除并在保存时永久丢失，P1-11）：
+        // 保存时把它们合并回全量列表，配置永不在用户无感知的情况下从加密库消失
+        val hiddenConfigs = (configRepository.loadConfigs() as? com.loyea.storage.VaultResult.Success)
+            ?.value
+            ?.filter { it.provider.equals("Anthropic", ignoreCase = true) && newList.none { n -> n.id == it.id } }
+            ?: emptyList()
+        val fullList = newList + hiddenConfigs
+
+        // 删除配置前反查并清理通道绑定（Spec §6.2）：杜绝悬空 ID 导致的运行时静默换 Provider（P0-03）
+        val removedIds = (configRepository.loadConfigs() as? com.loyea.storage.VaultResult.Success)
+            ?.value
+            ?.map { it.id }
+            ?.filter { oldId -> fullList.none { it.id == oldId } }
+            ?: emptyList()
+
         apiConfigList.value = newList
-        // 唯一落库通道 = 加密库；明文键清除防止历史写回路径复活（GreetingWorker 曾因此读到旧明文）
-        val json = Gson().toJson(newList)
-        val result = com.loyea.storage.ApiConfigVault.saveJson(context, json)
+        val result = configRepository.saveConfigs(fullList)
         prefs.edit().remove("api_config_list").apply()
         if (result is com.loyea.storage.VaultResult.Failure) {
             // 持久化失败必须可见：不假装保存成功，提示用户重试（内存列表保留本次编辑）
@@ -724,7 +737,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 android.widget.Toast.LENGTH_LONG
             ).show()
             android.util.Log.e("ChatViewModel", "saveApiConfigList persist failed", result.cause)
+            return
         }
+        // 仅在保存成功后清理绑定，防止保存失败时误删
+        removedIds.forEach { id -> configRepository.clearBindingsFor(id) }
     }
 
     fun selectActiveConfig(activeId: String) {
@@ -1399,48 +1415,37 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             var useVisionRoute = false
             var includeVision = false
             if (currentMsgHasImage && enableMultimodal.value) {
-                val visionCfgId = visionConfigId.value
-                val visionModel = visionModelName.value
-                val targetVisionCfg = if (visionCfgId.isNotBlank()) {
-                    apiConfigList.value.find { it.id == visionCfgId }
-                } else {
-                    null
-                }
-                val visionCandidate = targetVisionCfg ?: apiConfig
-                // 用户显式配置了识图专用卡 = 明确声明该配置具备视觉能力，
-                // 不再被 provider/model 字符串猜测否决（否则新识图模型会被静默降级成 [图片] 文本，
-                // 即"识图模型配置正确却不可用"的根因）；字符串猜测仅用于回落主配置的场景
-                val explicitVisionCard = targetVisionCfg != null
-                if (explicitVisionCard || providerSupportsVision(visionCandidate.provider, visionModel)) {
-                    // 视觉路由生效：切到视觉配置与模型。
-                    // 视觉模型名仍是内置默认（gpt-4o-mini）且显式识图卡自带模型名时，卡模型优先——
-                    // 否则选了卡但从未改过"视觉模型"的用户，识图请求被打向服务商不存在的 gpt-4o-mini（必 400，
-                    // 智谱自配 Custom 用户踩中的正是这颗雷）。用户显式改过视觉模型名 → 仍以显式值为准。
-                    val legacyVisionDefault = "gpt-4o-mini"
-                    apiConfig = if (targetVisionCfg != null) {
-                        val m = if (visionModel == legacyVisionDefault && targetVisionCfg.modelName.isNotBlank()) {
-                            targetVisionCfg.modelName
-                        } else {
-                            visionModel
-                        }
-                        targetVisionCfg.copy(modelName = m)
-                    } else {
-                        apiConfig.copy(modelName = visionModel)
+                // 视觉通道统一经 ChannelBindingResolver 解析（Spec §5.4/§14）：
+                // 显式 VISION 绑定 = 用户声明，不被字符串猜测否决；无绑定继承 CHAT 时需能力佐证。
+                // 解析失败 → 图片以 [图片] 文本占位随消息发送，会话继续，不报错。
+                when (val vr = configRepository.resolve(
+                    com.loyea.storage.ChannelId.VISION, apiConfigList.value, activeConfigId.value)) {
+                    is com.loyea.storage.ChannelResolution.Ready -> {
+                        apiConfig = vr.resolved.config.copy(modelName = vr.resolved.model)
+                        useVisionRoute = true
+                        includeVision = true
                     }
-                    useVisionRoute = true
-                    includeVision = true
+                    is com.loyea.storage.ChannelResolution.Unconfigured -> {
+                        android.util.Log.i("LoyeaVision", "vision channel unconfigured: ${vr.userMessage}")
+                    }
+                    is com.loyea.storage.ChannelResolution.ConfigDisabled -> {
+                        android.util.Log.w("LoyeaVision", "vision config disabled: ${vr.configName}")
+                    }
+                    is com.loyea.storage.ChannelResolution.DanglingBinding -> {
+                        android.util.Log.w("LoyeaVision", "vision binding dangling: ${vr.configId}")
+                    }
                 }
                 android.util.Log.d("LoyeaVision",
                     "route: lastMsgHasImage=$currentMsgHasImage multimodal=${enableMultimodal.value} " +
-                        "explicitCard=${targetVisionCfg != null} useVisionRoute=$useVisionRoute includeVision=$includeVision " +
+                        "useVisionRoute=$useVisionRoute includeVision=$includeVision " +
                         "model=${apiConfig.modelName} baseUrl=${apiConfig.apiUrl}"
                 )
-                // 视觉配置缺失或目标提供商不支持视觉 → includeVision 保持 false，
-                // 图片将以 [图片] 文本占位随消息发送，会话继续正常进行，不报错。
             }
-            // 音频输入是否可进 payload（取决于当前路由后的模型能力，与图片降级同理）
-            val includeAudioInput = currentMsgHasAudio &&
-                providerSupportsAudioInput(apiConfig.provider, apiConfig.modelName)
+            // 音频输入是否可进 payload：经 Resolver 验证 AUDIO_INPUT 通道（继承 CHAT + 能力校验，
+            // Spec §15.3），能力不足时上层回落 STT 转写文本
+            val includeAudioInput = currentMsgHasAudio && configRepository.resolve(
+                com.loyea.storage.ChannelId.AUDIO_INPUT, apiConfigList.value, activeConfigId.value
+            ) is com.loyea.storage.ChannelResolution.Ready
 
             // 每个用户回合的动态上下文只生成一次并固化到该 Message：
             // 后续重生成/多轮请求复用原快照，避免当前时间、图谱或世界书改写历史前缀。
@@ -2073,12 +2078,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
                             // 拦截 AI 主动发送语音消息工具，自动执行 TTS 合成、绑定与自动播放
                             if (success && isVoiceReply) {
+                                val ttsChannel = resolveChannel(com.loyea.storage.ChannelId.TTS)
                                 val speechText = parsedArgs["text"]?.toString() ?: ""
                                 val cleanedText = cleanTextForTts(
                                     speechText,
-                                    resolveTtsConfig().provider.contains("mimo", ignoreCase = true)
+                                    ttsChannel?.config?.provider?.contains("mimo", ignoreCase = true) == true
                                 )
-                                if (cleanedText.isNotBlank()) {
+                                if (cleanedText.isNotBlank() && (ttsChannel == null || ttsChannel.config.apiKey.isBlank())) {
+                                    // TTS 通道未配置：工具卡明确失败，不再静默拿主配置试（Spec §15.2）
+                                    currentList = updateMcpCall(currentList, aiMessageId, displayCallId) {
+                                        it.copy(
+                                            status = McpStatus.FAILED,
+                                            output = if (appLanguage.value == "en") "[Error] TTS is not configured. Pick a TTS API in multimodal settings"
+                                            else "[错误] 语音合成未配置，请前往多模态设置选择 TTS API"
+                                        )
+                                    }
+                                    messages.value = currentList
+                                } else if (cleanedText.isNotBlank() && ttsChannel != null) {
                                     viewModelScope.launch(Dispatchers.IO) {
                                         ttsWriteMutex.withLock {
                                             // 使用 displayCallId (工具调用唯一 ID) 作为文件名，防止多语音覆盖！
@@ -2087,14 +2103,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                                 try { ttsFile.delete() } catch (e: Exception) {}
                                             }
 
-                                            val ttsCfgId = ttsConfigId.value
-                                            val targetTtsConfig = if (ttsCfgId.isNotBlank()) {
-                                                apiConfigList.value.find { it.id == ttsCfgId } ?: activeApiConfig.value
-                                            } else {
-                                                activeApiConfig.value
-                                            }
                                             val voice = ttsVoice.value
-                                            val ttsResult = llmClient.generateSpeech(targetTtsConfig, cleanedText, ttsModelName.value, voice, ttsFile)
+                                            val ttsResult = llmClient.generateSpeech(ttsChannel.config, cleanedText, ttsChannel.model, voice, ttsFile)
                                             
                                             if (ttsResult.success && ttsFile.exists()) {
                                                 val duration = getAudioDurationInSeconds(ttsFile)
@@ -2908,13 +2918,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     "${if (it.sender == Sender.USER) "用户" else "AI"}: ${it.content.take(500)}"
                 }
 
-                // 摘要模型：优先提炼专用模型（memory_api_config_id），否则当前激活模型
-                val memoryApiId = prefs.getString("memory_api_config_id", "") ?: ""
-                val targetConfig = if (memoryApiId.isBlank()) {
-                    activeApiConfig.value
-                } else {
-                    apiConfigList.value.find { it.id == memoryApiId } ?: activeApiConfig.value
-                }
+                // 摘要模型：MEMORY 通道解析（显式绑定优先，否则继承 CHAT；规则只在 Resolver 一处，Spec §5.4）
+                val targetConfig = resolveChannel(com.loyea.storage.ChannelId.MEMORY)?.config
+                    ?: return@launch
 
                 val summaryInput = BackgroundPromptTemplates.compressionInput(existingSummary, segmentText)
 
@@ -2980,12 +2986,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 "${if (it.sender == Sender.USER) "用户" else "AI"}: ${it.content.take(500)}"
             }
 
-            val memoryApiId = prefs.getString("memory_api_config_id", "") ?: ""
-            val targetConfig = if (memoryApiId.isBlank()) {
-                activeApiConfig.value
-            } else {
-                apiConfigList.value.find { it.id == memoryApiId } ?: activeApiConfig.value
-            }
+            // 摘要模型：MEMORY 通道解析（显式绑定优先，否则继承 CHAT；规则只在 Resolver 一处，Spec §5.4）
+            val targetConfig = resolveChannel(com.loyea.storage.ChannelId.MEMORY)?.config
+                ?: return false
 
             val summaryInput = BackgroundPromptTemplates.compressionInput(existingSummary, segmentText)
             val response = llmClient.sendChatCompletion(
@@ -3050,15 +3053,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         prefs.edit().putBoolean(key, enabled).apply()
     }
 
-    /** 后台自动图注：为识图消息生成短描述并存入 Message.imageDesc（失败静默跳过）。 */
+    /** 后台自动图注：与 Vision 聊天完全同源（同一 VISION 通道解析，Spec §14.3），失败静默跳过。 */
     private fun generateImageCaptionAsync(sessionId: String, messageId: String, imagePath: String) {
-        val targetVisionCfg = visionConfigId.value.takeIf { it.isNotBlank() }
-            ?.let { id -> apiConfigList.value.find { it.id == id } }
-        val cfg = targetVisionCfg ?: activeApiConfig.value
-        if (!enableMultimodal.value || cfg.apiKey.isBlank()) return
+        val visionResolution = configRepository.resolve(
+            com.loyea.storage.ChannelId.VISION, apiConfigList.value, activeConfigId.value)
+        val ready = visionResolution as? com.loyea.storage.ChannelResolution.Ready
+        if (!enableMultimodal.value || ready == null || ready.resolved.config.apiKey.isBlank()) return
+        val captionConfig = ready.resolved.config.copy(modelName = ready.resolved.model)
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                val desc = llmClient.describeImage(cfg, imagePath) ?: return@launch
+                val desc = llmClient.describeImage(captionConfig, imagePath) ?: return@launch
                 val base = if (currentSessionId.value == sessionId) messages.value
                     else runCatching { storageManager.loadSessionMessages(sessionId) }.getOrDefault(emptyList())
                 val updated = base.map { if (it.id == messageId) it.copy(imageDesc = desc) else it }
@@ -3763,12 +3767,28 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val inputJson = targetCall?.input ?: ""
             val parsedArgs = llmClient.parseArgumentsMap(inputJson)
             val speechText = parsedArgs["text"]?.toString() ?: ""
+            val ttsChannelForClean = resolveChannel(com.loyea.storage.ChannelId.TTS)
             val cleanedText = cleanTextForTts(
                 speechText,
-                resolveTtsConfig().provider.contains("mimo", ignoreCase = true)
+                ttsChannelForClean?.config?.provider?.contains("mimo", ignoreCase = true) == true
             )
-            
-            if (cleanedText.isNotBlank()) {
+
+            if (cleanedText.isNotBlank() && (ttsChannelForClean == null || ttsChannelForClean.config.apiKey.isBlank())) {
+                // TTS 通道未配置：状态卡明确失败（Spec §15.2），不再静默回落主配置
+                messages.value = messages.value.map { msg ->
+                    if (msg.id == parentMessageId) {
+                        msg.copy(mcpCalls = msg.mcpCalls.map { c ->
+                            if (c.id == mcpCallId) c.copy(
+                                status = McpStatus.FAILED,
+                                output = if (appLanguage.value == "en") "[Error] TTS is not configured" else "[错误] 语音合成未配置，请前往多模态设置选择"
+                            ) else c
+                        })
+                    } else {
+                        msg
+                    }
+                }
+                saveMessagesAsync(sessionId, messages.value)
+            } else if (cleanedText.isNotBlank()) {
                 // 将 UI 状态更新为 RUNNING 占位态
                 messages.value = messages.value.map { msg ->
                     if (msg.id == parentMessageId) {
@@ -3783,14 +3803,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 // 启动异步线程重新执行合成
                 viewModelScope.launch(Dispatchers.IO) {
                     ttsWriteMutex.withLock {
-                        val ttsCfgId = ttsConfigId.value
-                        val targetTtsConfig = if (ttsCfgId.isNotBlank()) {
-                            apiConfigList.value.find { it.id == ttsCfgId } ?: activeApiConfig.value
-                        } else {
-                            activeApiConfig.value
-                        }
+                        val ttsChannel = resolveChannel(com.loyea.storage.ChannelId.TTS)
+                            ?: return@withLock
                         val voice = ttsVoice.value
-                        val ttsResult = llmClient.generateSpeech(targetTtsConfig, cleanedText, ttsModelName.value, voice, ttsFile)
+                        val ttsResult = llmClient.generateSpeech(ttsChannel.config, cleanedText, ttsChannel.model, voice, ttsFile)
                         
                         withContext(Dispatchers.Main) {
                             if (ttsResult.success && ttsFile.exists()) {
@@ -3879,9 +3895,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         
+        val ttsChannel = resolveChannel(com.loyea.storage.ChannelId.TTS)
+        if (ttsChannel == null || ttsChannel.config.apiKey.isBlank()) {
+            // TTS 通道未配置：明确告知（Spec §15.2），不再静默回落主配置
+            android.widget.Toast.makeText(
+                context,
+                if (appLanguage.value == "en") "TTS is not configured. Pick a TTS API in multimodal settings"
+                else "语音合成未配置，请前往多模态设置选择 TTS API",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+            return
+        }
         val cleanedText = cleanTextForTts(
             text,
-            resolveTtsConfig().provider.contains("mimo", ignoreCase = true)
+            ttsChannel.config.provider.contains("mimo", ignoreCase = true)
         )
         if (cleanedText.isBlank()) {
             android.widget.Toast.makeText(context, if (appLanguage.value == "en") "Text is empty; nothing to synthesize" else "文字内容为空，无法进行语音合成", android.widget.Toast.LENGTH_SHORT).show()
@@ -3892,19 +3919,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         messages.value = messages.value.map { msg ->
             if (msg.id == messageId) msg.copy(isAudioSynthesizing = true) else msg
         }
-        
+
         // 后台进行 TTS 合成
         viewModelScope.launch(Dispatchers.IO) {
             // 捕获所属会话的消息快照，避免合成期间用户切会话导致写错会话文件
             val originMsgs = messages.value
-            val ttsCfgId = ttsConfigId.value
-            val targetTtsConfig = if (ttsCfgId.isNotBlank()) {
-                apiConfigList.value.find { it.id == ttsCfgId } ?: activeApiConfig.value
-            } else {
-                activeApiConfig.value
-            }
             val voice = ttsVoice.value
-            val ttsResult = llmClient.generateSpeech(targetTtsConfig, cleanedText, ttsModelName.value, voice, ttsFile)
+            val ttsResult = llmClient.generateSpeech(ttsChannel.config, cleanedText, ttsChannel.model, voice, ttsFile)
 
             withContext(Dispatchers.Main) {
                 // 重置消息正在合成状态
@@ -4076,88 +4097,40 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         get() = llmClient.lastAsrError
 
     /**
-     * 解析语音转写目标配置：
-     * 显式指定了 stt_config_id 时优先使用它；未指定时自动优先使用已配置的小米 MiMo
-     * （DeepSeek 等纯文本提供商没有 /audio/transcriptions 端点，转写必然失败）。
+     * 通道解析便捷入口：返回 null = 该通道未配置/被禁用/绑定悬空（结构化原因见 Resolver）。
+     * 全部多模态通道的 Config/Model 解析只有这一个位置（Spec §5.4）。
      */
-    private fun resolveSttConfig(): ApiConfig {
-        val sttCfgId = sttConfigId.value
-        if (sttCfgId.isNotBlank()) {
-            return apiConfigList.value.find { it.id == sttCfgId } ?: activeApiConfig.value
-        }
-        return apiConfigList.value.firstOrNull { it.provider.contains("mimo", ignoreCase = true) }
-            ?: activeApiConfig.value
-    }
+    private fun resolveChannel(channel: com.loyea.storage.ChannelId): com.loyea.storage.ResolvedChannel? =
+        (configRepository.resolve(channel, apiConfigList.value, activeConfigId.value)
+            as? com.loyea.storage.ChannelResolution.Ready)?.resolved
 
-    /** TTS 合成配置解析：优先用户指定的 TTS 配置，否则回退当前主模型配置 */
-    private fun resolveTtsConfig(): ApiConfig {
-        val ttsCfgId = ttsConfigId.value
-        return if (ttsCfgId.isNotBlank()) {
-            apiConfigList.value.find { it.id == ttsCfgId } ?: activeApiConfig.value
-        } else {
-            activeApiConfig.value
-        }
-    }
-
-    // ===== 多模态能力检测：决定请求 payload 能否携带图片/音频，避免纯文本模型（如 DeepSeek）直接 400 =====
-
-    /** 视觉能力判断：白名单服务商 + 模型名匹配视觉型号 */
-    private fun providerSupportsVision(provider: String, model: String): Boolean {
-        val p = provider.lowercase()
-        val m = model.lowercase()
-        return when {
-            p.contains("anthropic") || p.contains("google") -> true // 全系原生支持视觉
-            p.contains("openai") ->
-                listOf("4o", "4.1", "4.5", "omni", "gpt-4-vision", "gpt-4-turbo").any { m.contains(it) }
-            p.contains("alibaba") || p.contains("zhipu") || p.contains("moonshot") ->
-                // glm-4.5v 含 "4.5v" 而非 "4v"；GLM-5.3-Flash 为原生多模态（智谱官方 VLM 分类）
-                listOf("vl", "vision", "4v", "glm-4v", "kimi", "4.5v", "glm-5.3").any { m.contains(it) }
-            p.contains("openrouter") ->
-                listOf("vision", "vl", "4o", "4.5", "omni", "gemini", "claude").any { m.contains(it) }
-            else -> false
-        }
-    }
-
-    /** 音频输入（input_audio）能力判断：目前仅 OpenAI 音频模型与 Gemini 支持 */
-    private fun providerSupportsAudioInput(provider: String, model: String): Boolean {
-        val p = provider.lowercase()
-        val m = model.lowercase()
-        return (p.contains("openai") && (m.contains("omni") || m.contains("4o") || m.contains("audio"))) ||
-            (p.contains("google") && m.contains("gemini"))
-    }
-
-    /** TTS 是否真正可用：显式配置了 TTS 服务商，或当前配置属于支持 TTS 的服务商（MiMo/OpenAI/阿里/火山） */
+    /** TTS 是否真正可用：TTS 通道绑定就绪且配置有 Key（未配置 = 不可用，不再偷用 CHAT，Spec §15.2） */
     private fun hasTtsCapability(): Boolean {
-        if (ttsConfigId.value.isNotBlank()) return true
-        val provider = activeApiConfig.value.provider.lowercase()
-        if (provider.contains("mimo") || provider.contains("openai") ||
-            provider.contains("alibaba") || provider.contains("volcengine")) return true
-        return apiConfigList.value.any { it.provider.equals("MiMo", ignoreCase = true) }
+        val tts = resolveChannel(com.loyea.storage.ChannelId.TTS) ?: return false
+        return tts.config.apiKey.isNotBlank()
     }
 
-    /** 生图能力：专用生图配置有 Key，或主配置有 Key（MiMo 免专用配置）。 */
+    /** 生图能力：生图通道绑定就绪且配置有 Key（未配置 = 不可用，Spec §15.4） */
     private fun hasImageGenCapability(): Boolean {
-        val genCfgId = imageGenConfigId.value
-        if (genCfgId.isNotBlank()) {
-            return apiConfigList.value.any { it.id == genCfgId && it.apiKey.isNotBlank() }
-        }
-        return activeApiConfig.value.apiKey.isNotBlank() ||
-            apiConfigList.value.any { it.provider.equals("MiMo", ignoreCase = true) }
+        val gen = resolveChannel(com.loyea.storage.ChannelId.IMAGE_GENERATION) ?: return false
+        return gen.config.apiKey.isNotBlank()
     }
 
     /**
      * 生图核心（/draw 指令与 generate_image 工具共用）：调用生图 API 并下载到本地，
-     * 返回本地展示路径（离线可看）；生成失败返回 null。
+     * 返回本地展示路径（离线可看）。生图通道未配置时抛出可展示的明确错误，
+     * 绝不静默改用主聊天配置（Spec §15.4：删除生图配置后不得回落普通聊天模型）。
      */
     private suspend fun generateAndStoreImage(prompt: String): String? =
         withContext(Dispatchers.IO) {
-            val genCfgId = imageGenConfigId.value
-            val targetGenConfig = if (genCfgId.isNotBlank()) {
-                apiConfigList.value.find { it.id == genCfgId } ?: activeApiConfig.value
-            } else {
-                activeApiConfig.value
-            }
-            val genResult = llmClient.generateImage(targetGenConfig, prompt, imageGenModel.value)
+            val genChannel = resolveChannel(com.loyea.storage.ChannelId.IMAGE_GENERATION)
+                ?: throw ImageGenException(
+                    if (appLanguage.value == "en")
+                        "Image generation is not configured. Pick an image API in multimodal settings"
+                    else "生图未配置专用 API，请前往多模态设置选择"
+                )
+            if (genChannel.config.apiKey.isBlank()) throw ImageGenException("生图 API Key 未配置 / image API key is missing")
+            val genResult = llmClient.generateImage(genChannel.config, prompt, genChannel.model)
             if (genResult.base64Png != null) {
                 // b64_json 形态：直接解码落盘，无需下载
                 val localFile = File(context.filesDir, "images/img_${System.currentTimeMillis()}_${java.util.UUID.randomUUID()}.png")
@@ -4195,9 +4168,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
 
     suspend fun transcribeAudio(file: File): String? {
-        val targetSttConfig = resolveSttConfig()
-        val rawText = llmClient.transcribeAudio(targetSttConfig, file, sttModelName.value, sttProviderTemplate.value)
-        return if (targetSttConfig.provider.contains("mimo", ignoreCase = true) || sttProviderTemplate.value.contains("mimo", ignoreCase = true)) {
+        val stt = resolveChannel(com.loyea.storage.ChannelId.STT)
+        if (stt == null || stt.config.apiKey.isBlank()) {
+            llmClient.lastAsrError = if (appLanguage.value == "en")
+                "Speech-to-text is not configured. Pick an STT API in multimodal settings"
+                else "语音转写未配置专用 API，请前往多模态设置选择"
+            return null
+        }
+        val rawText = llmClient.transcribeAudio(stt.config, file, stt.model, sttProviderTemplate.value)
+        return if (stt.config.provider.contains("mimo", ignoreCase = true) || sttProviderTemplate.value.contains("mimo", ignoreCase = true)) {
             VoiceTextExtractor.cleanSttText(rawText)
         } else {
             rawText
@@ -4210,20 +4189,34 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             onFailed(if (appLanguage.value == "en") "AI is replying. Please wait a moment before speaking" else "AI 正在回复中，请稍候再说话")
             return
         }
-        // 音频理解模式：仅当当前主模型支持音频输入（input_audio）时才直接发送语音，
+        // 音频理解模式：仅当 AUDIO_INPUT 通道解析通过（聊天模型支持音频输入）时才直接发送语音，
         // 否则自动降级走 STT 转写文本（DeepSeek 等纯文本模型收到 input_audio 会直接 400）
         if (enableAudioUnderstanding.value &&
-            providerSupportsAudioInput(activeApiConfig.value.provider, activeApiConfig.value.modelName)
+            configRepository.resolve(
+                com.loyea.storage.ChannelId.AUDIO_INPUT, apiConfigList.value, activeConfigId.value
+            ) is com.loyea.storage.ChannelResolution.Ready
         ) {
             sendMessage("", null, file.absolutePath, duration)
+            return
+        }
+
+        // STT 通道解析：未配置 = 明确不可用并告知（Spec §15.1），不再扫描 MiMo 卡或偷用主配置
+        val sttChannel = resolveChannel(com.loyea.storage.ChannelId.STT)
+        if (sttChannel == null || sttChannel.config.apiKey.isBlank()) {
+            isThinking.value = false
+            onFailed(
+                if (appLanguage.value == "en")
+                    "Speech-to-text is not configured. Pick an STT API in multimodal settings"
+                else "语音转写未配置专用 API，请前往多模态设置选择"
+            )
             return
         }
 
         isThinking.value = true
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val targetSttConfig = resolveSttConfig()
-                val text = llmClient.transcribeAudio(targetSttConfig, file, sttModelName.value, sttProviderTemplate.value)
+                val targetSttConfig = sttChannel.config
+                val text = llmClient.transcribeAudio(targetSttConfig, file, sttChannel.model, sttProviderTemplate.value)
 
                 val cleanedText = if (targetSttConfig.provider.contains("mimo", ignoreCase = true) || sttProviderTemplate.value.contains("mimo", ignoreCase = true)) {
                     VoiceTextExtractor.cleanSttText(text)

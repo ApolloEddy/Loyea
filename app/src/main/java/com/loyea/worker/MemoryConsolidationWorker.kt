@@ -92,36 +92,15 @@ class MemoryConsolidationWorker(
                 history = historyMsgs
             )
 
-            val memoryApiId = prefs.getString("memory_api_config_id", "") ?: ""
-            // 加密库读取失败 ≠ 空配置：静默按空处理会把任务标成功且丢记忆提炼，改为可重试失败
-            val vaultLoad = com.loyea.storage.ApiConfigVault.loadJson(context)
-            if (vaultLoad is com.loyea.storage.VaultResult.Failure) {
-                Log.e("MemoryConsolidationWorker", "API config vault read failed", vaultLoad.cause)
-                return@withContext Result.retry()
-            }
-            val savedConfigsJson = (vaultLoad as? com.loyea.storage.VaultResult.Success)?.value ?: ""
-            val apiConfigList = if (savedConfigsJson.isNotBlank()) {
-                val type = object : TypeToken<List<ApiConfig>>() {}.type
-                Gson().fromJson<List<ApiConfig>>(savedConfigsJson, type) ?: emptyList()
-            } else {
-                emptyList()
-            }
-            
-            // 获取当前激活的 API 配置
-            val activeConfigId = prefs.getString("active_config_id", "") ?: ""
-            val activeApiConfig = apiConfigList.find { it.id == activeConfigId } ?: ApiConfig(
-                id = "default",
-                name = "Default",
-                provider = "DeepSeek",
-                apiUrl = "https://api.deepseek.com/v1",
-                apiKey = "",
-                modelName = "deepseek-v4-pro"
-            )
-
-            val targetConfig = if (memoryApiId.isBlank()) {
-                activeApiConfig
-            } else {
-                apiConfigList.find { it.id == memoryApiId } ?: activeApiConfig
+            // MEMORY 通道经 ApiConfigRepository 统一解析（显式绑定优先，否则继承 CHAT；Spec §19/§5.4）
+            // 不再直读加密库与散装键、不再构造幽灵默认配置；通道不可用 = 可重试失败，不伪报成功
+            val repository = com.loyea.storage.ApiConfigRepository(context)
+            val targetConfig = when (val memory = repository.resolve(com.loyea.storage.ChannelId.MEMORY)) {
+                is com.loyea.storage.ChannelResolution.Ready -> memory.resolved.config
+                else -> {
+                    Log.w("MemoryConsolidationWorker", "MEMORY channel not ready: $memory")
+                    return@withContext Result.retry()
+                }
             }
 
             val llmResponse = llmClient.sendChatCompletion(
