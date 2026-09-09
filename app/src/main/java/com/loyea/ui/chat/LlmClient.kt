@@ -90,6 +90,30 @@ class ImageGenException(message: String) : Exception(message)
 /** 生图结果：远程 URL（需下载）或 base64 编码图片（直接解码落盘）二选一。 */
 data class ImageGenResult(val remoteUrl: String?, val base64Png: String?)
 
+/** "响应非 SSE 格式"判定的原始报文累积上限：超过即停止累积（仅保留溢出标记），防止巨型 HTML 撑爆内存 */
+private const val NON_SSE_CAPTURE_LIMIT = 2_000_000
+
+/**
+ * SSE data 行载荷提取：兼容 "data: {...}"（标准，带空格）与 "data:{...}"（部分网关省略空格）。
+ * 后者此前被整行忽略——对接此类中转时表现为零内容零报错的静默空回复。非 data 行返回 null。
+ */
+internal fun extractSseDataPayload(trimmedLine: String): String? {
+    if (!trimmedLine.startsWith("data:")) return null
+    return trimmedLine.substring(5).trim()
+}
+
+/** 非 SSE 响应体（HTTP 200 却读不到任何 data 事件）的判定结果 */
+internal sealed class NonSseBodyOutcome {
+    /** 空响应体：连接正常但零字节 */
+    object Empty : NonSseBodyOutcome()
+    /** JSON error 体：message 为服务商标错原文（部分网关以 200 包错误返回） */
+    data class ApiError(val message: String) : NonSseBodyOutcome()
+    /** JSON 带 choices：渠道忽略 stream 参数回整包 JSON，降级为非流式解析后回复仍可用 */
+    data class Completion(val response: LlmResponse) : NonSseBodyOutcome()
+    /** 其余（HTML/纯文本/损坏 JSON）：附响应体采样供透出 */
+    data class Unrecognized(val sample: String) : NonSseBodyOutcome()
+}
+
 class LlmClient {
     @Volatile
     var lastAsrError: String? = null
@@ -219,6 +243,14 @@ class LlmClient {
                 val fullContentBuilder = StringBuilder()
                 var emittedThoughtsLength = 0
                 var emittedContentLength = 0
+
+                // 非 data 行的原始报文累积：整条流读完却没有任何 data 事件时，作为"响应不是 SSE 格式"
+                // 的判定与报错证据（网关 200+HTML/error JSON、空流、渠道强制非流式——旧行为是静默吞掉整条回复）
+                val nonSseRaw = StringBuilder()
+                var nonSseOverflow = false
+                // 上游终态原因：length/content_filter 表示回复被输出上限截断。旧逻辑不解析该字段，
+                // 截断与自然结束无法区分，用户看到的是"说到一半就没了且无任何提示"
+                var truncatedBy: String? = null
                 
                 class ToolCallBuffer(
                     var id: String? = null,
@@ -229,9 +261,9 @@ class LlmClient {
 
                 while (reader.readLine().also { line = it } != null) {
                     val trimmedLine = line!!.trim()
-                    if (trimmedLine.startsWith("data: ")) {
+                    val data = extractSseDataPayload(trimmedLine)
+                    if (data != null) {
                         streamStarted = true
-                        val data = trimmedLine.substring(6).trim()
                         if (data == "[DONE]") {
                             break
                         }
@@ -250,7 +282,12 @@ class LlmClient {
                             }
                             val choices = chunkJson.getAsJsonArray("choices")
                             if (choices != null && choices.size() > 0) {
-                                val delta = choices.get(0).asJsonObject.getAsJsonObject("delta")
+                                val choiceObj = choices.get(0).asJsonObject
+                                val finishReason = choiceObj.get("finish_reason")?.takeIf { !it.isJsonNull }?.asString
+                                if (finishReason == "length" || finishReason == "content_filter") {
+                                    truncatedBy = finishReason
+                                }
+                                val delta = choiceObj.getAsJsonObject("delta")
                                 if (delta != null) {
                                     // 1. 官方 reasoning_content 推理流 (Deepseek R1 官方标准字段)
                                     val reasoningContent = delta.get("reasoning_content")?.takeIf { !it.isJsonNull }?.asString
@@ -315,7 +352,52 @@ class LlmClient {
                                 android.util.Log.w("LlmClient", "SSE chunk parse failed: ${e.message}")
                             }
                         }
+                    } else if (trimmedLine.isNotEmpty()) {
+                        // 空行是 SSE 事件分隔符，不累积；其余非 data 行（HTML/JSON/注释）暂存作非流式判定证据
+                        if (nonSseRaw.length < NON_SSE_CAPTURE_LIMIT) {
+                            nonSseRaw.append(line).append('\n')
+                        } else {
+                            nonSseOverflow = true
+                        }
                     }
+                }
+
+                // 响应体不是 SSE（整条流无任何 data 事件）：网关 200+HTML / 200+error JSON、空流、
+                // 或渠道不支持流式直接回整包 JSON——旧行为一律当正常结束，零内容零报错误导排障方向。
+                // 现分三类透出：错误体/不可识别体报错（附采样），整包 JSON 降级为非流式解析（回复仍可用）
+                if (!streamStarted) {
+                    val rawBody = nonSseRaw.toString().trim()
+                    when (val outcome = interpretNonSseBody(rawBody)) {
+                        is NonSseBodyOutcome.Empty ->
+                            emit(StreamEvent.Error("[错误] 服务商返回了空响应 (HTTP 200)：连接正常但未收到任何数据，请检查渠道是否故障或稍后重试"))
+                        is NonSseBodyOutcome.ApiError ->
+                            emit(StreamEvent.Error("[错误] 服务商返回错误 (HTTP 200)：${outcome.message}"))
+                        is NonSseBodyOutcome.Completion -> {
+                            val resp = outcome.response
+                            if (resp.isError) {
+                                emit(StreamEvent.Error(resp.content))
+                                return@flow
+                            }
+                            if (!resp.thoughts.isNullOrBlank()) emit(StreamEvent.Thoughts(resp.thoughts))
+                            if (resp.content.isNotBlank()) emit(StreamEvent.Content(resp.content))
+                            if (resp.promptTokens != null || resp.completionTokens != null) {
+                                emit(StreamEvent.Usage(
+                                    promptTokens = resp.promptTokens ?: 0L,
+                                    completionTokens = resp.completionTokens ?: 0L,
+                                    totalTokens = resp.totalTokens ?: ((resp.promptTokens ?: 0L) + (resp.completionTokens ?: 0L)),
+                                    promptCacheHitTokens = resp.promptCacheHitTokens ?: 0L,
+                                    promptCacheMissTokens = resp.promptCacheMissTokens ?: 0L
+                                ))
+                            }
+                            emit(StreamEvent.Done)
+                            return@flow
+                        }
+                        is NonSseBodyOutcome.Unrecognized -> {
+                            val overflowNote = if (nonSseOverflow) "（响应体过大，已截断）" else ""
+                            emit(StreamEvent.Error("[错误] 服务商响应不是流式数据 (HTTP 200)，响应体开头：${outcome.sample}$overflowNote"))
+                        }
+                    }
+                    return@flow
                 }
 
                 // 发射收集到的完整 Tool Calls
@@ -341,6 +423,18 @@ class LlmClient {
                 val combinedCalls = finalToolCalls + finalState.completedXmlCalls
                 if (combinedCalls.isNotEmpty()) {
                     emit(StreamEvent.ToolCalls(combinedCalls))
+                }
+
+                // 终态可见性：两类静默失败不再伪装成正常结束——
+                // 1) 全程零内容（连接成功却一个字没收到，含只发 usage 的空跑）；2) finish_reason=length/content_filter（输出上限截断）。
+                // 以 Error 事件收尾：上层"半截内容保留"逻辑会把 ⚠️ 原因拼在已生成内容之后并落盘，用户第一次能看到真实原因
+                if (emittedContentLength == 0 && emittedThoughtsLength == 0 && combinedCalls.isEmpty()) {
+                    emit(StreamEvent.Error("[错误] 服务商返回了空回复 (HTTP 200)：连接正常但未收到任何文本内容，请检查渠道是否故障或稍后重试"))
+                    return@flow
+                }
+                if (truncatedBy != null) {
+                    emit(StreamEvent.Error("[错误] 回复因输出上限被截断 (finish_reason=$truncatedBy)：请在服务商侧调大 max_tokens 或更换输出上限更高的渠道"))
+                    return@flow
                 }
 
                 emit(StreamEvent.Done)
@@ -556,6 +650,11 @@ class LlmClient {
         }
         if (response.content.isNotBlank()) {
             emit(StreamEvent.Content(response.content))
+        }
+        // 非流式零内容（choices 有但正文空）：与流式路径同规则，错误透出而非静默成功
+        if (response.content.isBlank() && response.thoughts.isNullOrBlank() && response.toolCalls.isEmpty()) {
+            emit(StreamEvent.Error("[错误] 服务商返回了空回复 (HTTP 200)：响应解析正常但未包含任何文本内容"))
+            return@flow
         }
         if (response.promptTokens != null || response.completionTokens != null) {
             emit(StreamEvent.Usage(
@@ -945,6 +1044,28 @@ class LlmClient {
      * 从非流式响应 JSON 中解析 usage（OpenAI 兼容格式），缺失时返回 null。
      * 供 sendChatCompletion 与 parseChatCompletionResponse 两个解析点共用。
      */
+    /**
+     * 非 SSE 响应体判定（HTTP 200 却整条流无 data 事件）：
+     * 网关 200+HTML / 200+error JSON、空流、渠道忽略 stream 参数回整包 JSON，均在此归类。
+     */
+    internal fun interpretNonSseBody(rawBody: String): NonSseBodyOutcome {
+        if (rawBody.isEmpty()) return NonSseBodyOutcome.Empty
+        if (!rawBody.startsWith("{") && !rawBody.startsWith("[")) {
+            return NonSseBodyOutcome.Unrecognized(rawBody.take(200))
+        }
+        val parsed = runCatching { gson.fromJson(rawBody, JsonObject::class.java) }.getOrNull()
+            ?: return NonSseBodyOutcome.Unrecognized(rawBody.take(200))
+        val errObj = parsed.getAsJsonObject("error")
+        if (errObj != null) {
+            val msg = errObj.get("message")?.takeIf { !it.isJsonNull }?.asString ?: rawBody.take(300)
+            return NonSseBodyOutcome.ApiError(msg)
+        }
+        if (parsed.has("choices") && parsed.get("choices").isJsonArray) {
+            return NonSseBodyOutcome.Completion(parseChatCompletionResponse(rawBody))
+        }
+        return NonSseBodyOutcome.Unrecognized(rawBody.take(200))
+    }
+
     private fun parseUsage(responseJson: JsonObject): LlmUsage? {
         val usage = responseJson.get("usage")?.takeIf { !it.isJsonNull && it.isJsonObject }?.asJsonObject ?: return null
         return LlmUsage(
