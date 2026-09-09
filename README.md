@@ -17,7 +17,7 @@
 
 Loyea 是一个运行在 Android 上的本地优先（local-first）的 AI 对话应用，源码开源。它把大模型对话与端侧物理感知、记忆系统、角色扮演（SillyTavern 人设卡兼容）、多模态能力结合，可通过 MCP（Model Context Protocol）让 AI 主动调用本地工具与联网工具。
 
-当前稳定版：**v0.8.1**（Android 8.0 / API 26 及以上）。
+当前稳定版：**v0.8.2**（Android 8.0 / API 26 及以上）。
 
 > 本文档只描述当前代码中**已实际实现**的功能。未实现的功能不会出现在列表中。
 
@@ -38,11 +38,11 @@ Loyea 是一个运行在 Android 上的本地优先（local-first）的 AI 对�
 
 ## 下载与安装
 
-安装包统一发布在 [GitHub Releases](https://github.com/ApolloEddy/Loyea/releases)，当前版本请进入 [Loyea v0.8.1](https://github.com/ApolloEddy/Loyea/releases/tag/v0.8.1) 下载 `Loyea-0.8.1-release-com.loyea.apk`。
+安装包统一发布在 [GitHub Releases](https://github.com/ApolloEddy/Loyea/releases)，当前版本请进入 [Loyea v0.8.1](https://github.com/ApolloEddy/Loyea/releases/tag/v0.8.2) 下载 `Loyea-0.8.2-release-com.loyea.apk`。
 
 1. 下载 APK 到 Android 设备。
 2. 如系统提示，允许当前浏览器或文件管理器「安装未知应用」。
-3. 打开 APK 完成安装；v0.8.1 的内部 `versionCode` 为 19，可覆盖安装 v0.5.5 及之后的任意版本。
+3. 打开 APK 完成安装；v0.8.2 的内部 `versionCode` 为 20，可覆盖安装 v0.5.5 及之后的任意版本。
 
 **从 v0.5.5 直接覆盖安装**：首次启动会自动执行一次性数据迁移——角色、会话消息、世界书、图谱记忆全部搬入新的 `rebuild_storage_v1/` 目录。迁移采用「staging 构建完成后原子切换」，旧文件原样保留、可随时回滚旧版；无法识别的旧扩展数据只读保留不丢弃。个别冲突数据（如同名旧版角色）会以「迁移冲突副本」条目出现在角色列表中，两份都在，自行取舍。
 
@@ -284,7 +284,7 @@ keyPassword=***
 
 > 未提供 `keystore.properties` 时仍可正常构建调试包，仅 release 包无法签名。
 
-Release 构建产物位于 `app/build/outputs/apk/release/app-release.apk`。该目录和所有 `*.apk` / `*.aab` 均被 Git 忽略；正式安装包应重命名为版本化文件（如 `Loyea-0.8.1-release-com.loyea.apk`）并上传到 GitHub Releases，不应复制到仓库根目录或提交进 Git。
+Release 构建产物位于 `app/build/outputs/apk/release/app-release.apk`。该目录和所有 `*.apk` / `*.aab` 均被 Git 忽略；正式安装包应重命名为版本化文件（如 `Loyea-0.8.2-release-com.loyea.apk`）并上传到 GitHub Releases，不应复制到仓库根目录或提交进 Git。
 
 ---
 
