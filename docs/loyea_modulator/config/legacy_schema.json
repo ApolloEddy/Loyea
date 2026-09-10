@@ -1,0 +1,120 @@
+{
+  "source": "AprilPerceptionDemo-standalone-2.1.4.html",
+  "source_sha256": "a7dd693856d4c686690f3907f37c732f4af4017c9d19aef9665f18cc3303bd9c",
+  "model_metadata_schema": "2.1.0",
+  "decoder_schema": "2.1.1",
+  "heads": {
+    "basePresence": [
+      "joy",
+      "affection",
+      "sadness",
+      "anger",
+      "fear",
+      "disgust",
+      "surprise",
+      "neutral"
+    ],
+    "baseStrength": [
+      "joy",
+      "affection",
+      "sadness",
+      "anger",
+      "fear",
+      "disgust",
+      "surprise",
+      "neutral"
+    ],
+    "fineStrength": [
+      "grievance",
+      "disappointment",
+      "loneliness",
+      "gratitude",
+      "relief",
+      "shame_guilt",
+      "frustration",
+      "anticipation"
+    ],
+    "dialogueAct": [
+      "inform",
+      "question",
+      "answer",
+      "request_command",
+      "agree_ack",
+      "disagree_reject",
+      "apologize_repair",
+      "thank_appreciate",
+      "comfort_support",
+      "complain_protest",
+      "greet_close",
+      "joke_irony",
+      "other"
+    ],
+    "stances": [
+      "affiliative",
+      "playful",
+      "coquettish",
+      "hostile",
+      "defensive",
+      "vulnerable",
+      "repairing"
+    ],
+    "speakerAffectTarget": [
+      "self",
+      "listener",
+      "third_party",
+      "event_object",
+      "general",
+      "none",
+      "unclear"
+    ],
+    "utteranceFactuality": [
+      "asserted",
+      "negated",
+      "hypothetical",
+      "reported",
+      "unclear"
+    ],
+    "dimensions": [
+      "valence",
+      "arousal",
+      "dominance",
+      "intensity",
+      "ambiguity",
+      "toxicity"
+    ],
+    "referencePresence": [
+      "present"
+    ],
+    "referenceEmotion": [
+      "joy",
+      "affection",
+      "sadness",
+      "anger",
+      "fear",
+      "disgust",
+      "surprise",
+      "neutral"
+    ],
+    "referenceHolder": [
+      "speaker",
+      "listener",
+      "third_party",
+      "mixed",
+      "none",
+      "unclear"
+    ],
+    "referenceFactuality": [
+      "asserted",
+      "negated",
+      "hypothetical",
+      "reported",
+      "unclear"
+    ]
+  },
+  "head_count": 12,
+  "logit_count": 82,
+  "max_tokens": 96,
+  "q8_bytes": 24085508,
+  "input_format": "last 3 context entries: [unused1]{speaker}:{text}; current: [unused2]{speaker}:{text}; join with spaces",
+  "not_included": "权重与原始HTML不重复打包；此文件是兼容性登记，不是模型实现。"
+}

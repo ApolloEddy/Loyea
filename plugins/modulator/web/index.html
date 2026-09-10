@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loyea 情绪调制器 · web 调试页</title>
+<style>
+  :root {
+    --ink: #29261E; --muted: #8A857A; --canvas: #FAF9F5; --card: #FFFFFF;
+    --line: #E9E6DE; --track: #EDEAE2; --terra: #BF5B3C; --sage: #6E7F6A;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--canvas); color: var(--ink);
+         font: 14px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 2px; }
+  .sub { color: var(--muted); font-size: 12px; margin-bottom: 18px; }
+  section { background: var(--card); border-radius: 14px; padding: 14px 16px; margin-bottom: 12px;
+            box-shadow: 0 1px 2px rgba(41,38,30,.04); }
+  h2 { font-size: 13px; margin: 0 0 10px; }
+  .label { color: var(--muted); font-size: 12px; margin: 8px 0 4px; }
+  button { font: inherit; font-size: 12.5px; padding: 6px 14px; margin: 0 6px 6px 0; cursor: pointer;
+           border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--terra); border-color: var(--terra); color: #fff; }
+  button.danger { color: var(--terra); }
+  .mono { font-family: Consolas, "Courier New", monospace; font-size: 12px; }
+  .dim { color: var(--muted); }
+  .golden { font-family: Consolas, monospace; font-size: 12px; white-space: pre-wrap; margin-top: 8px; }
+  .golden .pass { color: var(--sage); } .golden .fail { color: var(--terra); }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-weight: 400; color: var(--muted); font-size: 11px;
+       background: var(--track); padding: 4px 8px; }
+  td { padding: 5px 8px; font-size: 13px; border-top: 1px solid var(--track); }
+  td.state { font-weight: 600; } td.dim { color: var(--muted); }
+  .bar { height: 6px; border-radius: 3px; background: var(--track); position: relative; overflow: hidden; }
+  .bar i { position: absolute; top: 0; bottom: 0; background: var(--terra); }
+  .bar.mood i { background: var(--sage); }
+  .axis { margin: 10px 0; }
+  .axis .name { font-size: 11px; color: var(--muted); }
+  .axis .val { font-family: Consolas, monospace; font-size: 10.5px; color: var(--muted); margin-top: 2px; }
+  .trace, .audit { font-family: Consolas, monospace; font-size: 12px; margin: 3px 0; }
+  .audit { color: var(--muted); }
+  .rec { border-top: 1px solid var(--track); padding: 8px 0; }
+  .rec .t { color: var(--muted); font-size: 12px; }
+  .rec .r { font-family: Consolas, monospace; font-size: 12px; }
+  .empty { color: var(--muted); font-size: 13px; }
+  .err { color: var(--terra); font-size: 12.5px; margin-top: 8px; white-space: pre-wrap; }
+  .bar-h { display: inline-block; width: 34px; color: var(--muted); font-size: 11px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Loyea 情绪调制器</h1>
+  <div class="sub" id="subtitle">web 调试页 · 正在连接本地模型…</div>
+
+  <section>
+    <h2>验证</h2>
+    <button class="primary" id="btn-demo">运行三轮演示</button>
+    <button id="btn-golden">回放 Golden Cases</button>
+    <div class="golden" id="golden"></div>
+    <div class="err" id="err"></div>
+  </section>
+
+  <section>
+    <h2>交互沙盒（合成输入）</h2>
+    <div class="label">感知消息</div>
+    <div id="perception-chips"></div>
+    <div class="label">宿主确认事件</div>
+    <div id="fact-chips"></div>
+    <div class="label">时间 / 会话</div>
+    <button data-mins="10">+10 分钟</button>
+    <button data-mins="60">+1 小时</button>
+    <button class="danger" id="btn-reset">重置</button>
+  </section>
+
+  <section>
+    <h2 id="table-title">状态表</h2>
+    <div id="table"></div>
+  </section>
+
+  <section>
+    <h2>连续量（即时 f / 背景 m）</h2>
+    <div id="axes"></div>
+  </section>
+
+  <section>
+    <h2>事件痕迹（最多 8 条）</h2>
+    <div id="traces" class="empty">无活动痕迹。</div>
+  </section>
+
+  <section>
+    <h2>本轮审计（调试）</h2>
+    <div id="audit" class="empty">无。</div>
+  </section>
+
+  <section>
+    <h2 id="history-title">历史轮次</h2>
+    <div id="history"></div>
+  </section>
+</main>
+
+<script>
+// ---------------------------------------------------------------------------
+// 会话状态：检查点 + 会话逻辑时钟；服务端无状态，每次请求携带检查点往返。
+// ---------------------------------------------------------------------------
+const S = { checkpoint: null, clock: 0, seq: 0, factCounter: 0, lastThreat: null, history: [] };
+
+const AXES = ["效价 valence", "激活 activation", "紧张 tension", "烦躁 irritation"];
+
+// 与 prototype/demo.py 的 sample_perception 同构的合成感知。
+function sample(label = "neutral", strength = .75, target = "event_object", act = "inform", stances = {}) {
+  const hostile = stances.hostile ?? 0;
+  return {
+    schemaVersion: "2.1.1",
+    emotions: { [label]: { calibratedProbability: .95, strength } },
+    fineStates: {},
+    stances,
+    dialogueAct: { primary: act, confidence: .95 },
+    speakerAffectTarget: { value: target, confidence: .95 },
+    utteranceFactuality: { value: "asserted", confidence: .95 },
+    dimensions: { toxicity: hostile >= .7 ? .80 : .02 },
+  };
+}
+
+const PERCEPTION_EVENTS = [
+  ["敌意指向角色", () => sample("anger", .75, "listener", "inform", { hostile: .95 })],
+  ["温柔致谢",     () => sample("neutral", .75, "event_object", "thank_appreciate")],
+  ["亲近表达",     () => sample("affection", .75, "listener", "inform", { affiliative: .9 })],
+  ["玩笑",         () => sample("neutral", .75, "event_object", "joke_irony", { playful: .95 })],
+  ["分享难过",     () => sample("sadness", .75, "self")],
+  ["分享快乐",     () => sample("joy")],
+  ["道歉修复",     () => sample("neutral", .75, "event_object", "apologize_repair")],
+  ["玩笑带刺（歧义弃权）", () => sample("anger", .75, "listener", "inform", { hostile: .95, playful: .9 })],
+];
+
+const FACT_EVENTS = [
+  ["未来担忧", "future_threat"], ["威胁解除", "threat_resolved"], ["任务受阻", "task_blocked"],
+  ["新话题", "novel_topic"], ["角色成就", "self_achievement"], ["确认自身伤害", "own_harm_confirmed"],
+];
+
+function observation(perception, facts = []) {
+  S.seq += 1;
+  return {
+    event_id: "web-u" + S.seq,
+    seq: S.seq,
+    at: S.clock,
+    context: {
+      topic_id: "demo", scene: "real", legitimate_feedback: false,
+      visible_evidence: [], active_tags: [], trust_scope: "general",
+    },
+    perception, facts, model_metadata_version: "2.1.0",
+  };
+}
+
+function hostFacts(kind) {
+  const n = ++S.factCounter;
+  const f = { kind, strength: .75, evidence_id: kind + "-" + n, confidence: 1,
+              verified: true, source: "host", target: "event", resolves: [] };
+  if (kind === "future_threat") S.lastThreat = f.evidence_id;
+  if (kind === "threat_resolved" && S.lastThreat) f.resolves = [S.lastThreat];
+  return [f];
+}
+
+async function api(cmd, extra = {}) {
+  const res = await fetch("/api", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cmd, checkpoint: S.checkpoint, ...extra }),
+  });
+  return res.json();
+}
+
+function showErr(e) {
+  document.getElementById("err").textContent = "请求失败：" + e.message;
+}
+
+async function submit(cmd, extra, title) {
+  try {
+    const r = await api(cmd, extra);
+    if (!r.ok) { document.getElementById("err").textContent = "模型拒绝：" + r.error; return null; }
+    document.getElementById("err").textContent = "";
+    S.checkpoint = r.checkpoint;
+    if (cmd === "process") {
+      S.history.push({ title, at: S.clock, rows: r.decision.rows });
+      renderDecision(r.decision);
+    }
+    renderState(r.state);
+    return r;
+  } catch (e) { showErr(e); return null; }
+}
+
+// ---------------------------------------------------------------------------
+// 渲染
+// ---------------------------------------------------------------------------
+
+function fmtClock(s) {
+  if (s < 60) return s.toFixed(0) + " 秒";
+  if (s < 3600) return (s / 60).toFixed(0) + " 分钟";
+  return (s / 3600).toFixed(1) + " 小时";
+}
+
+function renderDecision(d) {
+  document.getElementById("table").innerHTML =
+    "<table><tr><th>aspect</th><th>state</th><th>intensity</th></tr>" +
+    d.rows.map(r =>
+      `<tr><td class="dim">${r.aspectZh}</td><td class="state">${r.stateZh}</td><td class="dim">${r.intensityZh}</td></tr>`
+    ).join("") + "</table>";
+  document.getElementById("audit").className = "";
+  document.getElementById("audit").innerHTML = d.audit.map(a => `<div class="audit">${a}</div>`).join("") || "无。";
+}
+
+function renderState(st) {
+  document.getElementById("table-title").textContent =
+    `状态表（会话逻辑时间 ${fmtClock(st.at)}）`;
+  const axes = document.getElementById("axes");
+  axes.innerHTML = "";
+  for (let i = 0; i < 4; i++) {
+    const signed = i === 0;
+    const row = document.createElement("div");
+    row.className = "axis";
+    row.innerHTML =
+      `<div class="name">${AXES[i]}</div>` +
+      `<div class="bar"></div><span class="bar-h">f</span>` +
+      `<div class="bar mood"></div><span class="bar-h">m</span>` +
+      `<div class="val">f=${fmt(st.fast[i])}  m=${fmt(st.mood[i])}</div>`;
+    fill(row.querySelector(".bar"), st.fast[i], signed);
+    fill(row.querySelector(".bar.mood"), st.mood[i], signed);
+    axes.appendChild(row);
+  }
+  const tr = document.getElementById("traces");
+  if (st.traces.length === 0) { tr.className = "empty"; tr.textContent = "无活动痕迹。"; }
+  else {
+    tr.className = "";
+    tr.innerHTML = st.traces.map(t =>
+      `<div class="trace">${t.label} · 强度 ${t.strength.toFixed(3)} · 半衰期 ${Math.round(t.halfLife)}s · 证据 ${t.evidenceIds.join(",")}</div>`
+    ).join("");
+  }
+  const h = document.getElementById("history");
+  document.getElementById("history-title").textContent = `历史轮次（${S.history.length}）`;
+  h.innerHTML = [...S.history].reverse().map(rec =>
+    `<div class="rec"><div class="t">T+${fmtClock(rec.at)} · ${rec.title}</div>` +
+    rec.rows.map(r => `<div class="r">${r.aspectZh} / ${r.stateZh} / ${r.intensityZh}</div>`).join("") +
+    `</div>`
+  ).join("");
+}
+
+function fmt(v) { return (v >= 0 ? "+" : "") + v.toFixed(3); }
+
+function fill(bar, v, signed) {
+  const i = document.createElement("i");
+  if (signed) {
+    const f = Math.min(Math.max((v + 1) / 2, 0), 1);
+    i.style.left = (Math.min(f, .5) * 100) + "%";
+    i.style.width = (Math.abs(f - .5) * 100) + "%";
+  } else {
+    i.style.left = "0";
+    i.style.width = (Math.min(Math.max(v, 0), 1) * 100) + "%";
+  }
+  bar.appendChild(i);
+}
+
+// ---------------------------------------------------------------------------
+// 动作
+// ---------------------------------------------------------------------------
+
+async function runDemoScenario() {
+  await reset();
+  let r = await submit("process", { observation: observation(sample("sadness", .75, "self")) }, "第 1 轮 · 分享难过（合成感知）");
+  if (!r) return;
+  S.clock = 60; r = await submit("idle", { at: S.clock }); if (!r) return;
+  r = await submit("process", { observation: observation(sample("neutral", .75, "event_object", "joke_irony", { playful: .95 })) }, "第 2 轮 · 随后开玩笑");
+  if (!r) return;
+  S.clock = 7260; r = await submit("idle", { at: S.clock }); if (!r) return;
+  await submit("process", { observation: observation() }, "第 3 轮 · 两小时后聊新话题");
+}
+
+async function runGolden() {
+  const box = document.getElementById("golden");
+  box.innerHTML = "回放中…";
+  try {
+    const r = await api("golden");
+    if (!r.ok) { box.innerHTML = `<span class="fail">失败：${r.error}</span>`; return; }
+    box.innerHTML =
+      `<span class="${r.allPass ? "pass" : "fail"}">${r.allPass ? "全部通过" : "存在失败"}（容差 1e-${Math.round(-Math.log10(r.tolerance))}）</span>\n` +
+      r.sequences.map(s =>
+        `${s.name}：${s.steps} 步，最大误差 ${s.maxError.toExponential(2)}，` +
+        `<span class="${s.pass ? "pass" : "fail"}">${s.pass ? "通过" : "失败"}</span>`
+      ).join("\n");
+  } catch (e) { box.innerHTML = `<span class="fail">请求失败：${e.message}</span>`; }
+}
+
+async function reset() {
+  S.checkpoint = null; S.clock = 0; S.seq = 0; S.factCounter = 0; S.lastThreat = null; S.history = [];
+  document.getElementById("golden").innerHTML = "";
+  document.getElementById("table").innerHTML = '<div class="empty">尚无已提交观测。</div>';
+  document.getElementById("audit").className = "empty"; document.getElementById("audit").textContent = "无。";
+  document.getElementById("err").textContent = "";
+  const r = await submit("reset", { at: 0 }, "");
+  if (r) { S.checkpoint = r.checkpoint; renderState(r.state); }
+}
+
+function chip(parent, label, onClick) {
+  const b = document.createElement("button");
+  b.textContent = label;
+  b.onclick = onClick;
+  parent.appendChild(b);
+}
+
+const pc = document.getElementById("perception-chips");
+PERCEPTION_EVENTS.forEach(([label, build]) =>
+  chip(pc, label, () => submit("process", { observation: observation(build()) }, label)));
+const fc = document.getElementById("fact-chips");
+FACT_EVENTS.forEach(([label, kind]) =>
+  chip(fc, label, () => submit("process", { observation: observation(null, hostFacts(kind)) }, label)));
+document.querySelectorAll("button[data-mins]").forEach(b =>
+  b.onclick = async () => {
+    S.clock += Number(b.dataset.mins) * 60;
+    const r = await submit("idle", { at: S.clock });
+    if (r) renderState(r.state);
+  });
+document.getElementById("btn-reset").onclick = reset;
+document.getElementById("btn-demo").onclick = runDemoScenario;
+document.getElementById("btn-golden").onclick = runGolden;
+
+reset().then(() => { document.getElementById("subtitle").textContent = "web 调试页 · 本地模型已连接"; });
+</script>
+</body>
+</html>

@@ -1,0 +1,233 @@
+{
+  "version": "1.0.0-prototype",
+  "axes": [
+    "valence",
+    "activation",
+    "tension",
+    "irritation"
+  ],
+  "bounds": [
+    [
+      -1.0,
+      1.0
+    ],
+    [
+      0.0,
+      1.0
+    ],
+    [
+      0.0,
+      1.0
+    ],
+    [
+      0.0,
+      1.0
+    ]
+  ],
+  "fast_half_lives_seconds": [
+    180.0,
+    90.0,
+    240.0,
+    300.0
+  ],
+  "mood_half_lives_seconds": [
+    1800.0,
+    1200.0,
+    2400.0,
+    2700.0
+  ],
+  "intensity_boundaries": [
+    0.3,
+    0.55,
+    0.8
+  ],
+  "intensity_hysteresis": 0.03,
+  "feeling_enter": 0.18,
+  "feeling_exit": 0.12,
+  "selection_bias": 0.04,
+  "mood_enter": 0.16,
+  "mood_exit": 0.1,
+  "max_traces": 8,
+  "max_source_ids_per_trace": 4,
+  "trace_prune": 0.015,
+  "trace_cap": 0.95,
+  "impulse_cap": 0.9,
+  "blend_cap": 0.55,
+  "blend_rate": 0.75,
+  "refractory_seconds": 45,
+  "refractory_floor": 0.25,
+  "rules": {
+    "shared_joy": {
+      "label": "joy",
+      "family": "positive",
+      "targets": {
+        "valence": 0.8,
+        "activation": 0.55
+      },
+      "half_life": 180,
+      "source": "legacy"
+    },
+    "user_distress": {
+      "label": "compassion",
+      "family": "empathy",
+      "targets": {
+        "valence": -0.25,
+        "activation": 0.35,
+        "tension": 0.25
+      },
+      "half_life": 300,
+      "source": "legacy"
+    },
+    "kindness": {
+      "label": "gratitude",
+      "family": "positive",
+      "targets": {
+        "valence": 0.6,
+        "activation": 0.25
+      },
+      "half_life": 240,
+      "source": "legacy"
+    },
+    "affection": {
+      "label": "affection",
+      "family": "positive",
+      "targets": {
+        "valence": 0.65,
+        "activation": 0.3
+      },
+      "half_life": 300,
+      "source": "legacy"
+    },
+    "hostility": {
+      "label": "anger",
+      "family": "hostility",
+      "targets": {
+        "valence": -0.7,
+        "activation": 0.65,
+        "tension": 0.55,
+        "irritation": 0.85
+      },
+      "half_life": 240,
+      "source": "legacy"
+    },
+    "repair": {
+      "label": "relief",
+      "family": "repair",
+      "targets": {
+        "valence": 0.3,
+        "activation": 0.1,
+        "tension": 0,
+        "irritation": 0
+      },
+      "half_life": 150,
+      "source": "legacy"
+    },
+    "humor": {
+      "label": "amusement",
+      "family": "positive",
+      "targets": {
+        "valence": 0.65,
+        "activation": 0.45
+      },
+      "half_life": 120,
+      "source": "legacy"
+    },
+    "task_blocked": {
+      "label": "frustration",
+      "family": "negative",
+      "targets": {
+        "valence": -0.5,
+        "activation": 0.35,
+        "tension": 0.3
+      },
+      "half_life": 180,
+      "source": "host"
+    },
+    "unresolved_information": {
+      "label": "confusion",
+      "family": "neutral",
+      "targets": {
+        "activation": 0.3,
+        "tension": 0.1
+      },
+      "half_life": 120,
+      "source": "host"
+    },
+    "novel_topic": {
+      "label": "curiosity",
+      "family": "novelty",
+      "targets": {
+        "valence": 0.25,
+        "activation": 0.4
+      },
+      "half_life": 180,
+      "source": "host"
+    },
+    "future_threat": {
+      "label": "worry",
+      "family": "empathy",
+      "targets": {
+        "valence": -0.35,
+        "activation": 0.45,
+        "tension": 0.6
+      },
+      "half_life": 360,
+      "source": "host"
+    },
+    "threat_resolved": {
+      "label": "relief",
+      "family": "repair",
+      "targets": {
+        "valence": 0.4,
+        "activation": 0.1,
+        "tension": 0
+      },
+      "half_life": 150,
+      "source": "host"
+    },
+    "expectation_unmet": {
+      "label": "disappointment",
+      "family": "negative",
+      "targets": {
+        "valence": -0.6,
+        "activation": 0.2
+      },
+      "half_life": 300,
+      "source": "host"
+    },
+    "own_harm_confirmed": {
+      "label": "guilt",
+      "family": "repair",
+      "targets": {
+        "valence": -0.45,
+        "activation": 0.3,
+        "tension": 0.35
+      },
+      "half_life": 300,
+      "source": "host"
+    },
+    "self_achievement": {
+      "label": "pride",
+      "family": "positive",
+      "targets": {
+        "valence": 0.65,
+        "activation": 0.5
+      },
+      "half_life": 240,
+      "source": "host"
+    },
+    "unexpected_event": {
+      "label": "surprise",
+      "family": "neutral",
+      "targets": {
+        "activation": 0.7
+      },
+      "half_life": 60,
+      "source": "host"
+    }
+  },
+  "legacy_versions": {
+    "model_metadata": "2.1.0",
+    "decoder": "2.1.1"
+  }
+}

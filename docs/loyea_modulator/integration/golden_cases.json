@@ -1,0 +1,5381 @@
+{
+  "version": "1.0.0-prototype",
+  "numeric_tolerance": 1e-10,
+  "source": "hand-authored synthetic observations; expected values produced by reference implementation",
+  "sequences": [
+    {
+      "name": "user_distress",
+      "initial_personality": {
+        "openness": 0.5,
+        "conscientiousness": 0.5,
+        "extraversion": 0.5,
+        "agreeableness": 0.5,
+        "neuroticism": 0.5,
+        "plasticity": 0.5,
+        "total_interactions": 0,
+        "profile_version": "default-1"
+      },
+      "initial_at": 0,
+      "steps": [
+        {
+          "input": {
+            "event_id": "u1",
+            "seq": 1,
+            "at": 0,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "sadness": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {},
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "self",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.02
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "neutral",
+                "intensity": "—"
+              },
+              {
+                "aspect": "feeling",
+                "state": "compassion",
+                "intensity": "strong"
+              }
+            ],
+            "fast": [
+              -0.09836733507184163,
+              0.259020401043105,
+              0.09836733507184163,
+              0.0
+            ],
+            "mood": [
+              0.0,
+              0.2,
+              0.0,
+              0.0
+            ],
+            "traces": [
+              {
+                "kind": "user_distress",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.6666666666666665,
+                "half_life": 300,
+                "evidence_ids": [
+                  "u1"
+                ],
+                "last_event_at": 0
+              }
+            ],
+            "audit": [
+              "appraisal:user_distress:amplitude=0.666667"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "third_party_anger",
+      "initial_personality": {
+        "openness": 0.5,
+        "conscientiousness": 0.5,
+        "extraversion": 0.5,
+        "agreeableness": 0.5,
+        "neuroticism": 0.5,
+        "plasticity": 0.5,
+        "total_interactions": 0,
+        "profile_version": "default-1"
+      },
+      "initial_at": 0,
+      "steps": [
+        {
+          "input": {
+            "event_id": "u1",
+            "seq": 1,
+            "at": 0,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "third_party",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "neutral",
+                "intensity": "—"
+              }
+            ],
+            "fast": [
+              0.0,
+              0.2,
+              0.0,
+              0.0
+            ],
+            "mood": [
+              0.0,
+              0.2,
+              0.0,
+              0.0
+            ],
+            "traces": [],
+            "audit": []
+          }
+        }
+      ]
+    },
+    {
+      "name": "repair_sequence",
+      "initial_personality": {
+        "openness": 0.5,
+        "conscientiousness": 0.5,
+        "extraversion": 0.5,
+        "agreeableness": 0.5,
+        "neuroticism": 0.5,
+        "plasticity": 0.5,
+        "total_interactions": 0,
+        "profile_version": "default-1"
+      },
+      "initial_at": 0,
+      "steps": [
+        {
+          "input": {
+            "event_id": "u1",
+            "seq": 1,
+            "at": 0,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "neutral",
+                "intensity": "—"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "strong"
+              }
+            ],
+            "fast": [
+              -0.2893476463429776,
+              0.38600920122048565,
+              0.22734457926948246,
+              0.3513507134164728
+            ],
+            "mood": [
+              0.0,
+              0.2,
+              0.0,
+              0.0
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.7111111111111108,
+                "half_life": 240,
+                "evidence_ids": [
+                  "u1"
+                ],
+                "last_event_at": 0
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.711111"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "u2",
+            "seq": 2,
+            "at": 90,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [
+                "u1"
+              ],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "neutral",
+                "intensity": "—"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.41419913208365067,
+              0.44501820886549537,
+              0.33328575452711706,
+              0.5228121114924533
+            ],
+            "mood": [
+              -0.008475121932726227,
+              0.2070159311047997,
+              0.00520578192347263,
+              0.00732426060040199
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.869756154492456,
+                "half_life": 240,
+                "evidence_ids": [
+                  "u1",
+                  "u2"
+                ],
+                "last_event_at": 90
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.711632"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "u3",
+            "seq": 3,
+            "at": 150,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [
+                "u1",
+                "u2"
+              ],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "neutral": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {},
+              "dialogueAct": {
+                "primary": "apologize_repair",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.02
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "neutral",
+                "intensity": "—"
+              },
+              {
+                "aspect": "feeling",
+                "state": "relief",
+                "intensity": "strong"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "moderate"
+              }
+            ],
+            "fast": [
+              -0.11318922944129017,
+              0.27017992219566783,
+              0.18523665125610023,
+              0.29966424042546436
+            ],
+            "mood": [
+              -0.016830252573830792,
+              0.21361339193244439,
+              0.01042164652292856,
+              0.014729677748344869
+            ],
+            "traces": [
+              {
+                "kind": "repair",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.5777777777777776,
+                "half_life": 150,
+                "evidence_ids": [
+                  "u3"
+                ],
+                "last_event_at": 150
+              },
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.4989601634766036,
+                "half_life": 240,
+                "evidence_ids": [
+                  "u1",
+                  "u2"
+                ],
+                "last_event_at": 90
+              }
+            ],
+            "audit": [
+              "appraisal:repair:amplitude=0.577778"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "explicit_relationship",
+      "initial_personality": {
+        "openness": 0.5,
+        "conscientiousness": 0.5,
+        "extraversion": 0.5,
+        "agreeableness": 0.5,
+        "neuroticism": 0.5,
+        "plasticity": 0.5,
+        "total_interactions": 0,
+        "profile_version": "default-1"
+      },
+      "initial_at": 0,
+      "steps": [
+        {
+          "input": {
+            "event_id": "u1",
+            "seq": 1,
+            "at": 0,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "love",
+                "affect_strength": 0.8,
+                "trust": "distrust",
+                "trust_strength": 0.6,
+                "evidence_id": "declared-relation",
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": null,
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "love",
+                "intensity": "very_strong"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "distrust",
+                "intensity": "strong"
+              },
+              {
+                "aspect": "mood",
+                "state": "neutral",
+                "intensity": "—"
+              }
+            ],
+            "fast": [
+              0.0,
+              0.2,
+              0.0,
+              0.0
+            ],
+            "mood": [
+              0.0,
+              0.2,
+              0.0,
+              0.0
+            ],
+            "traces": [],
+            "audit": [
+              "sensor_missing:no_new_sensor_impulse"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "guilt_with_evidence",
+      "initial_personality": {
+        "openness": 0.5,
+        "conscientiousness": 0.5,
+        "extraversion": 0.5,
+        "agreeableness": 0.5,
+        "neuroticism": 0.5,
+        "plasticity": 0.5,
+        "total_interactions": 0,
+        "profile_version": "default-1"
+      },
+      "initial_at": 0,
+      "steps": [
+        {
+          "input": {
+            "event_id": "u1",
+            "seq": 1,
+            "at": 0,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": null,
+            "facts": [
+              {
+                "kind": "own_harm_confirmed",
+                "strength": 0.75,
+                "evidence_id": "own-error",
+                "confidence": 1.0,
+                "verified": true,
+                "source": "host",
+                "target": "event",
+                "resolves": []
+              }
+            ],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "neutral",
+                "intensity": "—"
+              },
+              {
+                "aspect": "feeling",
+                "state": "guilt",
+                "intensity": "strong"
+              }
+            ],
+            "fast": [
+              -0.19359772887108462,
+              0.2430217175269077,
+              0.15057601134417692,
+              0.0
+            ],
+            "mood": [
+              0.0,
+              0.2,
+              0.0,
+              0.0
+            ],
+            "traces": [
+              {
+                "kind": "own_harm_confirmed",
+                "target": "event",
+                "topic_id": "general",
+                "strength": 0.7499999999999999,
+                "half_life": 300,
+                "evidence_ids": [
+                  "own-error"
+                ],
+                "last_event_at": 0
+              }
+            ],
+            "audit": [
+              "sensor_missing:no_new_sensor_impulse",
+              "appraisal:own_harm_confirmed:amplitude=0.750000"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "threat_resolution",
+      "initial_personality": {
+        "openness": 0.5,
+        "conscientiousness": 0.5,
+        "extraversion": 0.5,
+        "agreeableness": 0.5,
+        "neuroticism": 0.5,
+        "plasticity": 0.5,
+        "total_interactions": 0,
+        "profile_version": "default-1"
+      },
+      "initial_at": 0,
+      "steps": [
+        {
+          "input": {
+            "event_id": "u1",
+            "seq": 1,
+            "at": 0,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": null,
+            "facts": [
+              {
+                "kind": "future_threat",
+                "strength": 0.75,
+                "evidence_id": "threat",
+                "confidence": 1.0,
+                "verified": true,
+                "source": "host",
+                "target": "event",
+                "resolves": []
+              }
+            ],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "neutral",
+                "intensity": "—"
+              },
+              {
+                "aspect": "feeling",
+                "state": "worry",
+                "intensity": "strong"
+              }
+            ],
+            "fast": [
+              -0.15057601134417692,
+              0.30755429381726923,
+              0.25813030516144614,
+              0.0
+            ],
+            "mood": [
+              0.0,
+              0.2,
+              0.0,
+              0.0
+            ],
+            "traces": [
+              {
+                "kind": "future_threat",
+                "target": "event",
+                "topic_id": "general",
+                "strength": 0.7499999999999999,
+                "half_life": 360,
+                "evidence_ids": [
+                  "threat"
+                ],
+                "last_event_at": 0
+              }
+            ],
+            "audit": [
+              "sensor_missing:no_new_sensor_impulse",
+              "appraisal:future_threat:amplitude=0.750000"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "u2",
+            "seq": 2,
+            "at": 60,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [
+                "threat"
+              ],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": null,
+            "facts": [
+              {
+                "kind": "threat_resolved",
+                "strength": 0.75,
+                "evidence_id": "resolved",
+                "confidence": 1.0,
+                "verified": true,
+                "source": "host",
+                "target": "event",
+                "resolves": [
+                  "threat"
+                ]
+              }
+            ],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "neutral",
+                "intensity": "—"
+              },
+              {
+                "aspect": "feeling",
+                "state": "relief",
+                "intensity": "strong"
+              },
+              {
+                "aspect": "feeling",
+                "state": "worry",
+                "intensity": "moderate"
+              }
+            ],
+            "fast": [
+              0.10222003511183513,
+              0.19761783912510536,
+              0.12608191432335708,
+              0.0
+            ],
+            "mood": [
+              -0.003107755313947096,
+              0.20300095845535182,
+              0.00410896015729398,
+              0.0
+            ],
+            "traces": [
+              {
+                "kind": "threat_resolved",
+                "target": "event",
+                "topic_id": "general",
+                "strength": 0.7499999999999999,
+                "half_life": 150,
+                "evidence_ids": [
+                  "resolved"
+                ],
+                "last_event_at": 60
+              },
+              {
+                "kind": "future_threat",
+                "target": "event",
+                "topic_id": "general",
+                "strength": 0.39255224768058694,
+                "half_life": 360,
+                "evidence_ids": [
+                  "threat"
+                ],
+                "last_event_at": 0
+              }
+            ],
+            "audit": [
+              "sensor_missing:no_new_sensor_impulse",
+              "appraisal:threat_resolved:amplitude=0.750000"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "background_and_current",
+      "initial_personality": {
+        "openness": 0.5,
+        "conscientiousness": 0.5,
+        "extraversion": 0.5,
+        "agreeableness": 0.5,
+        "neuroticism": 0.5,
+        "plasticity": 0.5,
+        "total_interactions": 0,
+        "profile_version": "default-1"
+      },
+      "initial_at": 0,
+      "steps": [
+        {
+          "input": {
+            "event_id": "hostile-1",
+            "seq": 1,
+            "at": 0,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "neutral",
+                "intensity": "—"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "strong"
+              }
+            ],
+            "fast": [
+              -0.2893476463429776,
+              0.38600920122048565,
+              0.22734457926948246,
+              0.3513507134164728
+            ],
+            "mood": [
+              0.0,
+              0.2,
+              0.0,
+              0.0
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.7111111111111108,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-1"
+                ],
+                "last_event_at": 0
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.711111"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-2",
+            "seq": 2,
+            "at": 120,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "neutral",
+                "intensity": "—"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.4020639217744745,
+              0.43410613049301583,
+              0.32546752498245346,
+              0.5126164399436168
+            ],
+            "mood": [
+              -0.010698622415565505,
+              0.20845494505678105,
+              0.006659024375713465,
+              0.00944102090800171
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.8567073210123681,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-1",
+                  "hostile-2"
+                ],
+                "last_event_at": 120
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.711782"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-3",
+            "seq": 3,
+            "at": 240,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "neutral",
+                "intensity": "—"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.4460750970467683,
+              0.4466546587488746,
+              0.3678787855258705,
+              0.5867097109957922
+            ],
+            "mood": [
+              -0.025081793834491238,
+              0.21852990697571073,
+              0.015965282887472235,
+              0.022928945301837103
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.886758020569508,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-1",
+                  "hostile-2",
+                  "hostile-3"
+                ],
+                "last_event_at": 240
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.712742"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-4",
+            "seq": 4,
+            "at": 360,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "neutral",
+                "intensity": "—"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.46336630079216734,
+              0.4500488441054652,
+              0.38627187937447427,
+              0.6208245402582724
+            ],
+            "mood": [
+              -0.04044275647162528,
+              0.22850056522538675,
+              0.026196780854324808,
+              0.03799862259782756
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.8932616692390785,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-1",
+                  "hostile-2",
+                  "hostile-3",
+                  "hostile-4"
+                ],
+                "last_event_at": 360
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.713813"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-5",
+            "seq": 5,
+            "at": 480,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "neutral",
+                "intensity": "—"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.4702699037491064,
+              0.4510875436466272,
+              0.3943142152903722,
+              0.6366114745333624
+            ],
+            "mood": [
+              -0.05574938452532137,
+              0.23795779913220394,
+              0.03661849838246103,
+              0.05352782079975325
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.8949845664380169,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-2",
+                  "hostile-3",
+                  "hostile-4",
+                  "hostile-5"
+                ],
+                "last_event_at": 480
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.714918"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-6",
+            "seq": 6,
+            "at": 600,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "neutral",
+                "intensity": "—"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.4731353917641486,
+              0.45151871018201956,
+              0.3978970861549648,
+              0.6439993861906224
+            ],
+            "mood": [
+              -0.07062005036347294,
+              0.24682892388739167,
+              0.04692077756749708,
+              0.06901011709635516
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.8957360935590397,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-3",
+                  "hostile-4",
+                  "hostile-5",
+                  "hostile-6"
+                ],
+                "last_event_at": 600
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.716018"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-7",
+            "seq": 7,
+            "at": 720,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "neutral",
+                "intensity": "—"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.474429140994954,
+              0.45179040225599176,
+              0.39955810972563494,
+              0.6475386462569542
+            ],
+            "mood": [
+              -0.08492513213552447,
+              0.25512557439170636,
+              0.056977067192624756,
+              0.08422124717408386
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.8962835686487228,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-4",
+                  "hostile-5",
+                  "hostile-6",
+                  "hostile-7"
+                ],
+                "last_event_at": 720
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.717100"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-8",
+            "seq": 8,
+            "at": 840,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "neutral",
+                "intensity": "—"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.4751083204202941,
+              0.4520169909212207,
+              0.4003894762367753,
+              0.6493130903489492
+            ],
+            "mood": [
+              -0.09863205570618865,
+              0.26287897264398946,
+              0.06673945479877717,
+              0.09906602160590779
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.8967796904771369,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-5",
+                  "hostile-6",
+                  "hostile-7",
+                  "hostile-8"
+                ],
+                "last_event_at": 840
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.718156"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-9",
+            "seq": 9,
+            "at": 960,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "neutral",
+                "intensity": "—"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.4755441051423186,
+              0.4522275322166591,
+              0.4008609135987849,
+              0.6502762889011695
+            ],
+            "mood": [
+              -0.11174510923635088,
+              0.27012344847197606,
+              0.07619365074143222,
+              0.11350813272342725
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.8972543223507412,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-6",
+                  "hostile-7",
+                  "hostile-8",
+                  "hostile-9"
+                ],
+                "last_event_at": 960
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.719183"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-10",
+            "seq": 10,
+            "at": 1080,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "neutral",
+                "intensity": "—"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.47588037959285223,
+              0.45242941095685735,
+              0.4011743288261133,
+              0.6508643150206299
+            ],
+            "mood": [
+              -0.12428211143109755,
+              0.27689235346366925,
+              0.08533961067433606,
+              0.12753799737303198
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.8977132659819389,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-7",
+                  "hostile-8",
+                  "hostile-9",
+                  "hostile-10"
+                ],
+                "last_event_at": 1080
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.720180"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-11",
+            "seq": 11,
+            "at": 1200,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "neutral",
+                "intensity": "—"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.47617296266579234,
+              0.45262456630061465,
+              0.4014164990212258,
+              0.6512765054692226
+            ],
+            "mood": [
+              -0.13626539645485428,
+              0.28321714142364496,
+              0.09418320570855965,
+              0.14115804069027538
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.8981578033192461,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-8",
+                  "hostile-9",
+                  "hostile-10",
+                  "hostile-11"
+                ],
+                "last_event_at": 1200
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.721149"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-12",
+            "seq": 12,
+            "at": 1320,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "neutral",
+                "intensity": "—"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.47644358692912475,
+              0.45281359327679993,
+              0.40162475222006916,
+              0.6516039889074365
+            ],
+            "mood": [
+              -0.14771835379929169,
+              0.2891272479326692,
+              0.10273264870370807,
+              0.15437597054743885
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.8985884468984904,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-9",
+                  "hostile-10",
+                  "hostile-11",
+                  "hostile-12"
+                ],
+                "last_event_at": 1320
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.722089"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-13",
+            "seq": 13,
+            "at": 1440,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "mild"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.4767008035441415,
+              0.4529967642346625,
+              0.4018151944219481,
+              0.6518884727292282
+            ],
+            "mood": [
+              -0.1586641202853412,
+              0.29465016440542896,
+              0.110996966114101,
+              0.1672017096702427
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.8990056100682294,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-10",
+                  "hostile-11",
+                  "hostile-12",
+                  "hostile-13"
+                ],
+                "last_event_at": 1440
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.723001"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-14",
+            "seq": 14,
+            "at": 1560,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "mild"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.47694806902119014,
+              0.4531742763762492,
+              0.40199482950281384,
+              0.6521491081197659
+            ],
+            "mood": [
+              -0.16912510409119783,
+              0.29981155361829537,
+              0.11898534867180799,
+              0.17964600046476253
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.8994097041861544,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-11",
+                  "hostile-12",
+                  "hostile-13",
+                  "hostile-14"
+                ],
+                "last_event_at": 1560
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.723886"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-15",
+            "seq": 15,
+            "at": 1680,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "mild"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.47718686985945835,
+              0.45334630864151715,
+              0.4021667586167015,
+              0.6523947568897148
+            ],
+            "mood": [
+              -0.17912282928205894,
+              0.3046353687519866,
+              0.12670687918548265,
+              0.19171977405098634
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.8998011415893445,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-12",
+                  "hostile-13",
+                  "hostile-14",
+                  "hostile-15"
+                ],
+                "last_event_at": 1680
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.724745"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-16",
+            "seq": 16,
+            "at": 1800,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "mild"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.4774179285122565,
+              0.45351303336767396,
+              0.40233240885897076,
+              0.6526295881331788
+            ],
+            "mood": [
+              -0.18867790289413264,
+              0.3091439670479815,
+              0.1341704219041604,
+              0.20343386805568014
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.9001803290081414,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-13",
+                  "hostile-14",
+                  "hostile-15",
+                  "hostile-16"
+                ],
+                "last_event_at": 1800
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.725578"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-17",
+            "seq": 17,
+            "at": 1920,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "mild"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.47764166835836463,
+              0.45367461803340436,
+              0.4024924878244891,
+              0.6528556297339583
+            ],
+            "mood": [
+              -0.1978100280956179,
+              0.31335821638367184,
+              0.1413845809282743,
+              0.2147989033523494
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.9005476632583003,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-14",
+                  "hostile-15",
+                  "hostile-16",
+                  "hostile-17"
+                ],
+                "last_event_at": 1920
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.726386"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-18",
+            "seq": 18,
+            "at": 2040,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "mild"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.4778583928543405,
+              0.4538312252247114,
+              0.40264739219288986,
+              0.6530739307959952
+            ],
+            "mood": [
+              -0.20653803394566037,
+              0.31729759478977804,
+              0.1483576879967805,
+              0.2258252331011456
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.9009035292705481,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-15",
+                  "hostile-16",
+                  "hostile-17",
+                  "hostile-18"
+                ],
+                "last_event_at": 2040
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.727170"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-19",
+            "seq": 19,
+            "at": 2160,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "mild"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.47806835457932967,
+              0.45398301248868267,
+              0.402797382551607,
+              0.6532850909326705
+            ],
+            "mood": [
+              -0.21487991043359386,
+              0.32098028330182915,
+              0.15509780265794362,
+              0.23652292456999963
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.9012482994275509,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-16",
+                  "hostile-17",
+                  "hostile-18",
+                  "hostile-19"
+                ],
+                "last_event_at": 2160
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.727931"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-20",
+            "seq": 20,
+            "at": 2280,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "mild"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.4782717819165604,
+              0.4541301323113013,
+              0.40294265821162667,
+              0.6534895011883651
+            ],
+            "mood": [
+              -0.22285284448879622,
+              0.32442325258700944,
+              0.16161271755494963,
+              0.24690175572959072
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.9015823335318986,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-17",
+                  "hostile-18",
+                  "hostile-19",
+                  "hostile-20"
+                ],
+                "last_event_at": 2280
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.728669"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-21",
+            "seq": 21,
+            "at": 2400,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "mild"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.4784688894550909,
+              0.454272732193164,
+              0.4030833892699387,
+              0.6536874537152141
+            ],
+            "mood": [
+              -0.23047325535094537,
+              0.3276423437688561,
+              0.16790996572285816,
+              0.25697121842533144
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.9019059790575219,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-18",
+                  "hostile-19",
+                  "hostile-20",
+                  "hostile-21"
+                ],
+                "last_event_at": 2400
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.729385"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-22",
+            "seq": 22,
+            "at": 2520,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "mild"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.4786598821407594,
+              0.4544109547772249,
+              0.4032197304062412,
+              0.6538791917555798
+            ],
+            "mood": [
+              -0.23775682872761572,
+              0.33065234384280995,
+              0.1739968285761172,
+              0.2667405244002098
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.9022195715194435,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-19",
+                  "hostile-20",
+                  "hostile-21",
+                  "hostile-22"
+                ],
+                "last_event_at": 2520
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.730079"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-23",
+            "seq": 23,
+            "at": 2640,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "mild"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.47884495702674645,
+              0.4545449379991727,
+              0.4033518268789278,
+              0.6540649324887915
+            ],
+            "mood": [
+              -0.24471854956285363,
+              0.3334670560472196,
+              0.17988034402810557,
+              0.2762186124779788
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.9025234348860622,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-20",
+                  "hostile-21",
+                  "hostile-22",
+                  "hostile-23"
+                ],
+                "last_event_at": 2640
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.730753"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-24",
+            "seq": 24,
+            "at": 2760,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "mild"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.47902430409981633,
+              0.4546748152450556,
+              0.40347981718932546,
+              0.6542448775471853
+            ],
+            "mood": [
+              -0.25137273339070354,
+              0.33609936552864433,
+              0.18556731450971894,
+              0.2854141561423374
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.9028178819999186,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-21",
+                  "hostile-22",
+                  "hostile-23",
+                  "hostile-24"
+                ],
+                "last_event_at": 2760
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.731407"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-25",
+            "seq": 25,
+            "at": 2880,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "mild"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.4791981067472777,
+              0.4548007155087759,
+              0.403603834321268,
+              0.6544192179290733
+            ],
+            "mood": [
+              -0.2577330563034095,
+              0.3385613006169137,
+              0.19106431479285033,
+              0.2943355711687553
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.9031032149920213,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-22",
+                  "hostile-23",
+                  "hostile-24",
+                  "hostile-25"
+                ],
+                "last_event_at": 2880
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.732042"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-26",
+            "seq": 26,
+            "at": 3000,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "mild"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.4793665420807317,
+              0.4549227635461349,
+              0.40372400636935757,
+              0.654588136363887
+            ],
+            "mood": [
+              -0.2638125835835663,
+              0.34086409000393797,
+              0.19637769958368148,
+              0.30299102315678733
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.9033797256835002,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-23",
+                  "hostile-24",
+                  "hostile-25",
+                  "hostile-26"
+                ],
+                "last_event_at": 3000
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.732657"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-27",
+            "seq": 27,
+            "at": 3120,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "mild"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.4795297811992369,
+              0.4550410800240413,
+              0.40384045690267245,
+              0.6547518085162499
+            ],
+            "mood": [
+              -0.2696237970552598,
+              0.343018216100427,
+              0.20151361087572114,
+              0.3113884348974338
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.9036476959722611,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-24",
+                  "hostile-25",
+                  "hostile-26",
+                  "hostile-27"
+                ],
+                "last_event_at": 3120
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.733254"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-28",
+            "seq": 28,
+            "at": 3240,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "mild"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.4796879894235977,
+              0.45515578166439796,
+              0.40395330521177164,
+              0.6549104036581855
+            ],
+            "mood": [
+              -0.27517862120980335,
+              0.34503346482625136,
+              0.20647798506302503,
+              0.31953549354935235
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.9039073982040561,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-25",
+                  "hostile-26",
+                  "hostile-27",
+                  "hostile-28"
+                ],
+                "last_event_at": 3240
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.733834"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-29",
+            "seq": 29,
+            "at": 3360,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "mild"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.4798413265140775,
+              0.4552669813825859,
+              0.40406266650210954,
+              0.6550640850949263
+            ],
+            "mood": [
+              -0.2804884481603414,
+              0.3469189720730321,
+              0.2112765598183482,
+              0.3274396576154293
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.904159095528147,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-26",
+                  "hostile-27",
+                  "hostile-28",
+                  "hostile-29"
+                ],
+                "last_event_at": 3360
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.734396"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-30",
+            "seq": 30,
+            "at": 3480,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "moderate"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.47998994687646157,
+              0.45537478842064333,
+              0.40416865206089087,
+              0.6552130104739095
+            ],
+            "mood": [
+              -0.28556416147759256,
+              0.3486832670615647,
+              0.21591488074266743,
+              0.33510816371914487
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.9044030422380573,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-27",
+                  "hostile-28",
+                  "hostile-29",
+                  "hostile-30"
+                ],
+                "last_event_at": 3480
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.734941"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-31",
+            "seq": 31,
+            "at": 3600,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "moderate"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.4801339997585813,
+              0.45547930847531104,
+              0.40427136940904024,
+              0.6553573320358933
+            ],
+            "mood": [
+              -0.29041615895682843,
+              0.3503343128017799,
+              0.22039830779308395,
+              0.342548033183668
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.9046394840980264,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-28",
+                  "hostile-29",
+                  "hostile-30",
+                  "hostile-31"
+                ],
+                "last_event_at": 3600
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.735470"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-32",
+            "seq": 32,
+            "at": 3720,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "moderate"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.4802736294383433,
+              0.4555806438211435,
+              0.404370922443421,
+              0.6554971968351082
+            ],
+            "mood": [
+              -0.2950543743639983,
+              0.35187954384904163,
+              0.2247320214962193,
+              0.3497660784181101
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.9048686586558139,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-29",
+                  "hostile-30",
+                  "hostile-31",
+                  "hostile-32"
+                ],
+                "last_event_at": 3720
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.735983"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-33",
+            "seq": 33,
+            "at": 3840,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "moderate"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.4804089754038838,
+              0.45567889342889023,
+              0.4044674115716509,
+              0.6556327469408556
+            ],
+            "mood": [
+              -0.29948829820678624,
+              0.35332590153761495,
+              0.2289210289541257,
+              0.3567689091159549
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.9050907955424934,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-30",
+                  "hostile-31",
+                  "hostile-32",
+                  "hostile-33"
+                ],
+                "last_event_at": 3840
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.736481"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-34",
+            "seq": 34,
+            "at": 3960,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "moderate"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.48054017252630654,
+              0.4557741530793491,
+              0.40456093384066927,
+              0.6557641196263926
+            ],
+            "mood": [
+              -0.3037269975743419,
+              0.354679866860035,
+              0.23297016964956208,
+              0.36356293827086505
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.9053061167598564,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-31",
+                  "hostile-32",
+                  "hostile-33",
+                  "hostile-34"
+                ],
+                "last_event_at": 3960
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.736964"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-35",
+            "seq": 35,
+            "at": 4080,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "moderate"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.48066735122538234,
+              0.45586651547288715,
+              0.40465158305969584,
+              0.6558914475479487
+            ],
+            "mood": [
+              -0.3077791350874675,
+              0.355947491149818,
+              0.23688412105728676,
+              0.3701543880150633
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.9055148369560123,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-32",
+                  "hostile-33",
+                  "hostile-34",
+                  "hostile-35"
+                ],
+                "last_event_at": 4080
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.737433"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-36",
+            "seq": 36,
+            "at": 4200,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "moderate"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.4807906376285508,
+              0.4559560703348148,
+              0.40473944991799427,
+              0.6560148589153679
+            ],
+            "mood": [
+              -0.31165298699917193,
+              0.35713442471442114,
+              0.24066740406781037,
+              0.37654929528540576
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.905717163689748,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-33",
+                  "hostile-34",
+                  "hostile-35",
+                  "hostile-36"
+                ],
+                "last_event_at": 4200
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.737888"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-37",
+            "seq": 37,
+            "at": 4320,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "moderate"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.4809101537235423,
+              0.4560429045167918,
+              0.40482462209774916,
+              0.6561344776552351
+            ],
+            "mood": [
+              -0.3153564604837116,
+              0.35824594355552847,
+              0.2443243882298453,
+              0.3827535173221499
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.9059132976841735,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-34",
+                  "hostile-35",
+                  "hostile-36",
+                  "hostile-37"
+                ],
+                "last_event_at": 4320
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.738329"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-38",
+            "seq": 38,
+            "at": 4440,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "moderate"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.48102601750491525,
+              0.45612710209443585,
+              0.40490718438231643,
+              0.6562504235670585
+            ],
+            "mood": [
+              -0.3188971101505294,
+              0.3592869743045687,
+              0.24785929681748434,
+              0.3887727370052902
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.9061034330701598,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-35",
+                  "hostile-36",
+                  "hostile-37",
+                  "hostile-38"
+                ],
+                "last_event_at": 4440
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.738757"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "hostile-39",
+            "seq": 39,
+            "at": 4560,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "anger": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "hostile": 0.95
+              },
+              "dialogueAct": {
+                "primary": "inform",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "listener",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.8
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "moderate"
+              },
+              {
+                "aspect": "feeling",
+                "state": "anger",
+                "intensity": "very_strong"
+              }
+            ],
+            "fast": [
+              -0.4811383431147883,
+              0.45620874446129195,
+              0.4049872187600739,
+              0.6563628124729322
+            ],
+            "mood": [
+              -0.32228215381786873,
+              0.36026211749281245,
+              0.251276211727943,
+              0.39461246803320293
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.9062877576200392,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-36",
+                  "hostile-37",
+                  "hostile-38",
+                  "hostile-39"
+                ],
+                "last_event_at": 4560
+              }
+            ],
+            "audit": [
+              "appraisal:hostility:amplitude=0.739172"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "humor",
+            "seq": 40,
+            "at": 4560,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": {
+              "schemaVersion": "2.1.1",
+              "emotions": {
+                "neutral": {
+                  "calibratedProbability": 0.95,
+                  "strength": 0.75
+                }
+              },
+              "fineStates": {},
+              "stances": {
+                "playful": 0.95
+              },
+              "dialogueAct": {
+                "primary": "joke_irony",
+                "confidence": 0.95
+              },
+              "speakerAffectTarget": {
+                "value": "event_object",
+                "confidence": 0.95
+              },
+              "utteranceFactuality": {
+                "value": "asserted",
+                "confidence": 0.95
+              },
+              "dimensions": {
+                "toxicity": 0.02
+              }
+            },
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "irritable",
+                "intensity": "moderate"
+              },
+              {
+                "aspect": "feeling",
+                "state": "amusement",
+                "intensity": "strong"
+              }
+            ],
+            "fast": [
+              -0.08336714364829709,
+              0.4540254043362031,
+              0.4049872187600739,
+              0.6563628124729322
+            ],
+            "mood": [
+              -0.32228215381786873,
+              0.36026211749281245,
+              0.251276211727943,
+              0.39461246803320293
+            ],
+            "traces": [
+              {
+                "kind": "hostility",
+                "target": "user",
+                "topic_id": "general",
+                "strength": 0.9062877576200392,
+                "half_life": 240,
+                "evidence_ids": [
+                  "hostile-36",
+                  "hostile-37",
+                  "hostile-38",
+                  "hostile-39"
+                ],
+                "last_event_at": 4560
+              },
+              {
+                "kind": "humor",
+                "target": "event",
+                "topic_id": "general",
+                "strength": 0.5777777777777776,
+                "half_life": 120,
+                "evidence_ids": [
+                  "humor"
+                ],
+                "last_event_at": 4560
+              }
+            ],
+            "audit": [
+              "appraisal:humor:amplitude=0.577778"
+            ]
+          }
+        },
+        {
+          "input": {
+            "event_id": "rested",
+            "seq": 41,
+            "at": 90960,
+            "context": {
+              "topic_id": "general",
+              "scene": "real",
+              "legitimate_feedback": false,
+              "visible_evidence": [],
+              "active_tags": [],
+              "relations": {
+                "affect": "unspecified",
+                "affect_strength": null,
+                "trust": "unspecified",
+                "trust_strength": null,
+                "evidence_id": null,
+                "scope": "general"
+              },
+              "trust_scope": "general"
+            },
+            "perception": null,
+            "facts": [],
+            "model_metadata_version": "2.1.0"
+          },
+          "expected": {
+            "rows": [
+              {
+                "aspect": "relationship_affect",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "relationship_trust",
+                "state": "unspecified",
+                "intensity": "—"
+              },
+              {
+                "aspect": "mood",
+                "state": "neutral",
+                "intensity": "—"
+              }
+            ],
+            "fast": [
+              -3.0306103716520784e-130,
+              0.2,
+              1.896019086021595e-97,
+              5.668459881812122e-78
+            ],
+            "mood": [
+              -1.1825201081952226e-15,
+              0.2,
+              4.403593189487343e-12,
+              1.1370950008294662e-10
+            ],
+            "traces": [],
+            "audit": [
+              "sensor_missing:no_new_sensor_impulse"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
