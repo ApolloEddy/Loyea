@@ -45,6 +45,15 @@ class GreetingWorker(
                 return@withContext Result.success()
             }
 
+            // 0.05 陪伴模式插件门控（AC-17/ACT-02）：陪伴开启时由陪伴设置的
+            // 主动联系开关与免打扰时段（支持跨午夜）判定是否抑制；顺延重试而非丢弃，
+            // 保证时段外仍可问候。普通模式（未开启陪伴）不受影响。
+            if (com.loyea.plugin.companion.CompanionProactiveGate.shouldSuppressGreeting(context)) {
+                Log.d("GreetingWorker", "Companion proactive gating active (disabled or do-not-disturb). Postponing 60 mins.")
+                scheduleNextGreeting(60)
+                return@withContext Result.success()
+            }
+
             // 0.1 深夜免打扰判断：凌晨 0 点到 7 点之间不进行推送，顺延到早晨 8 点以后
             val calendar = java.util.Calendar.getInstance()
             val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
