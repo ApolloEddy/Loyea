@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,6 +33,9 @@ import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.loyea.plugin.companion.CompanionContract
+import com.loyea.plugin.companion.CompanionModeState
+import com.loyea.plugin.companion.CompanionRoot
 import com.loyea.ui.chat.ChatScreen
 import com.loyea.ui.chat.ChatViewModel
 import com.loyea.ui.chat.TavernScreen
@@ -153,6 +157,13 @@ class MainActivity : ComponentActivity() {
             }
 
             LoyeaTheme(darkTheme = darkTheme) {
+                // 陪伴模式插件路由（docs/Loyea-Companion-Mode-Spec-v0.1）：FUN-08 先解析模式
+                // 再渲染首页——陪伴模式不构建普通 NavHost，避免闪现普通抽屉（NAV-01）。
+                LaunchedEffect(Unit) { CompanionModeState.refresh(this@MainActivity) }
+                val companionMode = CompanionModeState.enabled.value
+                if (companionMode) {
+                    CompanionRoot(viewModel = chatViewModel)
+                } else {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
@@ -180,7 +191,8 @@ class MainActivity : ComponentActivity() {
                                 onActiveConfigChange = { chatViewModel.selectActiveConfig(it) },
                                 appLanguage = appLanguage,
                                 userBubbleColor = userBubbleColor,
-                                sessions = sessions,
+                                // 陪伴模式插件（FUN-02）：陪伴归属会话不进入普通模式侧栏
+                                sessions = sessions.filter { !CompanionContract.isCompanionCharacter(it.characterId) },
                                 currentSessionId = currentSessionId,
                                 messages = messages,
                                 isThinking = isThinking,
@@ -320,7 +332,8 @@ class MainActivity : ComponentActivity() {
                             var libraryFocus by remember { mutableStateOf<String?>(null) }
                             Box(modifier = Modifier.fillMaxSize()) {
                                 TavernScreen(
-                                    characterCardList = characterCardList,
+                                    // 陪伴模式插件（FUN-03）：陪伴内部资料不在角色酒馆露出/编辑
+                                    characterCardList = characterCardList.filter { !CompanionContract.isCompanionCharacter(it.id) },
                                     onCharacterCardListSave = { chatViewModel.saveCharacterCardList(it) },
                                     appLanguage = appLanguage,
                                     onBackClick = { navController.popBackStack() },
@@ -350,6 +363,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
+                } // 陪伴模式 else 分支结束（普通导航外壳）
             }
         }
     }

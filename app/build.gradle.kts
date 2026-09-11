@@ -64,6 +64,13 @@ android {
             )
         }
     }
+    sourceSets {
+        // 陪伴模式插件（docs/Loyea-Companion-Mode-Spec-v0.1）：插件源码目录挂载。
+        // 全部实现收敛在 com.loyea.plugin.companion 命名空间，宿主触碰点见 plugins/companion/README.md。
+        getByName("main") {
+            kotlin.srcDir("../plugins/companion/android/src/main/kotlin")
+        }
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

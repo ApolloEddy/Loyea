@@ -132,6 +132,15 @@ fun SettingsScreen(
     val configuration = androidx.compose.ui.platform.LocalConfiguration.current
     val isWideScreen = configuration.screenWidthDp >= 600
 
+    // 陪伴模式插件（docs/Loyea-Companion-Mode-Spec-v0.1）：设置页入口 + 首次开启浮层（S-01）
+    var showCompanionSetup by remember { mutableStateOf(false) }
+    if (showCompanionSetup && viewModel != null) {
+        com.loyea.plugin.companion.CompanionSetupOverlay(
+            viewModel = viewModel,
+            onDismiss = { showCompanionSetup = false }
+        )
+    }
+
     // 使用 AnimatedContent 实现极具滑移动画质感的左右推拉过场
     Box(
         modifier = Modifier
@@ -173,6 +182,7 @@ fun SettingsScreen(
                         onNavigateToMcp = { subPage = SettingsSubPage.MCP_CONFIG },
                         onNavigateToSensor = { subPage = SettingsSubPage.PHYSICAL_SENSOR },
                         onNavigateToMemory = { subPage = SettingsSubPage.MEMORY_SETTINGS },
+                        onCompanionModeClick = { showCompanionSetup = true },
                         onNavigateToToolAuth = { subPage = SettingsSubPage.TOOL_AUTHORIZATION },
                         onNavigateToMultimodal = { subPage = SettingsSubPage.MULTIMODAL_SETTINGS },
                         onNavigateToWorldInfo = { subPage = SettingsSubPage.WORLD_INFO_SETTINGS },
@@ -283,6 +293,7 @@ fun SettingsMainLayout(
     onNavigateToMcp: () -> Unit,
     onNavigateToSensor: () -> Unit,
     onNavigateToMemory: () -> Unit,
+    onCompanionModeClick: () -> Unit = {},
     onNavigateToToolAuth: () -> Unit,
     onNavigateToMultimodal: () -> Unit,
     onNavigateToWorldInfo: () -> Unit,
@@ -322,6 +333,55 @@ fun SettingsMainLayout(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
+            // 陪伴模式插件入口（S-01：首次开启走插件的简短初始化浮层；老用户不打扰普通模式）
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .clickable { onCompanionModeClick() }
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.FavoriteBorder,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = if (isEn) "Companion Mode" else "陪伴模式",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                            Text(
+                                text = if (isEn) "One continuous chat that stays with you" else "开启一个持续陪伴你的聊天",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                            )
+                        }
+                    }
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                    )
+                }
+            }
+
             // 系统设置分组
             Text(
                 text = if (isEn) "SYSTEM SETTINGS" else "系统设置",

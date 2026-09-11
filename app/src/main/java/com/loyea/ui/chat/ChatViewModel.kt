@@ -945,6 +945,38 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * 陪伴模式插件钩子（docs/Loyea-Companion-Mode-Spec-v0.1）：
+     * FUN-01 唯一会话——已存在陪伴归属会话则返回其 ID；否则在 allowCreate=true 时
+     * 创建一次（不写开场白，UI-09 空会话占位由插件层渲染；useSystemTime=true 对应
+     * 物理感知默认开）。allowCreate=false 且无记录时返回 null（FUN-09 交给插件恢复态）。
+     */
+    suspend fun ensureCompanionSession(characterId: String, title: String, allowCreate: Boolean): String? {
+        // 内存列表优先；冷启动早期列表可能尚未异步载入（FUN-08 绑定先于首页），
+        // 此时回退磁盘查询，避免把已存在的陪伴会话误判为缺失（FUN-09 竞态防线）
+        val existing = sessions.value.firstOrNull { it.characterId == characterId }
+            ?: storageManager.loadSessionList().firstOrNull { it.characterId == characterId }
+        if (existing != null) {
+            if (sessions.value.none { it.id == existing.id }) {
+                sessions.value = (listOf(existing) + sessions.value).sortedByDescending { it.lastActiveTime }
+            }
+            return existing.id
+        }
+        if (!allowCreate) return null
+        val sessionId = System.currentTimeMillis().toString()
+        val session = ChatSession(
+            id = sessionId,
+            title = title,
+            lastActiveTime = System.currentTimeMillis(),
+            characterId = characterId,
+            useSystemTime = true
+        )
+        val updated = (listOf(session) + sessions.value).sortedByDescending { it.lastActiveTime }
+        sessions.value = updated
+        storageManager.saveSessionList(updated)
+        return sessionId
+    }
+
+    /**
      * 发送用户消息并触发 SSE 真实的流式输出，支持传入多模态图片/语音信息
      */
     fun sendMessage(inputText: String, imageUrl: String? = null, audioUrl: String? = null, audioDuration: Int = 0) {
@@ -1520,7 +1552,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     characterDocument.profile.origin == com.loyea.character.core.api.CharacterOrigin.IMPORTED
                 )
             var compiledPrompt: com.loyea.character.core.prompt.CharacterCompiler.PreparedCharacterTurn? = null
-            val worldInfo = if (useCompiledPath) {
+            val worldInfo = if (com.loyea.plugin.companion.CompanionContract.isCompanionCharacter(characterCard.id)) {
+                // 陪伴模式插件（FUN-04）：陪伴资料明确不使用世界书，不继承全局生效书/卡正则/剧情状态
+                null
+            } else if (useCompiledPath) {
                 null
             } else if (needsTurnSnapshot || worldInfoPosition == "top") {
                 buildWorldInfoBlock(sessionId, history)
