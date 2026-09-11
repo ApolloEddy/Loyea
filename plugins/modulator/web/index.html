@@ -103,8 +103,13 @@
 <script>
 // ---------------------------------------------------------------------------
 // 会话状态：检查点 + 会话逻辑时钟；服务端无状态，每次请求携带检查点往返。
+// 请求串行排队（后一个请求携带前一个响应的检查点，避免并发丢更新）；
+// epoch 在重置时递增，使在途的过期响应被丢弃，防止旧会话复活。
 // ---------------------------------------------------------------------------
-const S = { checkpoint: null, clock: 0, seq: 0, factCounter: 0, lastThreat: null, history: [] };
+const S = {
+  checkpoint: null, clock: 0, seq: 0, factCounter: 0, lastThreat: null, history: [],
+  queue: Promise.resolve(), epoch: 0,
+};
 
 const AXES = ["效价 valence", "激活 activation", "紧张 tension", "烦躁 irritation"];
 
@@ -125,12 +130,12 @@ function sample(label = "neutral", strength = .75, target = "event_object", act 
 
 const PERCEPTION_EVENTS = [
   ["敌意指向角色", () => sample("anger", .75, "listener", "inform", { hostile: .95 })],
-  ["温柔致谢",     () => sample("neutral", .75, "event_object", "thank_appreciate")],
+  ["温柔致谢",     () => sample("neutral", .75, "listener", "thank_appreciate")],
   ["亲近表达",     () => sample("affection", .75, "listener", "inform", { affiliative: .9 })],
   ["玩笑",         () => sample("neutral", .75, "event_object", "joke_irony", { playful: .95 })],
   ["分享难过",     () => sample("sadness", .75, "self")],
   ["分享快乐",     () => sample("joy")],
-  ["道歉修复",     () => sample("neutral", .75, "event_object", "apologize_repair")],
+  ["道歉修复",     () => sample("neutral", .75, "listener", "apologize_repair")],
   ["玩笑带刺（歧义弃权）", () => sample("anger", .75, "listener", "inform", { hostile: .95, playful: .9 })],
 ];
 
@@ -175,9 +180,18 @@ function showErr(e) {
   document.getElementById("err").textContent = "请求失败：" + e.message;
 }
 
-async function submit(cmd, extra, title) {
+/** 请求串行入队：后一个请求发出时携带前一个响应的最新检查点（防并发丢更新）。 */
+function submit(cmd, extra, title) {
+  const run = S.queue.then(() => doSubmit(cmd, extra, title));
+  S.queue = run.then(() => {}, () => {});
+  return run;
+}
+
+async function doSubmit(cmd, extra, title) {
+  const epoch = S.epoch;
   try {
     const r = await api(cmd, extra);
+    if (epoch !== S.epoch) return null; // 已重置：丢弃过期会话的响应
     if (!r.ok) { document.getElementById("err").textContent = "模型拒绝：" + r.error; return null; }
     document.getElementById("err").textContent = "";
     S.checkpoint = r.checkpoint;
@@ -187,7 +201,7 @@ async function submit(cmd, extra, title) {
     }
     renderState(r.state);
     return r;
-  } catch (e) { showErr(e); return null; }
+  } catch (e) { if (epoch === S.epoch) showErr(e); return null; }
 }
 
 // ---------------------------------------------------------------------------
@@ -291,13 +305,14 @@ async function runGolden() {
 }
 
 async function reset() {
+  S.epoch += 1; // 使在途响应失效，防止旧会话在重置后复活
   S.checkpoint = null; S.clock = 0; S.seq = 0; S.factCounter = 0; S.lastThreat = null; S.history = [];
   document.getElementById("golden").innerHTML = "";
   document.getElementById("table").innerHTML = '<div class="empty">尚无已提交观测。</div>';
   document.getElementById("audit").className = "empty"; document.getElementById("audit").textContent = "无。";
   document.getElementById("err").textContent = "";
   const r = await submit("reset", { at: 0 }, "");
-  if (r) { S.checkpoint = r.checkpoint; renderState(r.state); }
+  if (r && r.state) renderState(r.state);
 }
 
 function chip(parent, label, onClick) {

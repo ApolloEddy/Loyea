@@ -1,0 +1,261 @@
+{
+  "method": "actual inline JS; stub DOM; controlled fetch responses",
+  "fixtures": [
+    {
+      "name": "敌意指向角色",
+      "perception": {
+        "schemaVersion": "2.1.1",
+        "emotions": {
+          "anger": {
+            "calibratedProbability": 0.95,
+            "strength": 0.75
+          }
+        },
+        "fineStates": {},
+        "stances": {
+          "hostile": 0.95
+        },
+        "dialogueAct": {
+          "primary": "inform",
+          "confidence": 0.95
+        },
+        "speakerAffectTarget": {
+          "value": "listener",
+          "confidence": 0.95
+        },
+        "utteranceFactuality": {
+          "value": "asserted",
+          "confidence": 0.95
+        },
+        "dimensions": {
+          "toxicity": 0.8
+        }
+      }
+    },
+    {
+      "name": "温柔致谢",
+      "perception": {
+        "schemaVersion": "2.1.1",
+        "emotions": {
+          "neutral": {
+            "calibratedProbability": 0.95,
+            "strength": 0.75
+          }
+        },
+        "fineStates": {},
+        "stances": {},
+        "dialogueAct": {
+          "primary": "thank_appreciate",
+          "confidence": 0.95
+        },
+        "speakerAffectTarget": {
+          "value": "event_object",
+          "confidence": 0.95
+        },
+        "utteranceFactuality": {
+          "value": "asserted",
+          "confidence": 0.95
+        },
+        "dimensions": {
+          "toxicity": 0.02
+        }
+      }
+    },
+    {
+      "name": "亲近表达",
+      "perception": {
+        "schemaVersion": "2.1.1",
+        "emotions": {
+          "affection": {
+            "calibratedProbability": 0.95,
+            "strength": 0.75
+          }
+        },
+        "fineStates": {},
+        "stances": {
+          "affiliative": 0.9
+        },
+        "dialogueAct": {
+          "primary": "inform",
+          "confidence": 0.95
+        },
+        "speakerAffectTarget": {
+          "value": "listener",
+          "confidence": 0.95
+        },
+        "utteranceFactuality": {
+          "value": "asserted",
+          "confidence": 0.95
+        },
+        "dimensions": {
+          "toxicity": 0.02
+        }
+      }
+    },
+    {
+      "name": "玩笑",
+      "perception": {
+        "schemaVersion": "2.1.1",
+        "emotions": {
+          "neutral": {
+            "calibratedProbability": 0.95,
+            "strength": 0.75
+          }
+        },
+        "fineStates": {},
+        "stances": {
+          "playful": 0.95
+        },
+        "dialogueAct": {
+          "primary": "joke_irony",
+          "confidence": 0.95
+        },
+        "speakerAffectTarget": {
+          "value": "event_object",
+          "confidence": 0.95
+        },
+        "utteranceFactuality": {
+          "value": "asserted",
+          "confidence": 0.95
+        },
+        "dimensions": {
+          "toxicity": 0.02
+        }
+      }
+    },
+    {
+      "name": "分享难过",
+      "perception": {
+        "schemaVersion": "2.1.1",
+        "emotions": {
+          "sadness": {
+            "calibratedProbability": 0.95,
+            "strength": 0.75
+          }
+        },
+        "fineStates": {},
+        "stances": {},
+        "dialogueAct": {
+          "primary": "inform",
+          "confidence": 0.95
+        },
+        "speakerAffectTarget": {
+          "value": "self",
+          "confidence": 0.95
+        },
+        "utteranceFactuality": {
+          "value": "asserted",
+          "confidence": 0.95
+        },
+        "dimensions": {
+          "toxicity": 0.02
+        }
+      }
+    },
+    {
+      "name": "分享快乐",
+      "perception": {
+        "schemaVersion": "2.1.1",
+        "emotions": {
+          "joy": {
+            "calibratedProbability": 0.95,
+            "strength": 0.75
+          }
+        },
+        "fineStates": {},
+        "stances": {},
+        "dialogueAct": {
+          "primary": "inform",
+          "confidence": 0.95
+        },
+        "speakerAffectTarget": {
+          "value": "event_object",
+          "confidence": 0.95
+        },
+        "utteranceFactuality": {
+          "value": "asserted",
+          "confidence": 0.95
+        },
+        "dimensions": {
+          "toxicity": 0.02
+        }
+      }
+    },
+    {
+      "name": "道歉修复",
+      "perception": {
+        "schemaVersion": "2.1.1",
+        "emotions": {
+          "neutral": {
+            "calibratedProbability": 0.95,
+            "strength": 0.75
+          }
+        },
+        "fineStates": {},
+        "stances": {},
+        "dialogueAct": {
+          "primary": "apologize_repair",
+          "confidence": 0.95
+        },
+        "speakerAffectTarget": {
+          "value": "event_object",
+          "confidence": 0.95
+        },
+        "utteranceFactuality": {
+          "value": "asserted",
+          "confidence": 0.95
+        },
+        "dimensions": {
+          "toxicity": 0.02
+        }
+      }
+    },
+    {
+      "name": "玩笑带刺（歧义弃权）",
+      "perception": {
+        "schemaVersion": "2.1.1",
+        "emotions": {
+          "anger": {
+            "calibratedProbability": 0.95,
+            "strength": 0.75
+          }
+        },
+        "fineStates": {},
+        "stances": {
+          "hostile": 0.95,
+          "playful": 0.9
+        },
+        "dialogueAct": {
+          "primary": "inform",
+          "confidence": 0.95
+        },
+        "speakerAffectTarget": {
+          "value": "listener",
+          "confidence": 0.95
+        },
+        "utteranceFactuality": {
+          "value": "asserted",
+          "confidence": 0.95
+        },
+        "dimensions": {
+          "toxicity": 0.8
+        }
+      }
+    }
+  ],
+  "concurrent": {
+    "sentCheckpoints": [
+      "base",
+      "base"
+    ],
+    "finalCheckpoint": "base+second",
+    "history": 2
+  },
+  "stale": {
+    "tableUnchanged": true,
+    "title": "状态表（会话逻辑时间 1.0 小时）"
+  },
+  "resetRace": {
+    "finalCheckpoint": "resurrected-old-session"
+  }
+}
