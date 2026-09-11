@@ -29,7 +29,7 @@ import com.loyea.ui.chat.ChatViewModel
 
 private enum class BindState { BINDING, READY, MISSING }
 
-private enum class CompanionSubPage { CHAT, SETTINGS, MEMORY, SEARCH }
+private enum class CompanionSubPage { CHAT, SETTINGS, DATA, MEMORY, SEARCH }
 
 /**
  * 陪伴模式外壳（enabled=true 时由 MainActivity 渲染，替代普通导航外壳）。
@@ -156,7 +156,23 @@ fun CompanionRoot(
                     )
                 },
                 onBack = { subPage = CompanionSubPage.CHAT },
+                onOpenData = { subPage = CompanionSubPage.DATA },
                 onDisableCompanion = { disableCompanionMode(context, viewModel) }
+            )
+            CompanionSubPage.DATA -> CompanionDataScreen(
+                viewModel = viewModel,
+                config = config,
+                onBack = { subPage = CompanionSubPage.CHAT },
+                onRestored = { newId ->
+                    // DATA-04：换到重新映射后的会话；bind 依赖 config.sessionId 自动重跑并 selectSession，
+                    // 旧会话文件已删除、进行中请求已被 stopResponse，晚到写回无法复活旧记录（DATA-05）
+                    setConfig(config.copy(sessionId = newId))
+                },
+                onRestarted = {
+                    // 明确的重新开始：清空绑定声明，bind 将以全新会话重建（原文件已删除）
+                    setConfig(config.copy(sessionId = ""))
+                    bindRetry++
+                }
             )
             CompanionSubPage.MEMORY -> CompanionMemoryScreen(
                 viewModel = viewModel,
@@ -209,10 +225,20 @@ private fun MissingRecordRecovery(onRetry: () -> Unit, onRestart: () -> Unit) {
                 Modifier
                     .padding(top = 12.dp)
                     .background(CompanionPalette.GlassFill, CircleShape)
-                    .clickable { confirmRestart = true }
+                    .clickable {
+                        if (confirmRestart) {
+                            onRestart()
+                        } else {
+                            confirmRestart = true
+                        }
+                    }
                     .padding(horizontal = 24.dp, vertical = 12.dp)
             ) {
-                Text("重新开始陪伴", fontSize = 14.sp, color = CompanionPalette.TextPrimary)
+                Text(
+                    if (confirmRestart) "再点一次，确认重新开始" else "重新开始陪伴",
+                    fontSize = 14.sp,
+                    color = CompanionPalette.TextPrimary
+                )
             }
             if (confirmRestart) {
                 Text(

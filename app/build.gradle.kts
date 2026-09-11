@@ -70,6 +70,9 @@ android {
         getByName("main") {
             kotlin.srcDir("../plugins/companion/android/src/main/kotlin")
         }
+        getByName("test") {
+            kotlin.srcDir("../plugins/companion/android/src/test/kotlin")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

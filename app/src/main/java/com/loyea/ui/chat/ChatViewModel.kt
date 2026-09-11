@@ -951,15 +951,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      * 物理感知默认开）。allowCreate=false 且无记录时返回 null（FUN-09 交给插件恢复态）。
      */
     suspend fun ensureCompanionSession(characterId: String, title: String, allowCreate: Boolean): String? {
-        // 内存列表优先；冷启动早期列表可能尚未异步载入（FUN-08 绑定先于首页），
-        // 此时回退磁盘查询，避免把已存在的陪伴会话误判为缺失（FUN-09 竞态防线）
-        val existing = sessions.value.firstOrNull { it.characterId == characterId }
-            ?: storageManager.loadSessionList().firstOrNull { it.characterId == characterId }
-        if (existing != null) {
-            if (sessions.value.none { it.id == existing.id }) {
-                sessions.value = (listOf(existing) + sessions.value).sortedByDescending { it.lastActiveTime }
+        // 磁盘为唯一真源：重开/恢复（DATA-05）后内存列表可能滞后残留旧陪伴条目，
+        // 一律以磁盘判定，避免把已删除的会话当作现存绑定（FUN-09 竞态防线）
+        val fromDisk = storageManager.loadSessionList().firstOrNull { it.characterId == characterId }
+        if (fromDisk != null) {
+            if (sessions.value.none { it.id == fromDisk.id }) {
+                sessions.value = (listOf(fromDisk) + sessions.value.filterNot { it.characterId == characterId })
+                    .sortedByDescending { it.lastActiveTime }
             }
-            return existing.id
+            return fromDisk.id
+        }
+        // 磁盘已无陪伴会话：清除内存中的滞后条目，保持列表与存储一致
+        if (sessions.value.any { it.characterId == characterId }) {
+            sessions.value = sessions.value.filterNot { it.characterId == characterId }
         }
         if (!allowCreate) return null
         val sessionId = System.currentTimeMillis().toString()

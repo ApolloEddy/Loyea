@@ -48,6 +48,7 @@ fun CompanionSettingsScreen(
     config: CompanionConfig,
     onConfigChange: (CompanionConfig) -> Unit,
     onBack: () -> Unit,
+    onOpenData: () -> Unit = {},
     onDisableCompanion: () -> Unit,
 ) {
     var displayName by remember { mutableStateOf(config.displayName) }
@@ -113,6 +114,18 @@ fun CompanionSettingsScreen(
                     "允许在合适的时候主动问候",
                     config.proactiveEnabled
                 ) { onConfigChange(config.copy(proactiveEnabled = it)) }
+            }
+
+            SectionLabel("记录", topPadding = 24)
+            SettingsGroup {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onOpenData)
+                        .padding(16.dp)
+                ) {
+                    Text("数据与备份", fontSize = 15.sp, color = CompanionPalette.TextPrimary)
+                }
             }
 
             SectionLabel("聊天服务", topPadding = 24)
