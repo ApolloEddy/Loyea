@@ -48,6 +48,7 @@ fun CompanionSettingsScreen(
     config: CompanionConfig,
     onConfigChange: (CompanionConfig) -> Unit,
     onBack: () -> Unit,
+    onOpenPerception: () -> Unit = {},
     onOpenData: () -> Unit = {},
     onDisableCompanion: () -> Unit,
 ) {
@@ -103,17 +104,22 @@ fun CompanionSettingsScreen(
 
             SectionLabel("感知与联系", topPadding = 24)
             SettingsGroup {
-                GroupSwitch(
-                    "物理感知",
-                    "按需使用已允许的环境信息（时间、电量等）",
-                    config.perceptionEnabled
-                ) { onConfigChange(config.copy(perceptionEnabled = it)) }
-                GroupDivider()
-                GroupSwitch(
-                    "主动联系",
-                    "允许在合适的时候主动问候",
-                    config.proactiveEnabled
-                ) { onConfigChange(config.copy(proactiveEnabled = it)) }
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onOpenPerception)
+                        .padding(16.dp)
+                ) {
+                    Column {
+                        Text("感知与主动联系", fontSize = 15.sp, color = CompanionPalette.TextPrimary)
+                        Text(
+                            "总开关、来源授权与免打扰时段",
+                            fontSize = 12.sp,
+                            color = CompanionPalette.Hint,
+                            modifier = Modifier.padding(top = 3.dp)
+                        )
+                    }
+                }
             }
 
             SectionLabel("记录", topPadding = 24)

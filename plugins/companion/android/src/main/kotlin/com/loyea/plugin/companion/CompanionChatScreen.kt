@@ -3,6 +3,8 @@ package com.loyea.plugin.companion
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -32,12 +34,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.text.selection.SelectionContainer
+
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Photo
 import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material.icons.rounded.VolumeUp
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -52,6 +60,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -87,10 +96,13 @@ fun CompanionChatScreen(
     val messages = viewModel.messages.value
     val isThinking = viewModel.isThinking.value
     val sessionId = config.sessionId
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
 
     var input by remember(sessionId) { mutableStateOf(TextFieldValue(viewModel.getDraft(sessionId))) }
     var inputFocused by remember { mutableStateOf(false) }
     var highlightedId by remember { mutableStateOf<String?>(null) }
+    var selectedMessage by remember { mutableStateOf<Message?>(null) }
+    var recording by remember { mutableStateOf(false) }
     // 图片待发送预览（S-02 临时内容）：沿用宿主 vision 缓存拷贝语义
     var pendingImagePath by remember { mutableStateOf<String?>(null) }
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -176,7 +188,8 @@ fun CompanionChatScreen(
                         CompanionMessageBubble(
                             message = message,
                             appLanguage = viewModel.appLanguage.value,
-                            highlight = highlightedId == message.id
+                            highlight = highlightedId == message.id,
+                            onLongPress = { selectedMessage = message }
                         )
                     }
                 }
@@ -186,6 +199,40 @@ fun CompanionChatScreen(
         CompanionInputBar(
             value = input,
             isThinking = isThinking,
+            recording = recording,
+            onMicPress = {
+                if (isThinking || recording) return@CompanionInputBar
+                if (!viewModel.enableStt.value) {
+                    android.widget.Toast.makeText(
+                        context, "语音输入功能在设置中已被关闭", android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                    return@CompanionInputBar
+                }
+                viewModel.startRecording()
+                recording = true
+            },
+            onMicRelease = {
+                if (!recording) return@CompanionInputBar
+                recording = false
+                viewModel.stopRecording { file, duration ->
+                    if (file == null) return@stopRecording
+                    if (duration < 1) {
+                        file.delete()
+                        android.widget.Toast.makeText(context, "说话时间太短", android.widget.Toast.LENGTH_SHORT).show()
+                    } else {
+                        viewModel.transcribeAndSendAudio(file, duration) { err ->
+                            android.widget.Toast.makeText(context, "语音识别失败：$err", android.widget.Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+            },
+            onCancelRecording = {
+                recording = false
+                viewModel.stopRecording { file, _ ->
+                    file?.delete()
+                    android.widget.Toast.makeText(context, "录音已取消", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            },
             pendingImagePath = pendingImagePath,
             onClearPendingImage = { pendingImagePath = null },
             onPickImage = {
@@ -215,6 +262,37 @@ fun CompanionChatScreen(
             onStop = { viewModel.stopResponse() }
         )
         Spacer(Modifier.navigationBarsPadding())
+    }
+
+    // UI-07：长按消息操作区（复制/朗读/重新生成），遮罩点击关闭
+    selectedMessage?.let { selected ->
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color(0x88000000))
+                .clickable { selectedMessage = null }
+        ) {
+            CompanionMessageActionsSheet(
+                modifier = Modifier.align(Alignment.BottomCenter),
+                message = selected,
+                canRegenerate = !isThinking
+                        && messages.indexOf(selected) == messages.indexOfLast { it.sender == Sender.AI }
+                        && selected.content.isNotBlank(),
+                onDismiss = { selectedMessage = null },
+                onCopy = {
+                    clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(selected.content))
+                    selectedMessage = null
+                },
+                onSpeak = {
+                    viewModel.playTts(selected.id, selected.content)
+                    selectedMessage = null
+                },
+                onRegenerate = {
+                    selectedMessage = null
+                    viewModel.regenerateLastReply()
+                }
+            )
+        }
     }
 
     // 新消息追加且当前贴近底部时跟随；翻阅历史时不抢滚动（AC-12 的基础行为）
@@ -299,8 +377,14 @@ private fun CompanionHeader(displayName: String, onOpenMore: () -> Unit) {
 }
 
 /** 玻璃拟态气泡：AI 左侧冷玻璃、用户右侧暖琥珀玻璃；正文复用宿主 Markdown/面板渲染。 */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun CompanionMessageBubble(message: Message, appLanguage: String, highlight: Boolean = false) {
+private fun CompanionMessageBubble(
+    message: Message,
+    appLanguage: String,
+    highlight: Boolean = false,
+    onLongPress: () -> Unit = {},
+) {
     val isUser = message.sender == Sender.USER
     val isError = message.isError
     Row(
@@ -312,6 +396,10 @@ private fun CompanionMessageBubble(message: Message, appLanguage: String, highli
         ) {
             Box(
                 Modifier
+                    .combinedClickable(
+                        onClick = {},
+                        onLongClick = onLongPress // UI-07：长按呼出操作区
+                    )
                     .glassSurface(
                         shape = glassBubbleShape(isUser),
                         fill = when {
@@ -328,36 +416,34 @@ private fun CompanionMessageBubble(message: Message, appLanguage: String, highli
                     )
                     .padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
-                SelectionContainer {
-                    Column {
-                        if (!message.imageUrl.isNullOrBlank()) {
-                            val bitmap = rememberLocalImagePainter(message.imageUrl)
-                            if (bitmap != null) {
-                                Image(
-                                    bitmap = bitmap,
-                                    contentDescription = "图片消息",
-                                    contentScale = ContentScale.FillWidth,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(bottom = 8.dp)
-                                        .clip(RoundedCornerShape(12.dp))
-                                )
-                            }
-                        }
-                        if (message.content.isBlank() && message.isStillThinking) {
-                            Text("……", fontSize = 16.sp, color = CompanionPalette.Presence)
-                        } else if (message.content.isNotBlank()) {
-                            MessageContentWithPanels(
-                                raw = message.content,
-                                collapseKeyPrefix = "companion_${message.id}",
-                                color = when {
-                                    isError -> Color(0xFFFF9C85)
-                                    isUser -> CompanionPalette.TextOnUser
-                                    else -> CompanionPalette.TextPrimary
-                                },
-                                appLanguage = appLanguage
+                Column {
+                    if (!message.imageUrl.isNullOrBlank()) {
+                        val bitmap = rememberLocalImagePainter(message.imageUrl)
+                        if (bitmap != null) {
+                            Image(
+                                bitmap = bitmap,
+                                contentDescription = "图片消息",
+                                contentScale = ContentScale.FillWidth,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 8.dp)
+                                    .clip(RoundedCornerShape(12.dp))
                             )
                         }
+                    }
+                    if (message.content.isBlank() && message.isStillThinking) {
+                        Text("……", fontSize = 16.sp, color = CompanionPalette.Presence)
+                    } else if (message.content.isNotBlank()) {
+                        MessageContentWithPanels(
+                            raw = message.content,
+                            collapseKeyPrefix = "companion_${message.id}",
+                            color = when {
+                                isError -> Color(0xFFFF9C85)
+                                isUser -> CompanionPalette.TextOnUser
+                                else -> CompanionPalette.TextPrimary
+                            },
+                            appLanguage = appLanguage
+                        )
                     }
                 }
             }
@@ -365,11 +451,15 @@ private fun CompanionMessageBubble(message: Message, appLanguage: String, highli
     }
 }
 
-/** 玻璃拟态输入条 + 图片附件 + 琥珀渐变发送/停止钮（发送中防重入，单轮串行）。 */
+/** 玻璃拟态输入条 + 图片附件 + 语音录入 + 琥珀渐变发送/停止钮（发送中防重入，单轮串行）。 */
 @Composable
 private fun CompanionInputBar(
     value: TextFieldValue,
     isThinking: Boolean,
+    recording: Boolean,
+    onMicPress: () -> Unit,
+    onMicRelease: () -> Unit,
+    onCancelRecording: () -> Unit,
     pendingImagePath: String?,
     onClearPendingImage: () -> Unit,
     onPickImage: () -> Unit,
@@ -410,7 +500,58 @@ private fun CompanionInputBar(
                 )
             }
         }
+        // 录音中：状态条 + 取消入口
+        if (recording) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp)
+                    .glassSurface(
+                        shape = RoundedCornerShape(14.dp),
+                        fill = CompanionPalette.BubbleUserFill,
+                        border = CompanionPalette.BubbleUserBorder
+                    )
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("● 正在聆听…松开即转写发送", fontSize = 13.sp, color = CompanionPalette.TextOnUser, modifier = Modifier.weight(1f))
+                Text(
+                    "取消",
+                    fontSize = 13.sp,
+                    color = CompanionPalette.Presence,
+                    modifier = Modifier.clickable(onClick = onCancelRecording)
+                )
+            }
+        }
         Row(verticalAlignment = Alignment.Bottom) {
+            // 语音录入：按住开始，松开转写并发送（AC-10）
+            Box(
+                Modifier
+                    .size(44.dp)
+                    .glassSurface(
+                        shape = CircleShape,
+                        fill = if (recording) CompanionPalette.BubbleUserFill else CompanionPalette.GlassFill,
+                        border = if (recording) CompanionPalette.BubbleUserBorder else CompanionPalette.GlassBorder
+                    )
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onPress = {
+                                onMicPress()
+                                tryAwaitRelease()
+                                onMicRelease()
+                            }
+                        )
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                androidx.compose.material3.Icon(
+                    imageVector = Icons.Rounded.Mic,
+                    contentDescription = "按住说话",
+                    tint = if (recording) CompanionPalette.Presence else CompanionPalette.RoundBtnIcon,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            Spacer(Modifier.size(8.dp))
             // 附件按钮
             Box(
                 Modifier
@@ -500,5 +641,61 @@ private fun CompanionInputBar(
                 )
             }
         }
+    }
+}
+
+/** UI-07：长按消息操作区——复制 / 朗读 / 重新生成（仅最后一条 AI 回复）。 */
+@Composable
+private fun CompanionMessageActionsSheet(
+    message: Message,
+    canRegenerate: Boolean,
+    onDismiss: () -> Unit,
+    onCopy: () -> Unit,
+    onSpeak: () -> Unit,
+    onRegenerate: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(modifier) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(Color(0xF20E0C09))
+                .navigationBarsPadding()
+                .padding(horizontal = 20.dp)
+        ) {
+            Spacer(Modifier.height(18.dp))
+            Text(
+                if (message.sender == Sender.USER) "你说的话" else "Loyea 说",
+                fontSize = 12.sp,
+                color = CompanionPalette.Hint
+            )
+            Spacer(Modifier.height(10.dp))
+            ActionRowItem(Icons.Rounded.ContentCopy, "复制", onCopy)
+            ActionRowItem(Icons.Rounded.VolumeUp, "朗读", onSpeak)
+            if (canRegenerate) {
+                ActionRowItem(Icons.Rounded.Refresh, "重新生成", onRegenerate)
+            }
+            ActionRowItem(Icons.Rounded.Close, "取消", onDismiss)
+            Spacer(Modifier.height(14.dp))
+        }
+    }
+}
+
+@Composable
+private fun ActionRowItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null, tint = CompanionPalette.RoundBtnIcon, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.size(14.dp))
+        Text(title, fontSize = 15.sp, color = CompanionPalette.TextPrimary)
     }
 }

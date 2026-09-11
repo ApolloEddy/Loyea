@@ -29,7 +29,7 @@ import com.loyea.ui.chat.ChatViewModel
 
 private enum class BindState { BINDING, READY, MISSING }
 
-private enum class CompanionSubPage { CHAT, SETTINGS, DATA, MEMORY, SEARCH }
+private enum class CompanionSubPage { CHAT, SETTINGS, PERCEPTION, DATA, MEMORY, SEARCH }
 
 /**
  * 陪伴模式外壳（enabled=true 时由 MainActivity 渲染，替代普通导航外壳）。
@@ -156,8 +156,14 @@ fun CompanionRoot(
                     )
                 },
                 onBack = { subPage = CompanionSubPage.CHAT },
+                onOpenPerception = { subPage = CompanionSubPage.PERCEPTION },
                 onOpenData = { subPage = CompanionSubPage.DATA },
                 onDisableCompanion = { disableCompanionMode(context, viewModel) }
+            )
+            CompanionSubPage.PERCEPTION -> CompanionPerceptionScreen(
+                config = config,
+                onConfigChange = { setConfig(it) },
+                onBack = { subPage = CompanionSubPage.SETTINGS }
             )
             CompanionSubPage.DATA -> CompanionDataScreen(
                 viewModel = viewModel,
