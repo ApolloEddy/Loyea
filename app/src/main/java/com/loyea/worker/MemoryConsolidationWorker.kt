@@ -76,21 +76,23 @@ class MemoryConsolidationWorker(
 
             val sessions = storageManager.loadSessionList()
             val session = sessions.find { it.id == sessionId } ?: return@withContext Result.success()
-            val oldMemories = session.coreMemories
+
+            // 整理窗口水位（审计 R-02/AC-25）：只整理上次之后的新消息；首次运行回溯最近 20 条。
+            // 滑窗重叠会把同一来源反复喂给模型，图谱 upsert 会不断强化 mentionCount。
             val messages = storageManager.loadSessionMessages(sessionId)
-            val historyMsgs = messages.takeLast(20)
+            val watermark = session.consolidatedUpTo
+            val start = when {
+                watermark > 0 && watermark >= messages.size -> messages.size
+                watermark in 1 until messages.size -> watermark
+                else -> (messages.size - 20).coerceAtLeast(0)
+            }
+            if (start >= messages.size) return@withContext Result.success()
+            val historyMsgs = messages.subList(start, messages.size)
+            val processedCount = messages.size
+            val revisionAtStart = session.memoryRevision
 
             val characterId = session.characterId
-
-            // 1. 整理核心事实记忆 (Core Memories)
-            val coreFacts = oldMemories.filter { it.startsWith("★") }
-            val normalFacts = oldMemories.filter { !it.startsWith("★") }
-
-            val summaryInput = BackgroundPromptTemplates.memoryConsolidationInput(
-                coreFacts = coreFacts,
-                normalFacts = normalFacts,
-                history = historyMsgs
-            )
+            val isCompanion = com.loyea.plugin.companion.CompanionContract.isCompanionCharacter(characterId)
 
             // MEMORY 通道经 ApiConfigRepository 统一解析（显式绑定优先，否则继承 CHAT；Spec §19/§5.4）
             // 不再直读加密库与散装键、不再构造幽灵默认配置；通道不可用 = 可重试失败，不伪报成功
@@ -103,63 +105,97 @@ class MemoryConsolidationWorker(
                 }
             }
 
-            val llmResponse = llmClient.sendChatCompletion(
-                config = targetConfig,
-                systemPrompt = BackgroundPromptTemplates.MEMORY_CONSOLIDATION_SYSTEM,
-                history = listOf(
-                    Message(
-                        id = "memory-consolidation-input",
-                        content = summaryInput,
-                        sender = Sender.USER
+            var revisionConflict = false
+            // 核心整理步骤是否有效完成：模型失败（错误/空响应）时保持 false，
+            // 水位不推进，让下一轮用同一窗口重试（审计 R-02：失败不得静默丢整理机会）
+            var coreStepCompleted = isCompanion
+
+            // 1. 整理核心事实记忆（Core Memories）
+            // 审计 R-02：陪伴模式的「固定记忆」是用户独占所有权的资料——自动整理对其只读，
+            // 连模型调用都不发起（UI 承诺「不会被自动整理改写」；模型产出永不做整体替换）。
+            // 普通模式保留核心记忆整理，但提交走修订号条件合同。
+            if (!isCompanion) {
+                val coreFacts = session.coreMemories.filter { it.startsWith("★") }
+                val normalFacts = session.coreMemories.filter { !it.startsWith("★") }
+
+                val summaryInput = BackgroundPromptTemplates.memoryConsolidationInput(
+                    coreFacts = coreFacts,
+                    normalFacts = normalFacts,
+                    history = historyMsgs
+                )
+
+                val llmResponse = llmClient.sendChatCompletion(
+                    config = targetConfig,
+                    systemPrompt = BackgroundPromptTemplates.MEMORY_CONSOLIDATION_SYSTEM,
+                    history = listOf(
+                        Message(
+                            id = "memory-consolidation-input",
+                            content = summaryInput,
+                            sender = Sender.USER
+                        )
                     )
                 )
-            )
-            // 记忆提炼计入会话用量（系统调用）；服务端未返回 usage 时用字符估算兜底
-            storageManager.updateSessionTokens(
-                sessionId,
-                promptTokens = llmResponse.promptTokens ?:
-                    estimateTokens(BackgroundPromptTemplates.MEMORY_CONSOLIDATION_SYSTEM) + estimateTokens(summaryInput),
-                completionTokens = llmResponse.completionTokens ?: estimateTokens(llmResponse.content),
-                lastContextTokens = null
-            )
-            val responseText = llmResponse.content
-            if (!llmResponse.isError && responseText.isNotBlank()) {
-                val newMemories = mutableListOf<String>()
-                val regex = Regex("\\[([^\\]]+)\\]")
-                regex.findAll(responseText).forEach { matchResult ->
-                    val fact = matchResult.groupValues[1].trim()
-                    if (fact.isNotBlank()) {
-                        newMemories.add(fact)
+                // 记忆提炼计入会话用量（系统调用）；服务端未返回 usage 时用字符估算兜底
+                storageManager.updateSessionTokens(
+                    sessionId,
+                    promptTokens = llmResponse.promptTokens ?:
+                        estimateTokens(BackgroundPromptTemplates.MEMORY_CONSOLIDATION_SYSTEM) + estimateTokens(summaryInput),
+                    completionTokens = llmResponse.completionTokens ?: estimateTokens(llmResponse.content),
+                    lastContextTokens = null
+                )
+                val responseText = llmResponse.content
+                if (!llmResponse.isError && responseText.isNotBlank()) {
+                    coreStepCompleted = true
+                    val extractedRaw = mutableListOf<String>()
+                    Regex("\\[([^\\]]+)\\]").findAll(responseText).forEach { matchResult ->
+                        val fact = matchResult.groupValues[1].trim()
+                        if (fact.isNotBlank()) {
+                            extractedRaw.add(fact)
+                        }
                     }
-                }
 
-                // 确保所有的锁定事实依然完整保留（即使大模型漏掉了，也做兜底）
-                coreFacts.forEach { coreFact ->
-                    val coreFactContent = coreFact.removePrefix("★").trim()
-                    if (newMemories.none { it.contains(coreFactContent) }) {
-                        newMemories.add(0, coreFact)
+                    // 写入端隐私过滤：会话关闭物理感知时，敏感健康/位置/设备事实不允许进入长期记忆；
+                    // ★ 用户锁定项跳过过滤（用户显式锁定 = 明确授权该记忆存在，严禁被静默删除）
+                    val filteredExtracted = if (session.useSystemTime == true) {
+                        extractedRaw
+                    } else {
+                        extractedRaw.filter { fact ->
+                            fact.startsWith("★") || PromptAssembler.SENSITIVE_MEMORY_KEYWORDS.none { fact.contains(it, ignoreCase = true) }
+                        }
                     }
-                }
 
-                // 写入端隐私过滤：会话关闭物理感知时，敏感健康/位置/设备事实不允许进入长期记忆；
-                // ★ 用户锁定项跳过过滤（用户显式锁定 = 明确授权该记忆存在，优先于自动过滤，严禁被静默删除）
-                val filteredMemories = if (session.useSystemTime == true) {
-                    newMemories
-                } else {
-                    newMemories.filter { fact ->
-                        fact.startsWith("★") || PromptAssembler.SENSITIVE_MEMORY_KEYWORDS.none { fact.contains(it, ignoreCase = true) }
+                    // 条件提交（审计 R-02）：同一把锁内比对修订号——用户在模型运行期间
+                    // 增/删/改/转固定过核心记忆则整轮作废；提取为空严格 no-op 不清空。
+                    storageManager.updateSessionList { currentList ->
+                        currentList.map { s ->
+                            if (s.id != sessionId) s
+                            else when (val d = MemoryConsolidationPolicy.decideCoreCommit(
+                                revisionAtStart = revisionAtStart,
+                                currentRevision = s.memoryRevision,
+                                extracted = filteredExtracted,
+                                lockedFacts = coreFacts,
+                                processedCount = processedCount
+                            )) {
+                                is MemoryConsolidationPolicy.CoreDecision.Abort -> {
+                                    revisionConflict = true
+                                    s
+                                }
+                                is MemoryConsolidationPolicy.CoreDecision.AdvanceWatermark -> s
+                                is MemoryConsolidationPolicy.CoreDecision.Commit ->
+                                    s.copy(
+                                        coreMemories = d.memories,
+                                        memoryRevision = s.memoryRevision + 1
+                                    )
+                            }
+                        }
                     }
-                }
-
-                if (filteredMemories.isNotEmpty() || responseText.contains("无旧核心记忆") || oldMemories.isNotEmpty()) {
-                    // 更新 Session 的 Core Memories
-                    storageManager.updateSessionCoreMemories(sessionId, filteredMemories)
                 }
             }
 
             // 2. 提取长程图谱网络记忆 (且每个会话相互独立)
+            // 核心步骤失败时整轮作废：否则图谱会先处理、下轮重试又再次 upsert 同一来源
             val enableGraphMemory = prefs.getBoolean("enable_graph_memory", true)
-            if (enableGraphMemory) {
+            if (enableGraphMemory && !revisionConflict && coreStepCompleted) {
                 val graphInput = BackgroundPromptTemplates.graphExtractionInput(historyMsgs)
 
                 val graphLlmResponse = llmClient.sendChatCompletion(
@@ -221,6 +257,13 @@ class MemoryConsolidationWorker(
                         }
                     }
                 }
+            }
+
+            // 3. 推进整理水位（审计 R-02）：核心步骤有效完成且无修订冲突时推进；
+            // 每条消息至多参与一次整理，图谱 mentionCount 不会因重复处理而虚高。
+            // 图谱提取失败不回退水位（重试会造成 mentionCount 虚高，损失由后续消息上下文弥补）。
+            if (!revisionConflict && coreStepCompleted) {
+                storageManager.updateSessionConsolidationWatermark(sessionId, processedCount)
             }
 
             Result.success()

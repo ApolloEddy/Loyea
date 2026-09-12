@@ -15,12 +15,15 @@
     "disable": "com.loyea.plugin.companion.disableCompanionMode"
   },
   "integration": {
-    "status": "active-on-branch-plugin/companion",
+    "status": "active（integration/plugins，随独立验收修复 R-01~R-09 一并进 main）",
     "invasive": "minimal",
     "hostTouches": [
       "app/build.gradle.kts：sourceSets 增加 plugins/companion 源码目录（3 行）",
-      "MainActivity.kt：模式路由分支（enabled 时渲染 CompanionRoot，替代普通 NavHost）+ 侧栏会话列表过滤陪伴归属 + 酒馆卡列表过滤陪伴内部资料",
-      "ChatViewModel.kt：ensureCompanionSession（FUN-01 唯一会话钩子，含磁盘回退防冷启动竞态）+ 世界书注入处陪伴短路（FUN-04）",
+      "MainActivity.kt：模式路由分支（enabled 时渲染 CompanionRoot，替代普通 NavHost）+ 侧栏会话列表过滤陪伴归属 + 酒馆卡列表过滤陪伴内部资料 + 陪伴通知点击路由（EXTRA_OPEN_COMPANION）+ 前台状态回写（CompanionRuntime.uiForeground）+ 后台问候调度自愈条件扩展",
+      "ChatViewModel.kt：ensureCompanionSession（FUN-01 唯一会话钩子，含磁盘回退防冷启动竞态、消息文件探测 FUN-09、感知初值 R-01）+ setSessionPerceptionEnabled（感知开关生效载体，R-01）+ effectivePromptUserName（R-08）+ 世界书注入处陪伴短路（FUN-04）+ 转写任务归属与取消（R-03）",
+      "ChatStorageManager.kt：写入成败上报 + updateSessionMessages 防复活护栏 + memoryRevision/consolidatedUpTo 字段 + probeSessionMessages/ensureSessionMessageFile（R-02/03/04/07 共用底座，无陪伴语义）",
+      "GreetingWorker.kt：陪伴/普通双路径拆分（陪伴路径完整门控+台账+通知路由 R-06；普通路径原语义保留）",
+      "MemoryConsolidationWorker.kt：陪伴会话只读固定记忆 + 修订号条件提交 + 整理水位（R-02）",
       "SettingsScreen.kt：陪伴模式入口卡片 + CompanionSetupOverlay 挂载（约 5 行 + 入口卡）"
     ],
     "wiring": "settings.gradle.kts 零改动；插件代码 import 宿主 ChatViewModel/Message 等公共 API（方向：插件 → 宿主），宿主仅经 CompanionContract 判断归属"

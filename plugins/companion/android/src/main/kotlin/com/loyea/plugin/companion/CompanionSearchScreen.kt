@@ -61,11 +61,13 @@ private data class SearchHit(
 /**
  * S-06 查找记录：当前陪伴会话的本地关键词搜索（UI-20）。
  * 空查询不搜索（UI-22）；快速输入防抖，仅最后一次查询上屏；匹配完整已落盘记录。
+ * 全量遍历在 Dispatchers.Default 执行（NFR-03，审计 R-09：不得阻塞主线程）。
  * 点结果回到同一时间线并定位到原消息、短暂高亮（UI-21）。
  */
 @Composable
 fun CompanionSearchScreen(
     viewModel: ChatViewModel,
+    displayName: String,
     onBack: () -> Unit,
     onOpenMessage: (String) -> Unit,
 ) {
@@ -82,21 +84,23 @@ fun CompanionSearchScreen(
         delay(300)
         val all = viewModel.messages.value
         val lower = trimmed.lowercase()
-        hits = all.mapNotNull { message ->
-            val content = message.content
-            if (content.isBlank()) return@mapNotNull null
-            val idx = content.lowercase().indexOf(lower)
-            if (idx < 0) return@mapNotNull null
-            val start = (idx - 24).coerceAtLeast(0)
-            val end = (idx + trimmed.length + 24).coerceAtMost(content.length)
-            SearchHit(
-                messageId = message.id,
-                timestamp = message.timestamp,
-                isUser = message.sender == Sender.USER,
-                snippetBefore = (if (start > 0) "…" else "") + content.substring(start, idx),
-                snippetMatch = content.substring(idx, idx + trimmed.length),
-                snippetAfter = content.substring(idx + trimmed.length, end) + (if (end < content.length) "…" else "")
-            )
+        hits = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            all.mapNotNull { message ->
+                val content = message.content
+                if (content.isBlank()) return@mapNotNull null
+                val idx = content.lowercase().indexOf(lower)
+                if (idx < 0) return@mapNotNull null
+                val start = (idx - 24).coerceAtLeast(0)
+                val end = (idx + trimmed.length + 24).coerceAtMost(content.length)
+                SearchHit(
+                    messageId = message.id,
+                    timestamp = message.timestamp,
+                    isUser = message.sender == Sender.USER,
+                    snippetBefore = (if (start > 0) "…" else "") + content.substring(start, idx),
+                    snippetMatch = content.substring(idx, idx + trimmed.length),
+                    snippetAfter = content.substring(idx + trimmed.length, end) + (if (end < content.length) "…" else "")
+                )
+            }
         }
     }
 
@@ -184,7 +188,7 @@ fun CompanionSearchScreen(
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                if (hit.isUser) "你" else configDisplayNamePlaceholder,
+                                if (hit.isUser) "你" else displayName,
                                 fontSize = 12.sp,
                                 color = CompanionPalette.Presence
                             )
@@ -208,8 +212,6 @@ fun CompanionSearchScreen(
         }
     }
 }
-
-private const val configDisplayNamePlaceholder = "Loyea"
 
 private fun annotatedSnippet(hit: SearchHit): AnnotatedString = buildAnnotatedString {
     append(hit.snippetBefore)

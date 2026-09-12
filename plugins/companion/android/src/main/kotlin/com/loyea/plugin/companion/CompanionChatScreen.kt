@@ -38,6 +38,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Mic
@@ -102,9 +103,13 @@ fun CompanionChatScreen(
     var inputFocused by remember { mutableStateOf(false) }
     var highlightedId by remember { mutableStateOf<String?>(null) }
     var selectedMessage by remember { mutableStateOf<Message?>(null) }
-    var recording by remember { mutableStateOf(false) }
+    // R-09 录音状态修复：以 ViewModel 的真实录音状态为唯一来源——权限被拒/初始化失败时
+    // isRecording 不会变真，UI 不再出现"正在聆听"假象
+    val recording = viewModel.isRecording.value
     // 图片待发送预览（S-02 临时内容）：沿用宿主 vision 缓存拷贝语义
     var pendingImagePath by remember { mutableStateOf<String?>(null) }
+    // R-09：图片全屏预览
+    var previewImagePath by remember { mutableStateOf<String?>(null) }
     val context = androidx.compose.ui.platform.LocalContext.current
     val pickMediaLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()
@@ -129,6 +134,17 @@ fun CompanionChatScreen(
         else -> NeuralLivingScene.ACTIVITY_REST
     }
 
+    // R-09 未读/回到底部：远离底部期间到达的新消息计数，点击一键回底
+    var missedCount by remember { mutableStateOf(0) }
+    val atBottom by remember {
+        androidx.compose.runtime.derivedStateOf {
+            val info = listState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            info.totalItemsCount == 0 || lastVisible >= info.totalItemsCount - 1
+        }
+    }
+    LaunchedEffect(atBottom) { if (atBottom) missedCount = 0 }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -137,12 +153,16 @@ fun CompanionChatScreen(
             .imePadding()
     ) {
         CompanionHeader(displayName = config.displayName, onOpenMore = onOpenMore)
-        NeuralLivingStage(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(292.dp),
-            targetActivity = targetActivity
-        )
+        // R-09 高度适配：竖屏全高 292dp；小屏幕（横屏+键盘等）收缩，保住聊天与输入可达性
+        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val stageHeight = if (maxHeight < 480.dp) 176.dp else 292.dp
+            NeuralLivingStage(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(stageHeight),
+                targetActivity = targetActivity
+            )
+        }
         // 任务状态（S-02 顶栏下方：仅有任务执行时显示，结束消失）
         Text(
             text = if (isThinking) "正在回应…" else "",
@@ -189,9 +209,45 @@ fun CompanionChatScreen(
                             message = message,
                             appLanguage = viewModel.appLanguage.value,
                             highlight = highlightedId == message.id,
-                            onLongPress = { selectedMessage = message }
+                            onLongPress = { selectedMessage = message },
+                            onImageTap = { previewImagePath = it },
+                            onAudioPlay = { m ->
+                                m.audioUrl?.let { viewModel.playAudioUrl(m.id, it) }
+                            }
                         )
                     }
+                }
+            }
+            // R-09：回到底部/未读指示（AC-12）
+            if (!atBottom && messages.isNotEmpty()) {
+                Row(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 10.dp)
+                        .glassSurface(
+                            shape = CircleShape,
+                            fill = CompanionPalette.RoundBtnBg,
+                            border = CompanionPalette.RoundBtnBorder
+                        )
+                        .clickable {
+                            missedCount = 0
+                            scope.launch { listState.animateScrollToItem(messages.lastIndex) }
+                        }
+                        .padding(horizontal = 14.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    androidx.compose.material3.Icon(
+                        imageVector = Icons.Rounded.KeyboardArrowDown,
+                        contentDescription = "回到底部",
+                        tint = CompanionPalette.RoundBtnIcon,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.size(5.dp))
+                    Text(
+                        if (missedCount > 0) "$missedCount 条新消息" else "回到底部",
+                        fontSize = 12.sp,
+                        color = CompanionPalette.RoundBtnIcon
+                    )
                 }
             }
         }
@@ -209,11 +265,9 @@ fun CompanionChatScreen(
                     return@CompanionInputBar
                 }
                 viewModel.startRecording()
-                recording = true
             },
             onMicRelease = {
                 if (!recording) return@CompanionInputBar
-                recording = false
                 viewModel.stopRecording { file, duration ->
                     if (file == null) return@stopRecording
                     if (duration < 1) {
@@ -227,7 +281,6 @@ fun CompanionChatScreen(
                 }
             },
             onCancelRecording = {
-                recording = false
                 viewModel.stopRecording { file, _ ->
                     file?.delete()
                     android.widget.Toast.makeText(context, "录音已取消", android.widget.Toast.LENGTH_SHORT).show()
@@ -295,13 +348,38 @@ fun CompanionChatScreen(
         }
     }
 
-    // 新消息追加且当前贴近底部时跟随；翻阅历史时不抢滚动（AC-12 的基础行为）
+    // R-09：图片全屏预览（点击关闭）
+    previewImagePath?.let { path ->
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color(0xEE000000))
+                .clickable { previewImagePath = null },
+            contentAlignment = Alignment.Center
+        ) {
+            val bitmap = rememberLocalImagePainter(path)
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap,
+                    contentDescription = "全屏图片，点击关闭",
+                    contentScale = ContentScale.FillWidth,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            } else {
+                Text("图片不存在或已被清理", fontSize = 14.sp, color = CompanionPalette.Hint)
+            }
+        }
+    }
+
+    // 新消息追加且当前贴近底部时跟随；翻阅历史时不抢滚动、只累计未读（AC-12）
     LaunchedEffect(messages.size, isThinking) {
         if (messages.isEmpty()) return@LaunchedEffect
         val info = listState.layoutInfo
         val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
         if (lastVisible >= messages.size - 2) {
             listState.animateScrollToItem(messages.lastIndex)
+        } else {
+            missedCount++
         }
     }
 
@@ -384,6 +462,8 @@ private fun CompanionMessageBubble(
     appLanguage: String,
     highlight: Boolean = false,
     onLongPress: () -> Unit = {},
+    onImageTap: (String) -> Unit = {},
+    onAudioPlay: (Message) -> Unit = {},
 ) {
     val isUser = message.sender == Sender.USER
     val isError = message.isError
@@ -422,12 +502,44 @@ private fun CompanionMessageBubble(
                         if (bitmap != null) {
                             Image(
                                 bitmap = bitmap,
-                                contentDescription = "图片消息",
+                                contentDescription = "图片消息，点击全屏查看",
                                 contentScale = ContentScale.FillWidth,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(bottom = 8.dp)
                                     .clip(RoundedCornerShape(12.dp))
+                                    .clickable { onImageTap(message.imageUrl) } // R-09：全屏预览
+                            )
+                        }
+                    } else if (!message.imageDesc.isNullOrBlank()) {
+                        // R-05 恢复场景：图片文件不随备份迁移，仅存图注时以文字呈现
+                        Text(
+                            "[图片｜${message.imageDesc}]",
+                            fontSize = 13.sp,
+                            lineHeight = 19.sp,
+                            color = CompanionPalette.Hint,
+                            modifier = Modifier.padding(bottom = 6.dp)
+                        )
+                    }
+                    // R-09：音频消息播放入口
+                    if (!message.audioUrl.isNullOrBlank()) {
+                        Row(
+                            Modifier
+                                .clickable { onAudioPlay(message) }
+                                .padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            androidx.compose.material3.Icon(
+                                imageVector = Icons.Rounded.VolumeUp,
+                                contentDescription = "播放语音",
+                                tint = if (isUser) CompanionPalette.TextOnUser else CompanionPalette.RoundBtnIcon,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.size(6.dp))
+                            Text(
+                                "语音消息 " + if (message.audioDuration > 0) "${message.audioDuration}″" else "",
+                                fontSize = 13.sp,
+                                color = if (isUser) CompanionPalette.TextOnUser else CompanionPalette.TextPrimary
                             )
                         }
                     }

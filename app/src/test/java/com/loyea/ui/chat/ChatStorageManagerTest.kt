@@ -63,6 +63,9 @@ class ChatStorageManagerTest {
     @Test
     fun testUpdateSessionMessagesAtomic() = runBlocking {
         val sessionId = "test_session_id"
+        // 防复活护栏（审计 R-03/R-06）：会话必须先登记进元数据列表，消息更新才被受理
+        storageManager.saveSessionList(listOf(ChatSession(id = sessionId, title = "s")))
+
         val initialMsgs = listOf(
             Message("m1", "Hello", Sender.USER, characterId = "char_loyea_default"),
             Message("m2", "World", Sender.AI, characterId = "char_loyea_default")
@@ -324,5 +327,78 @@ class ChatStorageManagerTest {
         assertEquals(WorldInfoInsertionOrder.ORDER, partial.insertionOrderMode)
         assertEquals(2048L, partial.tokenBudget)
         assertEquals(true, partial.allowRecursion)
+    }
+
+    // ---- R-04/R-07 存储合同：防复活护栏、修订号、水位、消息文件探测 ----
+
+    private fun sessionWith(id: String) = ChatSession(id = id, title = "s", characterId = "c")
+
+    @Test
+    fun testUpdateSessionMessagesRejectsUnknownSession() = runBlocking {
+        // 防复活护栏（审计 R-03/R-06）：已删除会话的消息不得被迟到的后台任务重建
+        val write = storageManager.updateSessionMessages("ghost") { it + Message("m", "x", Sender.AI) }
+        assertEquals(false, write)
+        assertEquals(emptyList<com.loyea.ui.chat.Message>(), storageManager.loadSessionMessages("ghost"))
+    }
+
+    @Test
+    fun testUpdateSessionMessagesWritesWhenSessionExists() = runBlocking {
+        storageManager.saveSessionList(listOf(sessionWith("s1")))
+        val ok = storageManager.updateSessionMessages("s1") { it + Message("m", "x", Sender.AI) }
+        assertEquals(true, ok)
+        assertEquals(1, storageManager.loadSessionMessages("s1").size)
+    }
+
+    @Test
+    fun testCoreMemoryWriteBumpsRevision() = runBlocking {
+        storageManager.saveSessionList(listOf(sessionWith("s1")))
+        storageManager.updateSessionCoreMemories("s1", listOf("a"))
+        var rev = 0L
+        storageManager.updateSessionList { list ->
+            rev = list.first { it.id == "s1" }.memoryRevision
+            list
+        }
+        assertEquals(1L, rev)
+        storageManager.updateSessionCoreMemories("s1", listOf("a", "b"))
+        storageManager.updateSessionList { list ->
+            rev = list.first { it.id == "s1" }.memoryRevision
+            list
+        }
+        assertEquals(2L, rev)
+    }
+
+    @Test
+    fun testConsolidationWatermarkPersists() = runBlocking {
+        storageManager.saveSessionList(listOf(sessionWith("s1")))
+        storageManager.updateSessionConsolidationWatermark("s1", 42)
+        assertEquals(42, storageManager.loadSessionList().first { it.id == "s1" }.consolidatedUpTo)
+    }
+
+    @Test
+    fun testProbeAndEnsureMessageFileContract() = runBlocking {
+        // 从未创建的会话 → MISSING
+        assertEquals(
+            ChatStorageManager.MessageFileState.MISSING,
+            storageManager.probeSessionMessages("nope")
+        )
+        // 创建即落盘合法空文件 → OK（此后缺失不再被当成"空历史"）
+        storageManager.saveSessionList(listOf(sessionWith("s1")))
+        storageManager.ensureSessionMessageFile("s1")
+        assertEquals(
+            ChatStorageManager.MessageFileState.OK,
+            storageManager.probeSessionMessages("s1")
+        )
+        assertEquals(0, storageManager.loadSessionMessages("s1").size)
+        // 损坏文件 → CORRUPT
+        val corrupt = java.io.File(tempFolder.root, "files/rebuild_storage_v1/sessions/session_s2.json")
+        corrupt.parentFile.mkdirs()
+        corrupt.writeText("{ not json")
+        storageManager.saveSessionList(listOf(sessionWith("s1"), sessionWith("s2")))
+        assertEquals(
+            ChatStorageManager.MessageFileState.CORRUPT,
+            storageManager.probeSessionMessages("s2")
+        )
+        // 探测不得有副作用：文件仍在（不触发 .corrupt 备份）
+        assertTrue(corrupt.exists())
     }
 }

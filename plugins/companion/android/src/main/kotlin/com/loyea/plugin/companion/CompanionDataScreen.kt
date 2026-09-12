@@ -66,7 +66,7 @@ fun CompanionDataScreen(
     viewModel: ChatViewModel,
     config: CompanionConfig,
     onBack: () -> Unit,
-    onRestored: (String) -> Unit,
+    onRestored: (CompanionConfig) -> Unit,
     onRestarted: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -95,17 +95,28 @@ fun CompanionDataScreen(
                             ChatStorageManager(context).loadSessionMessages(session.id)
                         }
                     } else emptyList()
+                    val graphTriples = if (session != null) {
+                        withContext(Dispatchers.IO) {
+                            com.loyea.perception.memory.GraphMemoryManager(context)
+                                .getTriplesForSession(CompanionContract.COMPANION_CHARACTER_ID, session.id)
+                        }
+                    } else emptyList()
                     val json = CompanionBackupCodec.exportJson(
-                        displayName = config.displayName,
-                        perceptionEnabled = config.perceptionEnabled,
-                        proactiveEnabled = config.proactiveEnabled,
-                        configVersion = config.configVersion,
-                        createdAt = config.createdAt,
+                        config = config,
                         exportedAt = System.currentTimeMillis(),
                         session = session ?: com.loyea.ui.chat.ChatSession(
                             id = "", title = "陪伴", characterId = CompanionContract.COMPANION_CHARACTER_ID
                         ),
-                        messages = messages
+                        messages = messages,
+                        graphTriples = graphTriples.map {
+                            CompanionBackupCodec.BackupTriple(
+                                s = it.subject, p = it.predicate, o = it.`object`,
+                                creationTime = it.creationTime,
+                                lastMentionedTime = it.lastMentionedTime,
+                                mentionCount = it.mentionCount,
+                                baseWeight = it.baseWeight
+                            )
+                        }
                     )
                     withContext(Dispatchers.IO) {
                         context.contentResolver.openOutputStream(uri)?.use { out ->
@@ -220,7 +231,7 @@ fun CompanionDataScreen(
             ActionRow(
                 icon = Icons.Rounded.Archive,
                 title = "导出陪伴备份（JSON）",
-                subtitle = "包含设置、记忆与全部消息；图片和音频文件不随备份迁移；不含任何 API Key",
+                subtitle = "包含设置、固定记忆、图谱记忆与全部消息；图片和音频文件不随备份迁移；不含任何 API Key",
                 enabled = !busy
             ) { jsonSaver.launch("loyea_companion_backup_${exportStamp()}.json") }
 
@@ -270,13 +281,19 @@ fun CompanionDataScreen(
                                 .clickable(enabled = !busy) {
                                     busy = true
                                     scope.launch {
-                                        val newId = withContext(Dispatchers.IO) {
-                                            applyRestore(context, viewModel, preview)
+                                        when (val outcome = CompanionDataOps.restore(context, viewModel, preview)) {
+                                            is CompanionDataOps.RestoreOutcome.Done -> {
+                                                restorePreview = null
+                                                restoreDone = true
+                                                restoreError = null
+                                                onRestored(outcome.config)
+                                            }
+                                            is CompanionDataOps.RestoreOutcome.Failed -> {
+                                                restorePreview = null
+                                                restoreError = outcome.reason
+                                            }
                                         }
                                         busy = false
-                                        restorePreview = null
-                                        restoreDone = true
-                                        onRestored(newId)
                                     }
                                 },
                             contentAlignment = Alignment.Center
@@ -305,7 +322,7 @@ fun CompanionDataScreen(
             ActionRow(
                 icon = Icons.Rounded.RestartAlt,
                 title = "重新开始陪伴",
-                subtitle = "清除当前陪伴的聊天、记忆、摘要与草稿；普通模式与公共服务配置不受影响",
+                subtitle = "清除当前陪伴的聊天、固定记忆、图谱记忆、摘要与草稿；普通模式与公共服务配置不受影响",
                 enabled = !busy
             ) { restartConfirm = true }
 
@@ -323,7 +340,7 @@ fun CompanionDataScreen(
                 ) {
                     Text("这将清除：", fontSize = 13.sp, color = CompanionPalette.TextPrimary)
                     Text(
-                        "当前陪伴的聊天记录、固定记忆、摘要与草稿。\n不会影响：普通模式的会话、模型配置与其他设置。",
+                        "当前陪伴的聊天记录、固定记忆、图谱记忆、摘要与草稿。\n不会影响：普通模式的会话、模型配置与其他设置。",
                         fontSize = 13.sp,
                         lineHeight = 19.sp,
                         color = CompanionPalette.Hint,
@@ -354,7 +371,7 @@ fun CompanionDataScreen(
                                 .clickable(enabled = !busy) {
                                     busy = true
                                     scope.launch {
-                                        withContext(Dispatchers.IO) { applyRestart(context, viewModel) }
+                                        CompanionDataOps.restart(context, viewModel)
                                         busy = false
                                         restartConfirm = false
                                         onRestarted()
@@ -381,51 +398,8 @@ fun CompanionDataScreen(
     }
 }
 
-// ---- 恢复/重开的实际数据操作（DATA-03 原子顺序：先写新文件 → 原子换列表 → 清旧文件） ----
-
-/** 恢复：返回重新映射后的新会话 ID（DATA-04）。 */
-private suspend fun applyRestore(
-    context: android.content.Context,
-    viewModel: ChatViewModel,
-    preview: CompanionBackupCodec.BackupPreview,
-): String = kotlinx.coroutines.withContext(Dispatchers.IO) {
-    val storage = ChatStorageManager(context)
-    val old = viewModel.sessions.value.firstOrNull { CompanionContract.isCompanionCharacter(it.characterId) }
-        ?: storage.loadSessionList().firstOrNull { CompanionContract.isCompanionCharacter(it.characterId) }
-    val newId = System.currentTimeMillis().toString()
-    val restored = preview.session.copy(
-        id = newId,
-        characterId = CompanionContract.COMPANION_CHARACTER_ID,
-        lastActiveTime = System.currentTimeMillis(),
-        bindingRevision = preview.session.bindingRevision + 1 // DATA-04：代际递增，旧写回失效
-    )
-    storage.saveSessionMessages(newId, preview.messages) // 1. 新数据先落盘（原子写）
-    storage.updateSessionList { list -> // 2. 原子换列表：移除全部旧陪伴归属，挂入新会话
-        (list.filter { !CompanionContract.isCompanionCharacter(it.characterId) } + restored)
-            .sortedByDescending { it.lastActiveTime }
-    }
-    old?.let {
-        viewModel.clearDraft(it.id) // 草稿随旧绑定清除
-        if (it.id != newId) storage.deleteSession(it.id) // 3. 清理旧文件与其书绑定
-    }
-    newId
-}
-
-/** 重新开始：清陪伴会话/记忆/摘要与草稿，保留普通模式与公共服务配置（DATA-05）。 */
-private suspend fun applyRestart(
-    context: android.content.Context,
-    viewModel: ChatViewModel,
-): Unit = kotlinx.coroutines.withContext(Dispatchers.IO) {
-    viewModel.stopResponse() // DATA-05：使进行中的写回失效
-    val storage = ChatStorageManager(context)
-    val old = viewModel.sessions.value.firstOrNull { CompanionContract.isCompanionCharacter(it.characterId) }
-        ?: storage.loadSessionList().firstOrNull { CompanionContract.isCompanionCharacter(it.characterId) }
-    old?.let {
-        viewModel.clearDraft(it.id)
-        storage.deleteSession(it.id)
-    }
-    Unit
-}
+// ---- 恢复/重开的实际数据操作已收敛至 CompanionDataOps（事务化：staging → 原子提交 → 清理；
+//      任何一步失败保留旧数据并向上报告，审计 R-04/R-05） ----
 
 private fun exportStamp(): String =
     SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date(System.currentTimeMillis()))

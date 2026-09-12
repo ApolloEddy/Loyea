@@ -25,6 +25,12 @@ data class ChatSession(
     val legacyExtrasJson: String? = null,     // 0.6.1 会话中本轮不支持功能的只读遗留数据
     val useSystemTime: Boolean? = false, // 是否在此会话中使用真实系统时间
     val coreMemories: List<String> = emptyList(), // 会话核心记忆列表
+    // 记忆整理并发防线（审计 R-02）：任何核心记忆写入都递增；整理 Worker 以
+    // 「任务开始时的修订号 == 提交时的修订号」做条件提交，用户中途增删改则放弃本轮模型产出
+    val memoryRevision: Long = 0L,
+    // 记忆整理水位（审计 R-02/AC-25）：已参与过整理的消息条数；下轮只整理其后的新消息，
+    // 防止滑窗重叠导致同一来源反复强化图谱 mentionCount
+    val consolidatedUpTo: Int = 0,
     val isTitleSummarized: Boolean? = false, // 是否已由AI总结了标题
     val compressedSummary: String = "", // 长会话早期摘要（滑窗外的旧消息被压缩后保留故事脉络）
     val compressedAtCount: Int = 0, // 已参与压缩的消息条数（增量压缩断点）
@@ -111,12 +117,15 @@ class ChatStorageManager(private val context: Context) {
         runCatching { worldInfoLibrary.migrateIfNeeded() }.onFailure { it.printStackTrace() }
     }
 
-    private fun saveSessionListInternal(sessions: List<ChatSession>) {
-        try {
+    // 写入路径必须向上报告成败（审计 R-04）：磁盘不足/IO 失败被吞掉会让恢复等
+    // 复合流程在旧数据已删的情况下继续执行，造成不可逆丢数据。
+    private fun saveSessionListInternal(sessions: List<ChatSession>): Boolean {
+        return try {
             val json = gson.toJson(sessions)
             atomicWrite(sessionsFile, json)
         } catch (e: Exception) {
             e.printStackTrace()
+            false
         }
     }
 
@@ -137,6 +146,8 @@ class ChatStorageManager(private val context: Context) {
                     legacyExtrasJson = raw.legacyExtrasJson,
                     useSystemTime = raw.useSystemTime ?: false,
                     coreMemories = raw.coreMemories ?: emptyList(),
+                    memoryRevision = raw.memoryRevision ?: 0L,
+                    consolidatedUpTo = raw.consolidatedUpTo ?: 0,
                     isTitleSummarized = raw.isTitleSummarized ?: false,
                     compressedSummary = raw.compressedSummary ?: "",
                     compressedAtCount = raw.compressedAtCount ?: 0,
@@ -154,13 +165,14 @@ class ChatStorageManager(private val context: Context) {
         }
     }
 
-    private fun saveSessionMessagesInternal(sessionId: String, messages: List<Message>) {
-        try {
+    private fun saveSessionMessagesInternal(sessionId: String, messages: List<Message>): Boolean {
+        return try {
             val file = File(sessionsDir, "session_$sessionId.json")
             val json = gson.toJson(messages)
             atomicWrite(file, json)
         } catch (e: Exception) {
             e.printStackTrace()
+            false
         }
     }
 
@@ -243,14 +255,42 @@ class ChatStorageManager(private val context: Context) {
     }
 
     /**
-     * 原子写入：先写临时文件再重命名，避免中途崩溃（断电/进程被杀）产生半截 JSON 覆盖有效数据
+     * 原子写入：先写临时文件再重命名，避免中途崩溃（断电/进程被杀）产生半截 JSON 覆盖有效数据。
+     * java.io rename 在 Windows JVM 上不允许覆盖已存在目标 → 用 Files.move(REPLACE_EXISTING)
+     * 做原子覆盖；再失败（罕见）才回退直接写入，与旧路径等价。
      */
-    private fun atomicWrite(file: File, content: String) {
+    private fun atomicWrite(file: File, content: String): Boolean {
         val tmpFile = File(file.parentFile, "${file.name}.tmp")
-        tmpFile.writeText(content)
-        if (!tmpFile.renameTo(file)) {
-            tmpFile.delete()
-            file.writeText(content) // rename 失败（罕见）时回退为直接写入
+        return try {
+            tmpFile.writeText(content)
+            if (tmpFile.renameTo(file)) {
+                true
+            } else {
+                try {
+                    java.nio.file.Files.move(
+                        tmpFile.toPath(), file.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                        java.nio.file.StandardCopyOption.ATOMIC_MOVE
+                    )
+                    true
+                } catch (e: java.nio.file.AtomicMoveNotSupportedException) {
+                    java.nio.file.Files.move(
+                        tmpFile.toPath(), file.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING
+                    )
+                    true
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            try { tmpFile.delete() } catch (ex: Exception) {}
+            try {
+                file.writeText(content) // 最终回退：语义与旧实现一致（可能非原子，但不丢本次数据）
+                true
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+                false
+            }
         }
     }
 
@@ -268,11 +308,11 @@ class ChatStorageManager(private val context: Context) {
     }
 
     /**
-     * 保存所有会话元数据列表
+     * 保存所有会话元数据列表。返回写入是否成功（失败时调用方不得继续删除/覆盖旧数据）。
      */
-    suspend fun saveSessionList(sessions: List<ChatSession>) {
+    suspend fun saveSessionList(sessions: List<ChatSession>): Boolean {
         ensureMigrated()
-        sessionsMutex.withLock {
+        return sessionsMutex.withLock {
             saveSessionListInternal(sessions)
         }
     }
@@ -288,11 +328,11 @@ class ChatStorageManager(private val context: Context) {
     }
 
     /**
-     * 保存某个会话的消息列表
+     * 保存某个会话的消息列表。返回写入是否成功。
      */
-    suspend fun saveSessionMessages(sessionId: String, messages: List<Message>) {
+    suspend fun saveSessionMessages(sessionId: String, messages: List<Message>): Boolean {
         ensureMigrated()
-        messagesMutex.withLock {
+        return messagesMutex.withLock {
             saveSessionMessagesInternal(sessionId, messages)
         }
     }
@@ -304,6 +344,42 @@ class ChatStorageManager(private val context: Context) {
         ensureMigrated()
         return messagesMutex.withLock {
             loadSessionMessagesInternal(sessionId)
+        }
+    }
+
+    /** 会话消息文件健康态（审计 R-07）：区分合法空会话、文件缺失与解析损坏。 */
+    enum class MessageFileState { OK, MISSING, CORRUPT }
+
+    /**
+     * 探测会话消息文件可读性（不触发 .corrupt 备份等副作用，供绑定前检查）。
+     * 文件不存在 = MISSING；存在但解析失败 = CORRUPT；可读（含空列表）= OK。
+     */
+    suspend fun probeSessionMessages(sessionId: String): MessageFileState {
+        ensureMigrated()
+        return messagesMutex.withLock {
+            val file = File(sessionsDir, "session_$sessionId.json")
+            if (!file.exists()) return@withLock MessageFileState.MISSING
+            try {
+                val type = object : TypeToken<List<Message>>() {}.type
+                gson.fromJson<List<Message>>(file.readText(), type)
+                MessageFileState.OK
+            } catch (e: Exception) {
+                e.printStackTrace()
+                MessageFileState.CORRUPT
+            }
+        }
+    }
+
+    /**
+     * 为新建会话落盘合法空消息文件（审计 R-07）：此后文件缺失一律视为异常态，
+     * 不会被当成"空历史"静默重建。
+     */
+    suspend fun ensureSessionMessageFile(sessionId: String): Boolean {
+        ensureMigrated()
+        return messagesMutex.withLock {
+            val file = File(sessionsDir, "session_$sessionId.json")
+            if (file.exists()) return@withLock true
+            saveSessionMessagesInternal(sessionId, emptyList())
         }
     }
 
@@ -405,11 +481,14 @@ class ChatStorageManager(private val context: Context) {
     }
 
     /**
-     * 原子化更新会话消息
+     * 原子化更新会话消息。返回写入是否成功。
+     * 防复活护栏（审计 R-03/R-06）：会话已不在元数据列表（被删除/恢复换绑）时拒绝写入，
+     * 晚到的后台任务（问候/图注/快照补写）不得重建已删除会话的消息文件。
      */
-    suspend fun updateSessionMessages(sessionId: String, updateBlock: (List<Message>) -> List<Message>) {
+    suspend fun updateSessionMessages(sessionId: String, updateBlock: (List<Message>) -> List<Message>): Boolean {
         ensureMigrated()
-        messagesMutex.withLock {
+        return messagesMutex.withLock {
+            if (loadSessionListInternal().none { it.id == sessionId }) return@withLock false
             val current = loadSessionMessagesInternal(sessionId)
             val updated = updateBlock(current)
             saveSessionMessagesInternal(sessionId, updated)
@@ -417,11 +496,11 @@ class ChatStorageManager(private val context: Context) {
     }
 
     /**
-     * 原子化更新会话列表
+     * 原子化更新会话列表。返回写入是否成功。
      */
-    suspend fun updateSessionList(updateBlock: (List<ChatSession>) -> List<ChatSession>) {
+    suspend fun updateSessionList(updateBlock: (List<ChatSession>) -> List<ChatSession>): Boolean {
         ensureMigrated()
-        sessionsMutex.withLock {
+        return sessionsMutex.withLock {
             val current = loadSessionListInternal()
             val updated = updateBlock(current)
             saveSessionListInternal(updated)
@@ -429,14 +508,34 @@ class ChatStorageManager(private val context: Context) {
     }
 
     /**
-     * 原子化更新某个会话的核心记忆
+     * 原子化更新某个会话的核心记忆，并递增该会话的记忆修订号
+     * （审计 R-02：修订号是整理 Worker 条件提交的依据，任何核心记忆写入都必须经过这里）。
      */
-    suspend fun updateSessionCoreMemories(sessionId: String, memories: List<String>) {
+    suspend fun updateSessionCoreMemories(sessionId: String, memories: List<String>): Boolean {
         ensureMigrated()
-        updateSessionList { currentList ->
+        return updateSessionList { currentList ->
             currentList.map { session ->
                 if (session.id == sessionId) {
-                    session.copy(coreMemories = memories)
+                    session.copy(
+                        coreMemories = memories,
+                        memoryRevision = session.memoryRevision + 1
+                    )
+                } else {
+                    session
+                }
+            }
+        }
+    }
+
+    /**
+     * 原子推进某个会话的记忆整理水位（仅 Worker 整理成功后调用）。
+     */
+    suspend fun updateSessionConsolidationWatermark(sessionId: String, consolidatedUpTo: Int): Boolean {
+        ensureMigrated()
+        return updateSessionList { currentList ->
+            currentList.map { session ->
+                if (session.id == sessionId) {
+                    session.copy(consolidatedUpTo = consolidatedUpTo)
                 } else {
                     session
                 }
@@ -460,10 +559,6 @@ class ChatStorageManager(private val context: Context) {
         }
     }
 
-    /**
-     * 原子化累加某个会话的 token 用量（加性：prompt/completion 为增量，跨多次调用累计）。
-     * lastContextTokens 传非 null 时覆盖（仅主聊天流更新），否则保留旧值。
-     */
     /**
      * 原子化累加某个会话的 token 用量（加性：prompt/completion 为增量，跨多次调用累计）。
      * lastContextTokens 传非 null 时覆盖（仅主聊天流更新），否则保留旧值。

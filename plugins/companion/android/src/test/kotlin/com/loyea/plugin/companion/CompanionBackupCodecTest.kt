@@ -4,12 +4,14 @@ import com.loyea.ui.chat.ChatSession
 import com.loyea.ui.chat.Message
 import com.loyea.ui.chat.Sender
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * S-08 备份编解码合同测试：导出/恢复往返、格式与版本拒绝（DATA-03）、
- * 备份不含任何 API Key（DATA-01）、媒体字段剥离（DATA-02）。
+ * 备份不含任何 API Key（DATA-01）、媒体字段剥离（DATA-02）、
+ * v2 配置与图谱记忆完整性（审计 R-05）、v1 旧备份兼容。
  */
 class CompanionBackupCodecTest {
 
@@ -47,15 +49,30 @@ class CompanionBackupCodecTest {
         )
     )
 
-    private fun exportSample(): String = CompanionBackupCodec.exportJson(
+    private fun sampleConfig() = CompanionConfig(
+        enabled = true,
         displayName = "Loyea",
-        perceptionEnabled = true,
-        proactiveEnabled = false,
-        configVersion = 1,
-        createdAt = 42L,
+        userCalledName = "小艾",
+        perceptionEnabled = false,
+        proactiveEnabled = true,
+        dndStartMinute = 22 * 60,
+        dndEndMinute = 7 * 60,
+        createdAt = 42L
+    )
+
+    private fun sampleTriples() = listOf(
+        CompanionBackupCodec.BackupTriple(
+            s = "用户", p = "喜欢", o = "抹茶燕麦拿铁",
+            creationTime = 10L, lastMentionedTime = 20L, mentionCount = 3, baseWeight = 1.0f
+        )
+    )
+
+    private fun exportSample(): String = CompanionBackupCodec.exportJson(
+        config = sampleConfig(),
         exportedAt = 999L,
         session = sampleSession(),
-        messages = sampleMessages()
+        messages = sampleMessages(),
+        graphTriples = sampleTriples()
     )
 
     @Test
@@ -79,10 +96,51 @@ class CompanionBackupCodecTest {
     }
 
     @Test
+    fun `v2 backup carries full companion config`() {
+        val preview = (CompanionBackupCodec.parse(exportSample()) as CompanionBackupCodec.ParseResult.Ok).preview
+        val cfg = preview.companionConfig
+        assertTrue(cfg != null)
+        // R-05：称呼、免打扰、感知/主动开关都随备份迁移
+        assertEquals("小艾", cfg!!.userCalledName)
+        assertEquals(22 * 60, cfg.dndStartMinute)
+        assertEquals(7 * 60, cfg.dndEndMinute)
+        assertEquals(false, cfg.perceptionEnabled)
+        assertEquals(true, cfg.proactiveEnabled)
+    }
+
+    @Test
+    fun `v2 backup carries graph triples with weights`() {
+        val preview = (CompanionBackupCodec.parse(exportSample()) as CompanionBackupCodec.ParseResult.Ok).preview
+        assertEquals(1, preview.graphTriples.size)
+        val t = preview.graphTriples.first()
+        assertEquals("用户", t.s)
+        assertEquals("喜欢", t.p)
+        assertEquals("抹茶燕麦拿铁", t.o)
+        assertEquals(3, t.mentionCount)
+        assertEquals(10L, t.creationTime)
+        assertEquals(20L, t.lastMentionedTime)
+    }
+
+    @Test
+    fun `legacy v1 backup parses without config and triples`() {
+        // 模拟 v1 备份：version=1、无 graphTriples、companion 无称呼/免打扰字段
+        val v1 = exportSample()
+            .replace("\"version\":2", "\"version\":1")
+            .replace(Regex("\"graphTriples\":\\[.*?\\]"), "\"graphTriples\":[]")
+        val result = CompanionBackupCodec.parse(v1)
+        assertTrue(result is CompanionBackupCodec.ParseResult.Ok)
+        val preview = (result as CompanionBackupCodec.ParseResult.Ok).preview
+        assertNull(preview.companionConfig)
+        assertTrue(preview.graphTriples.isEmpty())
+        assertEquals(2, preview.messageCount)
+    }
+
+    @Test
     fun `export strips media paths and secrets`() {
         val json = exportSample()
-        // DATA-02：本地媒体路径不随备份迁移
+        // DATA-02：本地媒体路径与头像文件不随备份迁移
         assertTrue(!json.contains("vision_1.jpg"))
+        assertTrue(!json.contains("avatarUri"))
         // DATA-01：结构上不含 API Key / 授权字段
         assertTrue(!json.contains("apiKey"))
         assertTrue(!json.contains("Authorization"))
@@ -98,8 +156,8 @@ class CompanionBackupCodecTest {
     @Test
     fun `wrong version is rejected`() {
         val json = exportSample()
-        assertTrue(json.contains("\"version\":" + CompanionBackupCodec.BACKUP_VERSION))
-        val result = CompanionBackupCodec.parse(json.replace("\"version\":1", "\"version\":99"))
+        assertTrue(json.contains("\"version\":${CompanionBackupCodec.BACKUP_VERSION}"))
+        val result = CompanionBackupCodec.parse(json.replace("\"version\":2", "\"version\":99"))
         assertTrue(result is CompanionBackupCodec.ParseResult.Rejected)
     }
 

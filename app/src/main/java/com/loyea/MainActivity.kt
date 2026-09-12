@@ -73,6 +73,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        // 审计 R-06：应用前台状态供 GreetingWorker 门控读取（前台不打扰，改约稍后）
+        com.loyea.plugin.companion.CompanionRuntime.uiForeground = true
         if (::chatViewModel.isInitialized) {
             chatViewModel.startPerceptionSensors()
         }
@@ -131,9 +133,20 @@ class MainActivity : ComponentActivity() {
 
         chatViewModel = androidx.lifecycle.ViewModelProvider(this)[ChatViewModel::class.java]
 
-        // 启动自愈注册：检查是否开启了后台问候，如果开启则用 KEEP 策略启动初始延时的 GreetingWorker
+        // 陪伴主动问候通知路由（审计 R-06）：点击通知 → 恢复陪伴模式入口，
+        // 会话绑定不变（sessionId 留给 CompanionRoot 的绑定流程解析）。
+        if (intent?.getBooleanExtra(EXTRA_OPEN_COMPANION, false) == true) {
+            val companionStore = com.loyea.plugin.companion.CompanionConfigStore(this)
+            val companionConfig = companionStore.load()
+            companionStore.save(companionConfig.copy(enabled = true))
+        }
+
+        // 启动自愈注册：后台问候调度自愈（KEEP 策略保留已存在的倒计时）。
+        // 触发条件 = 普通模式总开关，或陪伴主动联系开启（两条路径共用同一调度链，审计 R-06）
         val enableBgGreeting = prefs.getBoolean("enable_background_greeting", true)
-        if (enableBgGreeting) {
+        val companionProactiveOn = com.loyea.plugin.companion.CompanionConfigStore(this)
+            .load().let { it.enabled && it.proactiveEnabled }
+        if (enableBgGreeting || companionProactiveOn) {
             val randomDelayMinutes = kotlin.random.Random.nextInt(60, 180).toLong()
             val workRequest = androidx.work.OneTimeWorkRequestBuilder<com.loyea.worker.GreetingWorker>()
                 .setInitialDelay(randomDelayMinutes, java.util.concurrent.TimeUnit.MINUTES)
@@ -370,9 +383,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
+        com.loyea.plugin.companion.CompanionRuntime.uiForeground = false
         if (::chatViewModel.isInitialized) {
             chatViewModel.stopResponse()
             chatViewModel.stopPerceptionSensors()
         }
+    }
+
+    companion object {
+        /** 陪伴主动问候通知点击路由：回到陪伴模式（审计 R-06 通知路由合同）。 */
+        const val EXTRA_OPEN_COMPANION = "loyea_extra_open_companion"
     }
 }

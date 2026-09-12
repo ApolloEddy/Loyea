@@ -204,8 +204,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private var responseJob: kotlinx.coroutines.Job? = null
 
+    /**
+     * 会话附属后台任务（语音转写、自动图注等，审计 R-03）：与 responseJob 同权取消。
+     * 任务启动时捕获来源会话，完成回发前校验归属——切换/关闭/恢复/重开期间
+     * 迟到的转写文本绝不发进新会话。
+     */
+    @Volatile private var sessionAuxJob: kotlinx.coroutines.Job? = null
+
     fun stopResponse() {
         responseJob?.cancel()
+        sessionAuxJob?.cancel()
+        sessionAuxJob = null
         isThinking.value = false
         isMcpRunning.value = false
         val lastMsg = messages.value.lastOrNull()
@@ -643,6 +652,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectSession(sessionId: String) {
         stopResponse()
+        // R-03：切换会话取消进行中的录音（音频文件丢弃），转写任务已由 stopResponse 一并取消
+        if (isRecordingActive || isRecording.value) {
+            stopRecording { file, _ -> file?.delete() }
+        }
         stopAudio() // 切换会话时停止跨会话残留的音频播放
         currentSessionId.value = sessionId
         currentVoiceEmotion.value = null // 清空临时情感缓存，防止信息混用污染
@@ -947,14 +960,26 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * 陪伴模式插件钩子（docs/Loyea-Companion-Mode-Spec-v0.1）：
      * FUN-01 唯一会话——已存在陪伴归属会话则返回其 ID；否则在 allowCreate=true 时
-     * 创建一次（不写开场白，UI-09 空会话占位由插件层渲染；useSystemTime=true 对应
-     * 物理感知默认开）。allowCreate=false 且无记录时返回 null（FUN-09 交给插件恢复态）。
+     * 创建一次（不写开场白，UI-09 空会话占位由插件层渲染）。
+     * perceptionOn 为插件感知总开关（审计 R-01）：创建时会话 useSystemTime 以它为初值，
+     * 宿主既有的全部感知门控（前台上下文/工具执行/记忆过滤/后台问候）随之生效。
+     * allowCreate=false 且无记录时返回 null（FUN-09 交给插件恢复态）。
+     * 绑定恢复除元数据外还校验消息文件可读（审计 R-07）：文件缺失/损坏不静默当作空历史。
      */
-    suspend fun ensureCompanionSession(characterId: String, title: String, allowCreate: Boolean): String? {
+    suspend fun ensureCompanionSession(
+        characterId: String,
+        title: String,
+        allowCreate: Boolean,
+        perceptionOn: Boolean = true
+    ): String? {
         // 磁盘为唯一真源：重开/恢复（DATA-05）后内存列表可能滞后残留旧陪伴条目，
         // 一律以磁盘判定，避免把已删除的会话当作现存绑定（FUN-09 竞态防线）
         val fromDisk = storageManager.loadSessionList().firstOrNull { it.characterId == characterId }
         if (fromDisk != null) {
+            // R-07：元数据存在但消息文件缺失/损坏 → 交插件恢复态，不进入 READY 空时间线
+            if (storageManager.probeSessionMessages(fromDisk.id) != ChatStorageManager.MessageFileState.OK) {
+                return null
+            }
             if (sessions.value.none { it.id == fromDisk.id }) {
                 sessions.value = (listOf(fromDisk) + sessions.value.filterNot { it.characterId == characterId })
                     .sortedByDescending { it.lastActiveTime }
@@ -972,12 +997,52 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             title = title,
             lastActiveTime = System.currentTimeMillis(),
             characterId = characterId,
-            useSystemTime = true
+            useSystemTime = perceptionOn
         )
         val updated = (listOf(session) + sessions.value).sortedByDescending { it.lastActiveTime }
+        if (!storageManager.saveSessionList(updated)) return null
+        // R-07：创建即落盘合法空消息文件；此后文件缺失一律是异常态
+        storageManager.ensureSessionMessageFile(sessionId)
         sessions.value = updated
-        storageManager.saveSessionList(updated)
         return sessionId
+    }
+
+    /**
+     * 会话级物理感知开关（审计 R-01）：陪伴设置的总开关以会话 useSystemTime 为唯一生效载体，
+     * 前台请求、工具执行、记忆敏感过滤、后台问候读取的同一份状态随之即时变化。
+     * 与普通模式「使用系统时间」开关互不影响（陪伴会话不出现在普通侧栏）。
+     */
+    fun setSessionPerceptionEnabled(sessionId: String, enabled: Boolean) {
+        if (sessionId.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            var updatedList: List<ChatSession> = emptyList()
+            storageManager.updateSessionList { diskSessions ->
+                val updated = diskSessions.map { session ->
+                    if (session.id == sessionId && session.useSystemTime != enabled) {
+                        session.copy(useSystemTime = enabled)
+                    } else {
+                        session
+                    }
+                }
+                updatedList = updated
+                updated
+            }
+            if (updatedList.isNotEmpty()) {
+                withContext(Dispatchers.Main) { sessions.value = updatedList }
+            }
+        }
+    }
+
+    /**
+     * 请求中的用户称呼（审计 R-08）：陪伴会话使用陪伴设置里「希望被称呼的名字」，
+     * 未填写时回落宿主用户名；普通会话维持宿主设置不变。
+     */
+    private fun effectivePromptUserName(session: ChatSession?): String {
+        if (session != null && com.loyea.plugin.companion.CompanionContract.isCompanionCharacter(session.characterId)) {
+            val called = com.loyea.plugin.companion.CompanionConfigStore(context).load().userCalledName
+            if (called.isNotBlank()) return called
+        }
+        return userName.value
     }
 
     /**
@@ -1624,7 +1689,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             val effectivePromptParts = promptParts ?: PromptAssembler.assemblePromptParts(
                 card = characterCard,
-                userName = userName.value,
+                // R-08：陪伴会话用陪伴设置的被称呼名字；普通会话维持宿主用户名
+                userName = effectivePromptUserName(activeSession.value),
                 useSystemTime = sessionUsesSystemTime,
                 includeSystemTimeInSnapshot = true,
                 physicalContext = physicalContextData,
@@ -3478,15 +3544,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun startRecording() {
-        if (isRecording.value) return
+    /**
+     * 开始录音。返回是否真正启动（权限被拒/初始化失败返回 false）——
+     * 审计 R-09：调用方必须以返回值为准切换“正在聆听”UI，不得盲目置真。
+     */
+    fun startRecording(): Boolean {
+        if (isRecording.value || isRecordingActive) return true
         // RECORD_AUDIO 启动时已申请；被拒后直录会 SecurityException，这里兜底守卫
         if ( androidx.core.content.ContextCompat.checkSelfPermission(
                 getApplication<Application>(), android.Manifest.permission.RECORD_AUDIO
             ) != android.content.pm.PackageManager.PERMISSION_GRANTED
         ) {
             isRecordingActive = false
-            return
+            return false
         }
         stopAudio() // 录音前停止正在播放的音频（含自动 TTS），防止回声循环
         isRecordingActive = true
@@ -3495,6 +3565,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 // 延迟 200ms 避让可能正在运行的 NoiseProvider 背景录音
                 kotlinx.coroutines.delay(200)
+                // R-03：延迟窗口内已被取消（切换会话/停止录音）→ 不得再占用麦克风
+                if (!isRecordingActive) return@launch
                 
                 val cacheDir = context.cacheDir
                 audioFile = File(cacheDir, "record_${System.currentTimeMillis()}.wav")
@@ -3572,6 +3644,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 Log.e("ChatViewModel", "Failed to start recording with AudioRecord", e)
             }
         }
+        return true
     }
 
     fun stopRecording(onFinished: (File?, Int) -> Unit) {
@@ -4251,7 +4324,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         isThinking.value = true
-        viewModelScope.launch(Dispatchers.IO) {
+        // R-03：转写任务归属当前会话——先记录来源，停止响应/切换会话会取消本任务，
+        // 回发前再次校验归属，迟到的转写文本绝不落入新会话
+        val ownerSessionId = currentSessionId.value
+        val job = viewModelScope.launch(Dispatchers.IO) {
             try {
                 val targetSttConfig = sttChannel.config
                 val text = llmClient.transcribeAudio(targetSttConfig, file, sttChannel.model, sttProviderTemplate.value)
@@ -4284,6 +4360,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
                 withContext(Dispatchers.Main) {
                     isThinking.value = false
+                    // 归属校验：会话已切换（含关闭陪伴/恢复备份/重新开始）则丢弃，音频文件一并清理
+                    if (currentSessionId.value != ownerSessionId) {
+                        file.delete()
+                        return@withContext
+                    }
                     if (!cleanedText.isNullOrBlank()) {
                         sendMessage(cleanedText, null, file.absolutePath, duration)
                     } else {
@@ -4300,6 +4381,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+        sessionAuxJob = job
+        job.invokeOnCompletion { if (sessionAuxJob === job) sessionAuxJob = null }
     }
 
     fun updateMessageContent(messageId: String, newContent: String) {

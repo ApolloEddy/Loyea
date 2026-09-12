@@ -52,7 +52,8 @@ class GraphMemoryManager(private val context: Context) {
     }
 
     /**
-     * 保存三元组列表到本地 JSON 文件（原子写：临时文件 + 重命名，防止中途崩溃产生半截 JSON）
+     * 保存三元组列表到本地 JSON 文件（原子写：临时文件 + 重命名，防止中途崩溃产生半截 JSON；
+     * java.io rename 在 Windows JVM 上不允许覆盖已存在目标 → Files.move(REPLACE_EXISTING)）
      */
     private suspend fun saveTriplesInternal(triples: List<MemoryTriple>) = fileMutex.withLock {
         try {
@@ -60,8 +61,18 @@ class GraphMemoryManager(private val context: Context) {
             val tmpFile = File(memoriesFile.parentFile, "${memoriesFile.name}.tmp")
             tmpFile.writeText(json)
             if (!tmpFile.renameTo(memoriesFile)) {
-                tmpFile.delete()
-                memoriesFile.writeText(json)
+                try {
+                    java.nio.file.Files.move(
+                        tmpFile.toPath(), memoriesFile.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                        java.nio.file.StandardCopyOption.ATOMIC_MOVE
+                    )
+                } catch (e: java.nio.file.AtomicMoveNotSupportedException) {
+                    java.nio.file.Files.move(
+                        tmpFile.toPath(), memoriesFile.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING
+                    )
+                }
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -147,6 +158,54 @@ class GraphMemoryManager(private val context: Context) {
     suspend fun deleteTriple(id: Long) {
         val currentList = loadTriplesInternal().toMutableList()
         currentList.removeAll { it.id == id }
+        saveTriplesInternal(currentList)
+    }
+
+    /**
+     * 清除某个会话的全部图谱记忆（审计 R-05：重新开始陪伴必须清图谱，而非只删消息文件）。
+     * 返回是否删除了条目。
+     */
+    suspend fun clearSession(characterId: String, sessionId: String): Boolean {
+        val currentList = loadTriplesInternal()
+        val remaining = currentList.filterNot {
+            it.characterId == characterId && it.sessionId == sessionId
+        }
+        if (remaining.size == currentList.size) return false
+        saveTriplesInternal(remaining)
+        return true
+    }
+
+    /**
+     * 按完整字段插入三元组（审计 R-05：备份恢复重映射会话归属时保留原时间与权重）。
+     * ID 由存储统一分配；同会话同语义去重交给调用方。
+     */
+    suspend fun insertTriple(
+        characterId: String,
+        sessionId: String,
+        subject: String,
+        predicate: String,
+        `object`: String,
+        creationTime: Long,
+        lastMentionedTime: Long,
+        mentionCount: Int,
+        baseWeight: Float
+    ) {
+        val currentList = loadTriplesInternal().toMutableList()
+        val newId = (currentList.maxOfOrNull { it.id } ?: 0L) + 1L
+        currentList.add(
+            MemoryTriple(
+                id = newId,
+                characterId = characterId,
+                sessionId = sessionId,
+                subject = subject,
+                predicate = predicate,
+                `object` = `object`,
+                creationTime = creationTime,
+                lastMentionedTime = lastMentionedTime,
+                mentionCount = mentionCount,
+                baseWeight = baseWeight
+            )
+        )
         saveTriplesInternal(currentList)
     }
 

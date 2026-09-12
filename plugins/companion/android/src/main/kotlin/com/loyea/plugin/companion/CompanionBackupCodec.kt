@@ -8,21 +8,35 @@ import com.loyea.ui.chat.ChatSession
 import com.loyea.ui.chat.Message
 
 /**
- * S-08 陪伴备份编解码（DATA-01~05 最小合同）。
+ * S-08 陪伴备份编解码（DATA-01~05 合同，审计 R-05 补全）。
  *
- * 备份为单一 JSON 快照：陪伴范围设置 + 会话元数据（核心记忆/摘要/token 计量）+ 全量消息
- * （含多版本与时间戳）。DATA-01：不含 API Key、授权令牌或任何服务配置（结构上就不写入）；
- * DATA-02：不含图片/音频二进制，媒体字段在导出时剥离，恢复后以文字描述与占位呈现。
- * DATA-04：session.id 仅为旧标识参考，恢复方必须生成新 id 并递增 bindingRevision。
+ * 备份为单一 JSON 快照：陪伴范围设置（含称呼/免打扰/开关）+ 会话元数据（核心记忆/摘要/token 计量）
+ * + 全量消息（含多版本与时间戳）+ 图谱记忆三元组（v2 起）。
+ * DATA-01：不含 API Key、授权令牌或任何服务配置（结构上就不写入）；
+ * DATA-02：不含图片/音频二进制，媒体字段在导出时剥离，恢复后以文字描述呈现；
+ * 头像为本地文件路径，不随备份迁移（恢复后重新设置）。
+ * DATA-04：session.id 仅为旧标识参考，恢复方必须生成新 id 并递增 bindingRevision、
+ * 对图谱条目重映射会话归属。
  */
 object CompanionBackupCodec {
 
     const val BACKUP_TYPE = "loyea_companion_backup"
-    const val BACKUP_VERSION = 1
+    const val BACKUP_VERSION = 2
 
     private val gson = Gson()
 
-    /** 恢复前校验结果：仅携带展示所需摘要，不直接引用旧会话标识做写回。 */
+    /** 图谱三元组的备份投影（不携带运行期 id / 会话归属，恢复方重新挂接）。 */
+    data class BackupTriple(
+        val s: String = "",
+        val p: String = "",
+        val o: String = "",
+        val creationTime: Long = 0L,
+        val lastMentionedTime: Long = 0L,
+        val mentionCount: Int = 1,
+        val baseWeight: Float = 1.0f
+    )
+
+    /** 恢复前校验结果：仅携带展示与恢复所需数据，不直接引用旧会话标识做写回。 */
     data class BackupPreview(
         val displayName: String,
         val createdAt: Long,
@@ -32,7 +46,10 @@ object CompanionBackupCodec {
         val firstMessageAt: Long?,
         val lastMessageAt: Long?,
         val session: ChatSession,
-        val messages: List<Message>
+        val messages: List<Message>,
+        /** v2 备份携带的陪伴设置；v1 旧备份为 null（恢复时保留当前设置）。 */
+        val companionConfig: CompanionConfig?,
+        val graphTriples: List<BackupTriple>
     )
 
     sealed class ParseResult {
@@ -42,14 +59,11 @@ object CompanionBackupCodec {
 
     /** 导出 JSON（DATA-01/02：不写 Key，不写媒体二进制；媒体字段剥离，imageDesc 保留）。 */
     fun exportJson(
-        displayName: String,
-        perceptionEnabled: Boolean,
-        proactiveEnabled: Boolean,
-        configVersion: Int,
-        createdAt: Long,
+        config: CompanionConfig,
         exportedAt: Long,
         session: ChatSession,
-        messages: List<Message>
+        messages: List<Message>,
+        graphTriples: List<BackupTriple>
     ): String {
         val root = JsonObject()
         root.addProperty("type", BACKUP_TYPE)
@@ -57,14 +71,17 @@ object CompanionBackupCodec {
         root.addProperty("exportedAt", exportedAt)
 
         val companion = JsonObject()
-        companion.addProperty("displayName", displayName)
-        companion.addProperty("perceptionEnabled", perceptionEnabled)
-        companion.addProperty("proactiveEnabled", proactiveEnabled)
-        companion.addProperty("configVersion", configVersion)
-        companion.addProperty("createdAt", createdAt)
+        companion.addProperty("displayName", config.displayName)
+        companion.addProperty("userCalledName", config.userCalledName)
+        companion.addProperty("perceptionEnabled", config.perceptionEnabled)
+        companion.addProperty("proactiveEnabled", config.proactiveEnabled)
+        companion.addProperty("dndStartMinute", config.dndStartMinute)
+        companion.addProperty("dndEndMinute", config.dndEndMinute)
+        companion.addProperty("configVersion", config.configVersion)
+        companion.addProperty("createdAt", config.createdAt)
         root.add("companion", companion)
 
-        // 会话元数据：剥掉运行期标识（id 由恢复方重新映射，DATA-04）
+        // 会话元数据：剥掉运行期标识（id 由恢复方重新映射，DATA-04）与本地头像路径
         val sessionTree = gson.toJsonTree(session).asJsonObject.deepCopy()
         sessionTree.remove("id")
         sessionTree.remove("legacyExtrasJson")
@@ -80,10 +97,25 @@ object CompanionBackupCodec {
             messagesArray.add(tree)
         }
         root.add("messages", messagesArray)
+
+        // 图谱记忆（v2）：只携带语义与时间/权重，归属由恢复方重映射到新会话
+        val triplesArray = JsonArray()
+        for (t in graphTriples) {
+            val o = JsonObject()
+            o.addProperty("s", t.s)
+            o.addProperty("p", t.p)
+            o.addProperty("o", t.o)
+            o.addProperty("creationTime", t.creationTime)
+            o.addProperty("lastMentionedTime", t.lastMentionedTime)
+            o.addProperty("mentionCount", t.mentionCount)
+            o.addProperty("baseWeight", t.baseWeight)
+            triplesArray.add(o)
+        }
+        root.add("graphTriples", triplesArray)
         return gson.toJson(root)
     }
 
-    /** 恢复前校验（DATA-03：全部解析成功才算 Ok，任何结构异常原样拒绝）。 */
+    /** 恢复前校验（DATA-03：全部解析成功才算 Ok，任何结构异常原样拒绝）。接受 v1/v2。 */
     fun parse(json: String): ParseResult {
         val root = try {
             JsonParser.parseString(json)
@@ -99,7 +131,7 @@ object CompanionBackupCodec {
         val version = obj.get("version")?.takeIf { it.isJsonPrimitive }?.let {
             try { it.asInt } catch (e: Exception) { -1 }
         } ?: -1
-        if (version != BACKUP_VERSION) return ParseResult.Rejected("备份版本不受支持（v$version）")
+        if (version !in 1..BACKUP_VERSION) return ParseResult.Rejected("备份版本不受支持（v$version）")
 
         val session = try {
             gson.fromJson(obj.get("session"), ChatSession::class.java)
@@ -120,6 +152,39 @@ object CompanionBackupCodec {
         val displayName = companion?.get("displayName")?.asString ?: "Loyea"
         val createdAt = companion?.get("createdAt")?.asLong ?: 0L
         val exportedAt = obj.get("exportedAt")?.asLong ?: 0L
+
+        // v2：完整陪伴设置（缺项回落当前默认值语义）
+        val companionConfig = if (version >= 2 && companion != null) {
+            CompanionConfig(
+                displayName = companion.get("displayName")?.asString ?: "Loyea",
+                userCalledName = companion.get("userCalledName")?.asString ?: "",
+                perceptionEnabled = companion.get("perceptionEnabled")?.asBoolean ?: true,
+                proactiveEnabled = companion.get("proactiveEnabled")?.asBoolean ?: false,
+                dndStartMinute = companion.get("dndStartMinute")?.asInt ?: (23 * 60),
+                dndEndMinute = companion.get("dndEndMinute")?.asInt ?: (8 * 60),
+                configVersion = companion.get("configVersion")?.asInt ?: 1,
+                createdAt = companion.get("createdAt")?.asLong ?: 0L
+            )
+        } else null
+
+        // v2：图谱记忆（解析失败的条目跳过，不整份拒绝）
+        val graphTriples = if (version >= 2) {
+            val arr = obj.getAsJsonArray("graphTriples")
+            arr?.mapNotNull { el ->
+                runCatching {
+                    val t = el.asJsonObject
+                    BackupTriple(
+                        s = t.get("s")?.asString ?: "",
+                        p = t.get("p")?.asString ?: "",
+                        o = t.get("o")?.asString ?: "",
+                        creationTime = t.get("creationTime")?.asLong ?: 0L,
+                        lastMentionedTime = t.get("lastMentionedTime")?.asLong ?: 0L,
+                        mentionCount = t.get("mentionCount")?.asInt ?: 1,
+                        baseWeight = t.get("baseWeight")?.asFloat ?: 1.0f
+                    )
+                }.getOrNull()?.takeIf { it.s.isNotBlank() && it.p.isNotBlank() && it.o.isNotBlank() }
+            } ?: emptyList()
+        } else emptyList()
 
         // 归一化：Gson 对缺失集合字段可能产出 null（与宿主 ChatStorageManager 同样的防御）
         val safeMessages = messages.map { m ->
@@ -142,7 +207,9 @@ object CompanionBackupCodec {
                 firstMessageAt = times.minOrNull(),
                 lastMessageAt = times.maxOrNull(),
                 session = session,
-                messages = safeMessages
+                messages = safeMessages,
+                companionConfig = companionConfig,
+                graphTriples = graphTriples
             )
         )
     }

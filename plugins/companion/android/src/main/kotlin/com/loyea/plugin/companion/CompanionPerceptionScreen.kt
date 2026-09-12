@@ -311,13 +311,6 @@ private fun PerceptionSwitch(checked: Boolean, onChange: (Boolean) -> Unit) {
 
 private fun stateOf(granted: Boolean) = if (granted) SourceState.AVAILABLE else SourceState.NEED_AUTH
 
-private fun sensorAvailable(context: Context): SourceState {
-    val sm = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager ?: return SourceState.NO_DATA
-    val hasLight = sm.getDefaultSensor(Sensor.TYPE_LIGHT) != null
-    val hasMotion = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null
-    return if (hasLight || hasMotion) SourceState.AVAILABLE else SourceState.NO_DATA
-}
-
 private fun openAppSettings(context: Context) {
     val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
     intent.data = Uri.fromParts("package", context.packageName, null)
