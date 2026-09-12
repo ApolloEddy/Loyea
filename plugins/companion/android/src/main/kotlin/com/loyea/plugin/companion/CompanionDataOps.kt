@@ -35,11 +35,13 @@ internal object CompanionDataOps {
         val storage = ChatStorageManager(context)
         val graph = GraphMemoryManager(context)
 
-        // 1. 冻结旧任务：响应流与转写等附属任务取消；旧代际写回经防复活护栏失效
+        // 1. 冻结旧任务：响应流、转写等附属任务与进行中的记忆整理全部取消；
+        //    旧代际写回经防复活护栏失效
         viewModel.stopResponse()
-
+        viewModel.cancelSessionAuxTasks()
         val old = viewModel.sessions.value.firstOrNull { CompanionContract.isCompanionCharacter(it.characterId) }
             ?: storage.loadSessionList().firstOrNull { CompanionContract.isCompanionCharacter(it.characterId) }
+        old?.let { viewModel.cancelMemoryConsolidation(it.id) }
         val newId = System.currentTimeMillis().toString()
 
         // 2. staging：新消息文件先落盘并校验（R-04：写入失败不得继续后续步骤）
@@ -107,11 +109,14 @@ internal object CompanionDataOps {
     /** 重新开始：清聊天/固定记忆/摘要/草稿/图谱（DATA-05），保留普通模式与公共服务配置。 */
     suspend fun restart(context: Context, viewModel: ChatViewModel): Unit = withContext(Dispatchers.IO) {
         viewModel.stopResponse() // DATA-05：使进行中的写回失效
+        viewModel.cancelSessionAuxTasks()
         val storage = ChatStorageManager(context)
         val graph = GraphMemoryManager(context)
         val old = viewModel.sessions.value.firstOrNull { CompanionContract.isCompanionCharacter(it.characterId) }
             ?: storage.loadSessionList().firstOrNull { CompanionContract.isCompanionCharacter(it.characterId) }
         old?.let {
+            // 撤销进行中的记忆整理：任务里的图谱写回会复活刚清掉的旧图谱
+            viewModel.cancelMemoryConsolidation(it.id)
             viewModel.clearDraft(it.id)
             graph.clearSession(CompanionContract.COMPANION_CHARACTER_ID, it.id)
             storage.deleteSession(it.id)

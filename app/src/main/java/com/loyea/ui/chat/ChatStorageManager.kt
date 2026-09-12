@@ -99,6 +99,14 @@ class ChatStorageManager(private val context: Context) {
         private val migrationMutex = Mutex()
     }
 
+    /**
+     * 会话 ID 缓存（防复活护栏的快速路径，审计修复 P3 性能）：
+     * 护栏在每次消息更新时检查会话存在性；缓存由 saveSessionListInternal（所有列表写路径的
+     * 唯一出口，锁内维护）与 deleteSession 同步更新。null = 尚未建立（首次读盘建立）。
+     * @Volatile 保证护栏线程可见性；粒度允许短暂偏差时以磁盘读兜底。
+     */
+    @Volatile private var cachedSessionIds: Set<String>? = null
+
     /** 所有读写前串行调用：确保迁移完成（幂等、进程内唯一）后才访问新存储根。 */
     private suspend fun ensureMigrated() {
         // manifest 已存在时只付一次 exists() 的代价；迁移本身由 migrator 幂等保证
@@ -122,7 +130,9 @@ class ChatStorageManager(private val context: Context) {
     private fun saveSessionListInternal(sessions: List<ChatSession>): Boolean {
         return try {
             val json = gson.toJson(sessions)
-            atomicWrite(sessionsFile, json)
+            val ok = atomicWrite(sessionsFile, json)
+            if (ok) cachedSessionIds = sessions.map { it.id }.toSet()
+            ok
         } catch (e: Exception) {
             e.printStackTrace()
             false
@@ -488,7 +498,14 @@ class ChatStorageManager(private val context: Context) {
     suspend fun updateSessionMessages(sessionId: String, updateBlock: (List<Message>) -> List<Message>): Boolean {
         ensureMigrated()
         return messagesMutex.withLock {
-            if (loadSessionListInternal().none { it.id == sessionId }) return@withLock false
+            // 护栏优先走缓存（锁内维护，与列表写同源）；缓存未建立时回退磁盘读
+            val known = cachedSessionIds
+            val exists = if (known != null) {
+                sessionId in known
+            } else {
+                loadSessionListInternal().any { it.id == sessionId }
+            }
+            if (!exists) return@withLock false
             val current = loadSessionMessagesInternal(sessionId)
             val updated = updateBlock(current)
             saveSessionMessagesInternal(sessionId, updated)

@@ -133,12 +133,14 @@ class MainActivity : ComponentActivity() {
 
         chatViewModel = androidx.lifecycle.ViewModelProvider(this)[ChatViewModel::class.java]
 
-        // 陪伴主动问候通知路由（审计 R-06）：点击通知 → 恢复陪伴模式入口，
-        // 会话绑定不变（sessionId 留给 CompanionRoot 的绑定流程解析）。
+        // 陪伴主动问候通知路由（审计 R-06）：点击通知 → 回到陪伴模式。仅在陪伴仍开启时路由——
+        // 用户已关闭陪伴的，旧通知只是打开应用，绝不静默重开模式。
         if (intent?.getBooleanExtra(EXTRA_OPEN_COMPANION, false) == true) {
             val companionStore = com.loyea.plugin.companion.CompanionConfigStore(this)
             val companionConfig = companionStore.load()
-            companionStore.save(companionConfig.copy(enabled = true))
+            if (companionConfig.enabled) {
+                companionStore.save(companionConfig.copy(enabled = true))
+            }
         }
 
         // 启动自愈注册：后台问候调度自愈（KEEP 策略保留已存在的倒计时）。

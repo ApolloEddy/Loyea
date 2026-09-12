@@ -158,9 +158,14 @@ fun CompanionRoot(
             onRetry = { bindRetry++ },
             onRestore = { restoreError = null; restoreBackupLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) },
             onRestart = {
-                // 明确的重新开始：仅清除绑定声明，创建全新陪伴会话；旧文件保留可找回
-                setConfig(config.copy(sessionId = ""))
-                bindRetry++
+                // 明确的重新开始：先丢弃坏条目（消息文件已缺失/损坏，仅移除元数据，
+                // 原数据文件保留在设备上），否则 bind 会重新发现旧条目再次进入恢复态；
+                // 再清除绑定声明创建全新陪伴会话
+                restoreScope.launch {
+                    viewModel.discardSessionsForCharacter(CompanionContract.COMPANION_CHARACTER_ID)
+                    setConfig(config.copy(sessionId = ""))
+                    bindRetry++
+                }
             }
         )
         BindState.READY -> when (subPage) {
@@ -393,6 +398,7 @@ fun disableCompanionMode(context: android.content.Context, viewModel: ChatViewMo
     val config = store.load()
     if (!config.enabled) return
     viewModel.stopResponse()
+    viewModel.cancelSessionAuxTasks() // 陪伴会话即将不可达：转写等附属任务一并取消
     store.save(config.copy(enabled = false))
     // 恢复目标必须是普通会话：lastNormalSessionId 被污染（历史版本/异常路径写入陪伴会话）时
     // 落回最近普通会话，绝不把陪伴会话当作普通模式恢复点（NAV-03/FUN-02）

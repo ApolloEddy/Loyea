@@ -113,6 +113,10 @@ class GreetingWorker(
         }
         val currentSession = session!!
 
+        // 登记生成时的会话身份：提交前必须完全一致（恢复换绑/重开重建都会改变 id 或代际）
+        val targetSessionId = currentSession.id
+        val targetBindingRevision = currentSession.bindingRevision
+
         // 2. 渠道解析：不伪报成功，不静默换配置（Spec §19）
         val repository = com.loyea.storage.ApiConfigRepository(context)
         val activeConfig = when (val chat = repository.resolve(com.loyea.storage.ChannelId.CHAT)) {
@@ -212,6 +216,14 @@ class GreetingWorker(
         }
         val commitSession = sessionAtCommit!!
 
+        // 会话身份校验（审计 R-06）：生成期间发生恢复换绑/重开重建 → 新会话不是问候目标，丢弃
+        if (commitSession.id != targetSessionId || commitSession.bindingRevision != targetBindingRevision) {
+            Log.d("GreetingWorker", "Companion greeting discarded: session rebound during generation.")
+            ledger.clearPending()
+            scheduleNextGreeting(60)
+            return Result.success()
+        }
+
         // 6. 落盘（稳定 ID：greet_<eventId>，重复投递不会产生第二条）
         val newMsg = Message(
             id = greetMessageId(eventId),
@@ -265,12 +277,9 @@ class GreetingWorker(
     }
 
     private fun notificationsGranted(): Boolean {
-        if (Build.VERSION.SDK_INT >= 33) {
-            return androidx.core.content.ContextCompat.checkSelfPermission(
-                context, android.Manifest.permission.POST_NOTIFICATIONS
-            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-        }
-        return true
+        // R-06：运行时权限之外还要看系统级通知开关（用户可在设置里静默屏蔽应用通知，
+        // SDK<33 无 POST_NOTIFICATIONS 权限但屏蔽依然存在）——屏蔽即不生成、不落盘
+        return androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled()
     }
 
     private fun greetMessageId(eventId: String) = "${GREETING_ID_PREFIX}$eventId"

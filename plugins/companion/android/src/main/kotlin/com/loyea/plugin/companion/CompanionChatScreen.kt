@@ -103,9 +103,11 @@ fun CompanionChatScreen(
     var inputFocused by remember { mutableStateOf(false) }
     var highlightedId by remember { mutableStateOf<String?>(null) }
     var selectedMessage by remember { mutableStateOf<Message?>(null) }
-    // R-09 录音状态修复：以 ViewModel 的真实录音状态为唯一来源——权限被拒/初始化失败时
-    // isRecording 不会变真，UI 不再出现"正在聆听"假象
+    // R-09 录音状态修复：显示态以 ViewModel 的真实录音状态为唯一来源（权限被拒/初始化失败
+    // 不再出现"正在聆听"假象）；按压-释放判定用同步置位的本地标志——isRecording 要到
+    // AudioRecord 真正启动后才置真，快按快放的释放事件不能依赖它
     val recording = viewModel.isRecording.value
+    var micPressed by remember { mutableStateOf(false) }
     // 图片待发送预览（S-02 临时内容）：沿用宿主 vision 缓存拷贝语义
     var pendingImagePath by remember { mutableStateOf<String?>(null) }
     // R-09：图片全屏预览
@@ -257,17 +259,20 @@ fun CompanionChatScreen(
             isThinking = isThinking,
             recording = recording,
             onMicPress = {
-                if (isThinking || recording) return@CompanionInputBar
+                if (isThinking || recording || micPressed) return@CompanionInputBar
                 if (!viewModel.enableStt.value) {
                     android.widget.Toast.makeText(
                         context, "语音输入功能在设置中已被关闭", android.widget.Toast.LENGTH_SHORT
                     ).show()
                     return@CompanionInputBar
                 }
+                micPressed = true
                 viewModel.startRecording()
             },
             onMicRelease = {
-                if (!recording) return@CompanionInputBar
+                // 同步按压标志判定：快按快放时 isRecording 还没置真，必须以 micPressed 为准
+                if (!micPressed) return@CompanionInputBar
+                micPressed = false
                 viewModel.stopRecording { file, duration ->
                     if (file == null) return@stopRecording
                     if (duration < 1) {
@@ -281,6 +286,7 @@ fun CompanionChatScreen(
                 }
             },
             onCancelRecording = {
+                micPressed = false
                 viewModel.stopRecording { file, _ ->
                     file?.delete()
                     android.widget.Toast.makeText(context, "录音已取消", android.widget.Toast.LENGTH_SHORT).show()

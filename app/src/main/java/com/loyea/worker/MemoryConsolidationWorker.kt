@@ -166,26 +166,34 @@ class MemoryConsolidationWorker(
 
                     // 条件提交（审计 R-02）：同一把锁内比对修订号——用户在模型运行期间
                     // 增/删/改/转固定过核心记忆则整轮作废；提取为空严格 no-op 不清空。
+                    // 感知开关以提交时刻的会话状态复核（R-01 在途残口）：运行中关闭感知，
+                    // 已提取的敏感事实在入库前仍会被拦下。
                     storageManager.updateSessionList { currentList ->
                         currentList.map { s ->
                             if (s.id != sessionId) s
-                            else when (val d = MemoryConsolidationPolicy.decideCoreCommit(
-                                revisionAtStart = revisionAtStart,
-                                currentRevision = s.memoryRevision,
-                                extracted = filteredExtracted,
-                                lockedFacts = coreFacts,
-                                processedCount = processedCount
-                            )) {
-                                is MemoryConsolidationPolicy.CoreDecision.Abort -> {
-                                    revisionConflict = true
-                                    s
+                            else {
+                                val effectiveExtracted = if (s.useSystemTime == true) filteredExtracted
+                                else filteredExtracted.filter { fact ->
+                                    fact.startsWith("★") || PromptAssembler.SENSITIVE_MEMORY_KEYWORDS.none { fact.contains(it, ignoreCase = true) }
                                 }
-                                is MemoryConsolidationPolicy.CoreDecision.AdvanceWatermark -> s
-                                is MemoryConsolidationPolicy.CoreDecision.Commit ->
-                                    s.copy(
-                                        coreMemories = d.memories,
-                                        memoryRevision = s.memoryRevision + 1
-                                    )
+                                when (val d = MemoryConsolidationPolicy.decideCoreCommit(
+                                    revisionAtStart = revisionAtStart,
+                                    currentRevision = s.memoryRevision,
+                                    extracted = effectiveExtracted,
+                                    lockedFacts = coreFacts,
+                                    processedCount = processedCount
+                                )) {
+                                    is MemoryConsolidationPolicy.CoreDecision.Abort -> {
+                                        revisionConflict = true
+                                        s
+                                    }
+                                    is MemoryConsolidationPolicy.CoreDecision.AdvanceWatermark -> s
+                                    is MemoryConsolidationPolicy.CoreDecision.Commit ->
+                                        s.copy(
+                                            coreMemories = d.memories,
+                                            memoryRevision = s.memoryRevision + 1
+                                        )
+                                }
                             }
                         }
                     }
@@ -236,7 +244,10 @@ class MemoryConsolidationWorker(
                     }
 
                     // 写入端隐私过滤：会话关闭物理感知时，拒绝含敏感健康/位置/设备信息的三元组入库
-                    val memoryFiltered = session.useSystemTime != true
+                    // （R-01 在途残口：以提交时刻从磁盘重读的会话状态为准，不用任务起点快照）
+                    val perceptionAtCommit = storageManager.loadSessionList()
+                        .firstOrNull { it.id == sessionId }?.useSystemTime == true
+                    val memoryFiltered = !perceptionAtCommit
                     for (item in triplesList) {
                         val s = item["s"]?.trim()
                         val p = item["p"]?.trim()
