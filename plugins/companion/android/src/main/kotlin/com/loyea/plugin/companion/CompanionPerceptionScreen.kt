@@ -71,6 +71,39 @@ fun CompanionPerceptionScreen(
     val context = LocalContext.current
     val masterOn = config.perceptionEnabled
 
+    // PER-01 运行时刷新：ON_RESUME（从系统授权页返回）或每次重组进入时重算授权/传感器状态，
+    // 避免页面停留在进页时的静态快照
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    var resumeTick by androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) resumeTick++
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    val locationGranted = remember(resumeTick) {
+        androidx.core.content.ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+    }
+    val micGranted = remember(resumeTick) {
+        androidx.core.content.ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+    }
+    val notificationGranted = remember(resumeTick) {
+        if (Build.VERSION.SDK_INT >= 33) {
+            androidx.core.content.ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        } else true
+    }
+    val sensorState = remember(resumeTick) {
+        val sm = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+        if (sm == null) SourceState.NO_DATA
+        else if (sm.getDefaultSensor(Sensor.TYPE_LIGHT) != null ||
+            sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null) SourceState.AVAILABLE
+        else SourceState.NO_DATA
+    }
+
     // 免打扰时间选择
     var editingStart by remember { mutableStateOf(false) }
     var editingEnd by remember { mutableStateOf(false) }
@@ -119,10 +152,7 @@ fun CompanionPerceptionScreen(
                 SourceRow(
                     "位置",
                     masterOn = masterOn,
-                    state = if (!masterOn) SourceState.NO_DATA else stateOf(
-                        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
-                            PackageManager.PERMISSION_GRANTED
-                    ),
+                    state = if (!masterOn) SourceState.NO_DATA else stateOf(locationGranted),
                     note = "沿用已授权的定位来源",
                     needGate = true
                 ) {
@@ -132,10 +162,7 @@ fun CompanionPerceptionScreen(
                 SourceRow(
                     "麦克风（环境噪声）",
                     masterOn = masterOn,
-                    state = if (!masterOn) SourceState.NO_DATA else stateOf(
-                        ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-                            PackageManager.PERMISSION_GRANTED
-                    ),
+                    state = if (!masterOn) SourceState.NO_DATA else stateOf(micGranted),
                     note = "仅按需短时采样，不常驻录音",
                     needGate = true
                 ) {
@@ -145,7 +172,7 @@ fun CompanionPerceptionScreen(
                 SourceRow(
                     "运动与环境光传感器",
                     masterOn = masterOn,
-                    state = if (!masterOn) SourceState.NO_DATA else sensorAvailable(context),
+                    state = if (!masterOn) SourceState.NO_DATA else sensorState,
                     note = "取决于设备传感器"
                 )
                 GroupDivider()
@@ -170,7 +197,8 @@ fun CompanionPerceptionScreen(
                     Column(Modifier.weight(1f)) {
                         Text("允许主动问候", fontSize = 15.sp, color = CompanionPalette.TextPrimary)
                         Text(
-                            notificationHint(context),
+                            if (notificationGranted) "在合适的时机于后台问候"
+                            else "开启系统通知后才能主动联系",
                             fontSize = 12.sp, color = CompanionPalette.Hint, modifier = Modifier.padding(top = 3.dp)
                         )
                     }
@@ -288,14 +316,6 @@ private fun sensorAvailable(context: Context): SourceState {
     val hasLight = sm.getDefaultSensor(Sensor.TYPE_LIGHT) != null
     val hasMotion = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null
     return if (hasLight || hasMotion) SourceState.AVAILABLE else SourceState.NO_DATA
-}
-
-private fun notificationHint(context: Context): String {
-    val granted = if (Build.VERSION.SDK_INT >= 33) {
-        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
-            PackageManager.PERMISSION_GRANTED
-    } else true
-    return if (granted) "在合适的时机于后台问候" else "开启系统通知后才能主动联系"
 }
 
 private fun openAppSettings(context: Context) {
