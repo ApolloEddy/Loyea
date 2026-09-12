@@ -1,0 +1,294 @@
+{
+  "representation_version": "0.2",
+  "modulator_version": "1.0.0-prototype",
+  "aspects": {
+    "relationship_affect": "关系感情",
+    "relationship_trust": "关系信任",
+    "mood": "背景心境",
+    "feeling": "当前感受"
+  },
+  "intensity": {
+    "mild": "轻微",
+    "moderate": "中等",
+    "strong": "强烈",
+    "very_strong": "非常强烈",
+    "none": "无",
+    "—": "—"
+  },
+  "aspect_states": {
+    "relationship_affect": [
+      "affection",
+      "aversion",
+      "love",
+      "neutral",
+      "unspecified"
+    ],
+    "relationship_trust": [
+      "distrust",
+      "trust",
+      "unspecified"
+    ],
+    "mood": [
+      "calm",
+      "cheerful",
+      "gloomy",
+      "irritable",
+      "neutral",
+      "tense",
+      "unspecified"
+    ],
+    "feeling": [
+      "admiration",
+      "affection",
+      "amusement",
+      "anger",
+      "anticipation",
+      "boredom",
+      "compassion",
+      "confusion",
+      "curiosity",
+      "despair",
+      "disappointment",
+      "disgust",
+      "embarrassment",
+      "excitement",
+      "fear",
+      "frustration",
+      "gratitude",
+      "grievance",
+      "guilt",
+      "hope",
+      "hurt",
+      "interest",
+      "joy",
+      "loneliness",
+      "pride",
+      "relief",
+      "sadness",
+      "shame",
+      "shame_guilt",
+      "surprise",
+      "worry"
+    ]
+  },
+  "feeling_candidates": [
+    {
+      "id": "admiration",
+      "zh": "钦佩",
+      "status": "reserved",
+      "routes": []
+    },
+    {
+      "id": "affection",
+      "zh": "喜爱",
+      "status": "implemented",
+      "routes": [
+        "affection"
+      ]
+    },
+    {
+      "id": "amusement",
+      "zh": "被逗乐",
+      "status": "implemented",
+      "routes": [
+        "humor"
+      ]
+    },
+    {
+      "id": "anger",
+      "zh": "愤怒",
+      "status": "implemented",
+      "routes": [
+        "hostility"
+      ]
+    },
+    {
+      "id": "anticipation",
+      "zh": "期待",
+      "status": "reserved",
+      "routes": []
+    },
+    {
+      "id": "boredom",
+      "zh": "无聊",
+      "status": "reserved",
+      "routes": []
+    },
+    {
+      "id": "compassion",
+      "zh": "心疼",
+      "status": "implemented",
+      "routes": [
+        "user_distress"
+      ]
+    },
+    {
+      "id": "confusion",
+      "zh": "困惑",
+      "status": "implemented",
+      "routes": [
+        "unresolved_information"
+      ]
+    },
+    {
+      "id": "curiosity",
+      "zh": "好奇",
+      "status": "implemented",
+      "routes": [
+        "novel_topic"
+      ]
+    },
+    {
+      "id": "despair",
+      "zh": "绝望",
+      "status": "reserved",
+      "routes": []
+    },
+    {
+      "id": "disappointment",
+      "zh": "失望",
+      "status": "implemented",
+      "routes": [
+        "expectation_unmet"
+      ]
+    },
+    {
+      "id": "disgust",
+      "zh": "厌恶",
+      "status": "reserved",
+      "routes": []
+    },
+    {
+      "id": "embarrassment",
+      "zh": "难为情",
+      "status": "reserved",
+      "routes": []
+    },
+    {
+      "id": "excitement",
+      "zh": "兴奋",
+      "status": "reserved",
+      "routes": []
+    },
+    {
+      "id": "fear",
+      "zh": "恐惧",
+      "status": "reserved",
+      "routes": []
+    },
+    {
+      "id": "frustration",
+      "zh": "挫败",
+      "status": "implemented",
+      "routes": [
+        "task_blocked"
+      ]
+    },
+    {
+      "id": "gratitude",
+      "zh": "感激",
+      "status": "implemented",
+      "routes": [
+        "kindness"
+      ]
+    },
+    {
+      "id": "grievance",
+      "zh": "委屈",
+      "status": "reserved",
+      "routes": []
+    },
+    {
+      "id": "guilt",
+      "zh": "内疚",
+      "status": "implemented",
+      "routes": [
+        "own_harm_confirmed"
+      ]
+    },
+    {
+      "id": "hope",
+      "zh": "希望",
+      "status": "reserved",
+      "routes": []
+    },
+    {
+      "id": "hurt",
+      "zh": "情感受伤",
+      "status": "reserved",
+      "routes": []
+    },
+    {
+      "id": "interest",
+      "zh": "兴趣",
+      "status": "reserved",
+      "routes": []
+    },
+    {
+      "id": "joy",
+      "zh": "快乐",
+      "status": "implemented",
+      "routes": [
+        "shared_joy"
+      ]
+    },
+    {
+      "id": "loneliness",
+      "zh": "孤独",
+      "status": "reserved",
+      "routes": []
+    },
+    {
+      "id": "pride",
+      "zh": "自豪",
+      "status": "implemented",
+      "routes": [
+        "self_achievement"
+      ]
+    },
+    {
+      "id": "relief",
+      "zh": "释然",
+      "status": "implemented",
+      "routes": [
+        "repair",
+        "threat_resolved"
+      ]
+    },
+    {
+      "id": "sadness",
+      "zh": "悲伤",
+      "status": "reserved",
+      "routes": []
+    },
+    {
+      "id": "shame",
+      "zh": "羞愧",
+      "status": "reserved",
+      "routes": []
+    },
+    {
+      "id": "shame_guilt",
+      "zh": "羞愧／内疚（未细分）",
+      "status": "reserved",
+      "routes": []
+    },
+    {
+      "id": "surprise",
+      "zh": "惊讶",
+      "status": "implemented",
+      "routes": [
+        "unexpected_event"
+      ]
+    },
+    {
+      "id": "worry",
+      "zh": "担忧",
+      "status": "implemented",
+      "routes": [
+        "future_threat"
+      ]
+    }
+  ],
+  "note": "31词均保留定义；当前实现15词，旧感知适配覆盖7词，宿主事件补足8词。未接事件来源的扩展不会自动出现。"
+}

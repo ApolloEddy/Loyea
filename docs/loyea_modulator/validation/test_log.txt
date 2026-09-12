@@ -1,0 +1,39 @@
+test_30_exact_idle_partition_invariance (test_modulator.Numerical.test_30_exact_idle_partition_invariance) ... ok
+test_31_independent_rk4_verifies_exact_cascade (test_modulator.Numerical.test_31_independent_rk4_verifies_exact_cascade) ... ok
+test_32_bounded_stress_all_personality_corners (test_modulator.Numerical.test_32_bounded_stress_all_personality_corners) ... ok
+test_01_user_sadness_becomes_compassion_not_self_sadness (test_modulator.Scenarios.test_01_user_sadness_becomes_compassion_not_self_sadness) ... ok
+test_02_angry_at_other_not_angry_at_user (test_modulator.Scenarios.test_02_angry_at_other_not_angry_at_user) ... ok
+test_03_direct_hostility_is_distinct (test_modulator.Scenarios.test_03_direct_hostility_is_distinct) ... ok
+test_04_negation_hypothesis_quote_unclear_do_not_become_self_state (test_modulator.Scenarios.test_04_negation_hypothesis_quote_unclear_do_not_become_self_state) ... ok
+test_05_academic_question_not_automatic_distress (test_modulator.Scenarios.test_05_academic_question_not_automatic_distress) ... ok
+test_06_neutral_does_not_reset_old_state (test_modulator.Scenarios.test_06_neutral_does_not_reset_old_state) ... ok
+test_07_factual_correction_does_not_punish_user (test_modulator.Scenarios.test_07_factual_correction_does_not_punish_user) ... ok
+test_08_banter_conflict_abstains (test_modulator.Scenarios.test_08_banter_conflict_abstains) ... ok
+test_09_same_turn_retry_once (test_modulator.Scenarios.test_09_same_turn_retry_once) ... ok
+test_10_stale_and_id_conflict_rejected_atomically (test_modulator.Scenarios.test_10_stale_and_id_conflict_rejected_atomically) ... ok
+test_11_invalid_score_or_schema_does_not_partially_advance (test_modulator.Scenarios.test_11_invalid_score_or_schema_does_not_partially_advance) ... ok
+test_12_personality_fixed_and_counter_not_a_gain (test_modulator.Scenarios.test_12_personality_fixed_and_counter_not_a_gain) ... ok
+test_13_relationship_not_derived_from_flattery_or_offense (test_modulator.Scenarios.test_13_relationship_not_derived_from_flattery_or_offense) ... ok
+test_14_shame_guilt_not_split (test_modulator.Scenarios.test_14_shame_guilt_not_split) ... ok
+test_15_verified_guilt_keeps_distinct_semantics (test_modulator.Scenarios.test_15_verified_guilt_keeps_distinct_semantics) ... ok
+test_16_unverified_host_fact_ignored (test_modulator.Scenarios.test_16_unverified_host_fact_ignored) ... ok
+test_17_mood_is_slow_and_can_disagree_with_current_feeling (test_modulator.Scenarios.test_17_mood_is_slow_and_can_disagree_with_current_feeling) ... ok
+test_18_absence_does_not_create_loneliness_or_relation_loss (test_modulator.Scenarios.test_18_absence_does_not_create_loneliness_or_relation_loss) ... ok
+test_19_topic_switch_hides_unsupported_old_label_but_keeps_state (test_modulator.Scenarios.test_19_topic_switch_hides_unsupported_old_label_but_keeps_state) ... ok
+test_20_resolution_link_does_not_wipe_unrelated_trace (test_modulator.Scenarios.test_20_resolution_link_does_not_wipe_unrelated_trace) ... ok
+test_21_three_columns_five_rows_and_valid_labels (test_modulator.Scenarios.test_21_three_columns_five_rows_and_valid_labels) ... ok
+test_22_intensity_hysteresis_and_zero_semantics (test_modulator.Scenarios.test_22_intensity_hysteresis_and_zero_semantics) ... ok
+test_23_checkpoint_roundtrip_and_retry (test_modulator.Scenarios.test_23_checkpoint_roundtrip_and_retry) ... ok
+test_24_malformed_checkpoint_and_clock_rollback (test_modulator.Scenarios.test_24_malformed_checkpoint_and_clock_rollback) ... ok
+test_25_lore_selected_by_state_context_group_budget (test_modulator.Scenarios.test_25_lore_selected_by_state_context_group_budget) ... ok
+test_26_scope_specific_trust_not_generalized (test_modulator.Scenarios.test_26_scope_specific_trust_not_generalized) ... ok
+test_27_low_confidence_never_uses_global_confidence (test_modulator.Scenarios.test_27_low_confidence_never_uses_global_confidence) ... ok
+test_28_repeat_small_evidence_accumulates_boundedly (test_modulator.Scenarios.test_28_repeat_small_evidence_accumulates_boundedly) ... ok
+test_29_within_turn_event_order_invariant (test_modulator.Scenarios.test_29_within_turn_event_order_invariant) ... ok
+test_33_corrupt_checkpoint_cannot_change_retry_or_quantizer (test_modulator.Scenarios.test_33_corrupt_checkpoint_cannot_change_retry_or_quantizer) ... ok
+test_34_oversized_or_mistyped_host_inputs_are_atomic (test_modulator.Scenarios.test_34_oversized_or_mistyped_host_inputs_are_atomic) ... ok
+
+----------------------------------------------------------------------
+Ran 34 tests in 1.011s
+
+OK
