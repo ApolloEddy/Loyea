@@ -1,0 +1,30 @@
+{
+  "id": "loyea-modulator",
+  "name": "Loyea 情绪调制器",
+  "version": "1.0.0-prototype",
+  "spec": "docs/loyea_modulator/Loyea_Modulator_Spec_v1.0.md",
+  "stateRepresentation": "0.2",
+  "legacyModel": { "metadata": "2.1.0", "decoder": "2.1.1" },
+  "modules": {
+    "core": ":loyea-modulator-core",
+    "webDemo": "gradlew :loyea-modulator-core:webDemo"
+  },
+  "entrypoints": {
+    "engine": "com.loyea.plugin.modulator.Modulator",
+    "wire": "com.loyea.plugin.modulator.Wire",
+    "metadata": "com.loyea.plugin.modulator.ModulatorPlugin",
+    "loreSelector": "com.loyea.plugin.modulator.selectLore",
+    "configRegistry": "com.loyea.plugin.modulator.configDictionary",
+    "webDebugServer": "com.loyea.plugin.modulator.webdemo.WebDemoServerKt"
+  },
+  "integration": {
+    "status": "deferred",
+    "invasive": false,
+    "hostTouches": [],
+    "wiring": "settings.gradle.kts includes only"
+  },
+  "verification": {
+    "unitTests": 35,
+    "goldenCases": { "sequences": 7, "observations": 50, "tolerance": "1e-10", "deviceMaxError": "0.00e+00" }
+  }
+}

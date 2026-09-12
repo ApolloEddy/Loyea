@@ -60,3 +60,6 @@ docs/tavern_plugin_refactor.md
 docs/tavo_parity_plan.md
 docs/Loyea-Rebuild-Spec-*.md
 docs/Acceptance-Checklist-*.md
+
+# ZCode playwright CLI local cache
+.playwright-cli/

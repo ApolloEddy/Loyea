@@ -1,0 +1,41 @@
+{
+  "version": "1.0.0-prototype",
+  "tests": 34,
+  "test_seconds": 1.0113791720000336,
+  "passed": true,
+  "stress_steps": 16000,
+  "golden_sequences": 7,
+  "golden_observations": 50,
+  "benchmark": {
+    "environment": {
+      "python": "3.12.14",
+      "platform": "Linux-6.18.35-x86_64-with-glibc2.39"
+    },
+    "samples": 6000,
+    "warmup": 300,
+    "active_traces": 8,
+    "events_per_turn": 8,
+    "lore_candidates": 128,
+    "modulator": {
+      "p50_ms": 0.146937,
+      "p95_ms": 0.20886,
+      "p99_ms": 0.365872
+    },
+    "modulator_plus_lore": {
+      "p50_ms": 0.181138,
+      "p95_ms": 0.254928,
+      "p99_ms": 0.428264
+    },
+    "checkpoint_utf8_bytes": 2878,
+    "excluded": [
+      "ONNX inference",
+      "tokenization",
+      "network",
+      "LLM generation",
+      "database I/O",
+      "Android runtime",
+      "thermal and battery tests"
+    ]
+  },
+  "plot": "generated from validation/dynamics.csv"
+}

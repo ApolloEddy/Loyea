@@ -1,0 +1,90 @@
+{
+  "package": "Loyea Modulator v1.0",
+  "files": [
+    {
+      "path": "Loyea_Modulator_Spec_v1.0.md",
+      "bytes": 32403,
+      "sha256": "f6ded12ac624cc2cde1e77416626003c4c60daab8a0b3108412301e8280ec527"
+    },
+    {
+      "path": "README.md",
+      "bytes": 2006,
+      "sha256": "c55410309dec64ec69d23fb86f371629122482548e9e27d2f49587d000e90d72"
+    },
+    {
+      "path": "config/defaults.json",
+      "bytes": 4525,
+      "sha256": "522e04ab4fc559ad6f8015afdea220685a38f588ce94917912cbc7e6757a1c60"
+    },
+    {
+      "path": "config/legacy_schema.json",
+      "bytes": 2408,
+      "sha256": "e0f6efefee4f5198603e4705c7c49683c5f59dffb25f2e07e4ea2743a13ecc72"
+    },
+    {
+      "path": "config/state_dictionary.json",
+      "bytes": 5397,
+      "sha256": "992409dd4b94ec55c610045fe67e836c7e8cdeaf68bb4b92ba293225f2d88c39"
+    },
+    {
+      "path": "integration/Kotlin_Integration.md",
+      "bytes": 6986,
+      "sha256": "fbbbc14a2b88d35c0a743de714f78821d27aa6e6ab649721f1070d040619b34f"
+    },
+    {
+      "path": "integration/golden_cases.json",
+      "bytes": 156309,
+      "sha256": "9d7b570a8783cd29085a138647994b41ca13d0b98938904e675558191a898f95"
+    },
+    {
+      "path": "prototype/demo.py",
+      "bytes": 1193,
+      "sha256": "982474dedeea4fb9450ced0bbd2bd67a8c09fe8f193f412fc6a858d09d37fc4e"
+    },
+    {
+      "path": "prototype/modulator.py",
+      "bytes": 32257,
+      "sha256": "f30bd1ccd5ce9651199258af094763afb4b0cd22ff82fb0a658ac4db9fa49135"
+    },
+    {
+      "path": "reference/Loyea_State_Representation_Spec_v0.2.md",
+      "bytes": 26437,
+      "sha256": "04c3128f957b8d9fb4ad3ddccac4535505dc8323407c581030df7feaf36925b2"
+    },
+    {
+      "path": "tests/test_modulator.py",
+      "bytes": 16586,
+      "sha256": "8f24f1599354f938897a0baaaad38324720bef46374499eff08686f3cacf4838"
+    },
+    {
+      "path": "validation/Validation_Report.md",
+      "bytes": 1369,
+      "sha256": "72c60de461b1f126913993d0511aa0ade7f16e208dd9f6db0b04127564a185b6"
+    },
+    {
+      "path": "validation/dynamics.csv",
+      "bytes": 40834,
+      "sha256": "5d2632a7f5f79c9e82fbec54ef3f438d2214b72b2afda6c302f927b9a4321e1c"
+    },
+    {
+      "path": "validation/dynamics.png",
+      "bytes": 174246,
+      "sha256": "5e94d16bafdbff3001bf0b2a77dd2c604dc9017c622634653433f688c77d18f3"
+    },
+    {
+      "path": "validation/results.json",
+      "bytes": 930,
+      "sha256": "7d308fa266249da6b5264c722e0f34fb5342f84409a0988575d8651235efe410"
+    },
+    {
+      "path": "validation/run_validation.py",
+      "bytes": 13364,
+      "sha256": "6a87de5d8cc94acffad64ccdd80762cd127d2a47aafc888005d10245c09c14ef"
+    },
+    {
+      "path": "validation/test_log.txt",
+      "bytes": 4545,
+      "sha256": "dc1abf232acc78ec2170e6fae9f24dd92b11458266373b79bc9cb4c6366331d7"
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "method": "executed committed Python reference; matching Kotlin branches inspected",
+  "independent_causes": {
+    "merged_ids": [
+      "A",
+      "B"
+    ],
+    "strength_before": 0.9375,
+    "strength_after_resolving_A_only": 0.55078125,
+    "remaining_ids": [
+      "A",
+      "B"
+    ]
+  },
+  "visibility_leak": {
+    "only_B_visible_with_hidden_A": [
+      [
+        "worry",
+        "very_strong"
+      ]
+    ],
+    "B_alone": [],
+    "merged_strength": 0.9002499999999999
+  },
+  "button_fixtures": {
+    "温柔致谢": {
+      "original": [],
+      "with_target_listener": [
+        [
+          "gratitude",
+          "moderate"
+        ]
+      ]
+    },
+    "道歉修复": {
+      "original": [],
+      "with_target_listener": [
+        [
+          "relief",
+          "strong"
+        ]
+      ]
+    }
+  }
+}

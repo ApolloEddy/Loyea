@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,6 +33,9 @@ import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.loyea.plugin.companion.CompanionContract
+import com.loyea.plugin.companion.CompanionModeState
+import com.loyea.plugin.companion.CompanionRoot
 import com.loyea.ui.chat.ChatScreen
 import com.loyea.ui.chat.ChatViewModel
 import com.loyea.ui.chat.TavernScreen
@@ -69,6 +73,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        // 审计 R-06：应用前台状态供 GreetingWorker 门控读取（前台不打扰，改约稍后）
+        com.loyea.plugin.companion.CompanionRuntime.uiForeground = true
         if (::chatViewModel.isInitialized) {
             chatViewModel.startPerceptionSensors()
         }
@@ -127,9 +133,22 @@ class MainActivity : ComponentActivity() {
 
         chatViewModel = androidx.lifecycle.ViewModelProvider(this)[ChatViewModel::class.java]
 
-        // 启动自愈注册：检查是否开启了后台问候，如果开启则用 KEEP 策略启动初始延时的 GreetingWorker
+        // 陪伴主动问候通知路由（审计 R-06）：点击通知 → 回到陪伴模式。仅在陪伴仍开启时路由——
+        // 用户已关闭陪伴的，旧通知只是打开应用，绝不静默重开模式。
+        if (intent?.getBooleanExtra(EXTRA_OPEN_COMPANION, false) == true) {
+            val companionStore = com.loyea.plugin.companion.CompanionConfigStore(this)
+            val companionConfig = companionStore.load()
+            if (companionConfig.enabled) {
+                companionStore.save(companionConfig.copy(enabled = true))
+            }
+        }
+
+        // 启动自愈注册：后台问候调度自愈（KEEP 策略保留已存在的倒计时）。
+        // 触发条件 = 普通模式总开关，或陪伴主动联系开启（两条路径共用同一调度链，审计 R-06）
         val enableBgGreeting = prefs.getBoolean("enable_background_greeting", true)
-        if (enableBgGreeting) {
+        val companionProactiveOn = com.loyea.plugin.companion.CompanionConfigStore(this)
+            .load().let { it.enabled && it.proactiveEnabled }
+        if (enableBgGreeting || companionProactiveOn) {
             val randomDelayMinutes = kotlin.random.Random.nextInt(60, 180).toLong()
             val workRequest = androidx.work.OneTimeWorkRequestBuilder<com.loyea.worker.GreetingWorker>()
                 .setInitialDelay(randomDelayMinutes, java.util.concurrent.TimeUnit.MINUTES)
@@ -153,6 +172,13 @@ class MainActivity : ComponentActivity() {
             }
 
             LoyeaTheme(darkTheme = darkTheme) {
+                // 陪伴模式插件路由（docs/Loyea-Companion-Mode-Spec-v0.1）：FUN-08 先解析模式
+                // 再渲染首页——陪伴模式不构建普通 NavHost，避免闪现普通抽屉（NAV-01）。
+                LaunchedEffect(Unit) { CompanionModeState.refresh(this@MainActivity) }
+                val companionMode = CompanionModeState.enabled.value
+                if (companionMode) {
+                    CompanionRoot(viewModel = chatViewModel)
+                } else {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
@@ -180,7 +206,8 @@ class MainActivity : ComponentActivity() {
                                 onActiveConfigChange = { chatViewModel.selectActiveConfig(it) },
                                 appLanguage = appLanguage,
                                 userBubbleColor = userBubbleColor,
-                                sessions = sessions,
+                                // 陪伴模式插件（FUN-02）：陪伴归属会话不进入普通模式侧栏
+                                sessions = sessions.filter { !CompanionContract.isCompanionCharacter(it.characterId) },
                                 currentSessionId = currentSessionId,
                                 messages = messages,
                                 isThinking = isThinking,
@@ -320,7 +347,8 @@ class MainActivity : ComponentActivity() {
                             var libraryFocus by remember { mutableStateOf<String?>(null) }
                             Box(modifier = Modifier.fillMaxSize()) {
                                 TavernScreen(
-                                    characterCardList = characterCardList,
+                                    // 陪伴模式插件（FUN-03）：陪伴内部资料不在角色酒馆露出/编辑
+                                    characterCardList = characterCardList.filter { !CompanionContract.isCompanionCharacter(it.id) },
                                     onCharacterCardListSave = { chatViewModel.saveCharacterCardList(it) },
                                     appLanguage = appLanguage,
                                     onBackClick = { navController.popBackStack() },
@@ -350,15 +378,22 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
+                } // 陪伴模式 else 分支结束（普通导航外壳）
             }
         }
     }
 
     override fun onStop() {
         super.onStop()
+        com.loyea.plugin.companion.CompanionRuntime.uiForeground = false
         if (::chatViewModel.isInitialized) {
             chatViewModel.stopResponse()
             chatViewModel.stopPerceptionSensors()
         }
+    }
+
+    companion object {
+        /** 陪伴主动问候通知点击路由：回到陪伴模式（审计 R-06 通知路由合同）。 */
+        const val EXTRA_OPEN_COMPANION = "loyea_extra_open_companion"
     }
 }
