@@ -3,6 +3,7 @@ package com.loyea.plugin.modulator
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import org.junit.Ignore
 import org.junit.Test
 import java.io.File
 
@@ -10,7 +11,9 @@ import java.io.File
  * 一次性工具：在 v1.1.0 引擎上重放 v1.0 golden 输入，生成
  * golden_cases_v1.1.json 与逐字段差异登记。生成后人工审计差异，
  * 确认每处不同都可归因于证据归因修订（Spec 接入文档 §7）。
+ * 默认 @Ignore：只在需要重新生成 fixture 时手动启用，避免测试改写资源。
  */
+@Ignore("manual fixture regeneration tool; see golden_cases_v1.1.json")
 class FixtureRegenerationTool {
 
     @Test

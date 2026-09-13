@@ -267,7 +267,8 @@ class ChatStorageManager(private val context: Context) {
     /**
      * 原子写入：先写临时文件再重命名，避免中途崩溃（断电/进程被杀）产生半截 JSON 覆盖有效数据。
      * java.io rename 在 Windows JVM 上不允许覆盖已存在目标 → 用 Files.move(REPLACE_EXISTING)
-     * 做原子覆盖；再失败（罕见）才回退直接写入，与旧路径等价。
+     * 做原子覆盖。所有路径失败时保留旧正式文件并向上传递失败，绝不降级为
+     * 直接截断/覆盖正式文件（陪伴智能接入 §9.3：写失败回退会损坏原数据）。
      */
     private fun atomicWrite(file: File, content: String): Boolean {
         val tmpFile = File(file.parentFile, "${file.name}.tmp")
@@ -294,13 +295,8 @@ class ChatStorageManager(private val context: Context) {
         } catch (e: Exception) {
             e.printStackTrace()
             try { tmpFile.delete() } catch (ex: Exception) {}
-            try {
-                file.writeText(content) // 最终回退：语义与旧实现一致（可能非原子，但不丢本次数据）
-                true
-            } catch (ex: Exception) {
-                ex.printStackTrace()
-                false
-            }
+            // 失败向上传递：正式文件保持原样，调用方按写失败处理（重试/提示）。
+            false
         }
     }
 
@@ -506,6 +502,30 @@ class ChatStorageManager(private val context: Context) {
                 loadSessionListInternal().any { it.id == sessionId }
             }
             if (!exists) return@withLock false
+            val current = loadSessionMessagesInternal(sessionId)
+            val updated = updateBlock(current)
+            saveSessionMessagesInternal(sessionId, updated)
+        }
+    }
+
+    /**
+     * 带 incarnation 围栏的会话消息写入（陪伴智能接入 §9.3）。
+     * 陪伴路径的晚到写入必须同时校验 incarnation：Store A 缓存旧会话、Store B
+     * 重置/恢复后，A 的晚到写回被拒绝（旧消息/图谱不复活）。
+     * [expectedIncarnationId] 为 null 时表示会话尚无 incarnation（旧数据），放行。
+     */
+    suspend fun updateSessionMessagesFenced(
+        sessionId: String,
+        expectedIncarnationId: String?,
+        updateBlock: (List<Message>) -> List<Message>,
+    ): Boolean {
+        ensureMigrated()
+        return messagesMutex.withLock {
+            val session = loadSessionListInternal().firstOrNull { it.id == sessionId }
+                ?: return@withLock false
+            if (session.sessionIncarnationId != expectedIncarnationId) {
+                return@withLock false
+            }
             val current = loadSessionMessagesInternal(sessionId)
             val updated = updateBlock(current)
             saveSessionMessagesInternal(sessionId, updated)

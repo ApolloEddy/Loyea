@@ -103,6 +103,8 @@ android {
 dependencies {
     // 角色卡兼容功能内核（纯 Kotlin，静态链接，Spec §3）
     implementation(project(":character-core"))
+    // 情绪调制器核心（纯 Kotlin/JVM；陪伴智能接入本轮授权的真实宿主依赖）
+    implementation(project(":loyea-modulator-core"))
     implementation("com.google.code.gson:gson:2.10.1")
     // P5 有限正则（与 character-core 同版本锁定，BSD）
     implementation("com.google.re2j:re2j:1.7")
