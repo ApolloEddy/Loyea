@@ -1,0 +1,66 @@
+{
+  "sourceHtml": {
+    "path": "docs/AprilPerceptionDemo-standalone-2.1.4.html",
+    "sha256": "a7dd693856d4c686690f3907f37c732f4af4017c9d19aef9665f18cc3303bd9c",
+    "bytes": 47693438,
+    "referenceVersion": "April Perception Demo 2.1.4"
+  },
+  "artifacts": {
+    "model.onnx": {
+      "scriptId": "embeddedOnnxModel",
+      "extraction": "base64-decode",
+      "bytes": 24085508,
+      "sha256": "a3e763f4bad5e4e9dfd5d2e75e10407aa2e5a336f438c67113761ff0c84419cb",
+      "expectedSha256": "a3e763f4bad5e4e9dfd5d2e75e10407aa2e5a336f438c67113761ff0c84419cb",
+      "expectedBytes": 24085508,
+      "verified": true,
+      "outputPath": "app/src/main/assets/perception/model.onnx"
+    },
+    "tokenizer.json": {
+      "scriptId": "embeddedTokenizer",
+      "extraction": "raw-utf8",
+      "bytes": 439753,
+      "sha256": "79a7b606f3b655b127404169b356eb9d6c469ea679cd15d3d1b2154067ed4ac0",
+      "expectedSha256": "79a7b606f3b655b127404169b356eb9d6c469ea679cd15d3d1b2154067ed4ac0",
+      "expectedBytes": 439753,
+      "verified": true,
+      "outputPath": "app/src/main/assets/perception/tokenizer.json"
+    },
+    "metadata.json": {
+      "scriptId": "embeddedMetadata",
+      "extraction": "raw-utf8",
+      "bytes": 4219,
+      "sha256": "c85279af4f912cfb2af6772f89c0bd8659be954788314d4dfd5f1a429a6e2853",
+      "expectedSha256": "c85279af4f912cfb2af6772f89c0bd8659be954788314d4dfd5f1a429a6e2853",
+      "expectedBytes": 4219,
+      "verified": true,
+      "outputPath": "app/src/main/assets/perception/metadata.json"
+    },
+    "calibration.json": {
+      "scriptId": "embeddedCalibration",
+      "extraction": "raw-utf8",
+      "bytes": 953,
+      "sha256": "e4c2829e9b8dcd91340a9d6b39535b254478f584178fe62dbe9ee905fb15eadd",
+      "expectedSha256": "e4c2829e9b8dcd91340a9d6b39535b254478f584178fe62dbe9ee905fb15eadd",
+      "expectedBytes": 953,
+      "verified": true,
+      "outputPath": "app/src/main/assets/perception/calibration.json"
+    }
+  },
+  "excluded": {
+    "embeddedOrtWasm": "Web runtime wasm; Android ships the official onnxruntime-android native runtime instead."
+  },
+  "modelInterface": {
+    "inputs": {
+      "input_ids": "int64[1,96]",
+      "attention_mask": "int64[1,96]"
+    },
+    "output": "logits (12 heads, 82 logits total)",
+    "maxTokens": 96,
+    "metadataSchema": "2.1.0",
+    "decodeSchema": "2.1.1"
+  },
+  "license": {
+    "origin": "User-provided legacy April perception research artifact, delivered alongside the Spec."
+  }
+}

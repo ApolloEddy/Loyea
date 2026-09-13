@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "2.1.0",
+  "method": "per-label-vector-scaling",
+  "records": 7220,
+  "basePresence": {
+    "labels": {
+      "joy": {
+        "temperature": 0.959151,
+        "bias": -1.776675
+      },
+      "affection": {
+        "temperature": 1.198219,
+        "bias": -1.187324
+      },
+      "sadness": {
+        "temperature": 0.813314,
+        "bias": -1.052255
+      },
+      "anger": {
+        "temperature": 0.878717,
+        "bias": -1.114996
+      },
+      "fear": {
+        "temperature": 0.938819,
+        "bias": -2.116173
+      },
+      "disgust": {
+        "temperature": 1.031803,
+        "bias": -1.747777
+      },
+      "surprise": {
+        "temperature": 0.874558,
+        "bias": -2.331571
+      },
+      "neutral": {
+        "temperature": 0.673323,
+        "bias": 0.165386
+      }
+    }
+  },
+  "metrics": {
+    "brierBefore": 0.11312,
+    "brierAfter": 0.081348,
+    "eceBefore": 0.134092,
+    "eceAfter": 0.003015
+  }
+}

@@ -63,3 +63,7 @@ docs/Acceptance-Checklist-*.md
 
 # ZCode playwright CLI local cache
 .playwright-cli/
+
+# Local perception research artifacts (never publish to the source tree)
+docs/AprilPerceptionDemo-standalone-2.1.4.html
+tmp_perception_js/
