@@ -69,6 +69,10 @@ fun CompanionRoot(
         if (next.textPerceptionEnabled != config.textPerceptionEnabled) {
             viewModel.onCompanionTextPerceptionChanged(next.textPerceptionEnabled)
         }
+        // §9.3/A34：主动联系运行时开启 → 配置提交入口直接排入唯一检查任务
+        if (next.proactiveEnabled && !config.proactiveEnabled && next.enabled) {
+            com.loyea.worker.GreetingWorker.enqueueProactiveCheck(context)
+        }
         config = next
     }
 
@@ -404,6 +408,8 @@ fun disableCompanionMode(context: android.content.Context, viewModel: ChatViewMo
     if (!config.enabled) return
     viewModel.stopResponse()
     viewModel.cancelSessionAuxTasks() // 陪伴会话即将不可达：转写等附属任务一并取消
+    // §9.1：关闭模式撤销任务 lease、保留已提交状态账本，并释放可释放的模型资源
+    viewModel.closeCompanionRuntime()
     store.save(config.copy(enabled = false))
     // 恢复目标必须是普通会话：lastNormalSessionId 被污染（历史版本/异常路径写入陪伴会话）时
     // 落回最近普通会话，绝不把陪伴会话当作普通模式恢复点（NAV-03/FUN-02）

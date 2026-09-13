@@ -51,6 +51,9 @@ interface CompanionStateStore {
 
     fun deleteRequestViewsForOwner(ownerKey: String): Int
 
+    /** 全部请求视图（备份导出用）。 */
+    fun allRequestViews(ownerKey: String, limit: Int = 256): List<RequestViewRecord>
+
     /** 删除观测截止 seq >= [seq] 的请求视图（编辑截断：后缀请求引用失效）。 */
     fun deleteRequestViewsFromSeq(ownerKey: String, seq: Long): Int
 

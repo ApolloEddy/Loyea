@@ -21,7 +21,7 @@ import com.loyea.ui.chat.Message
 object CompanionBackupCodec {
 
     const val BACKUP_TYPE = "loyea_companion_backup"
-    const val BACKUP_VERSION = 2
+    const val BACKUP_VERSION = 3
 
     private val gson = Gson()
 
@@ -49,7 +49,9 @@ object CompanionBackupCodec {
         val messages: List<Message>,
         /** v2 备份携带的陪伴设置；v1 旧备份为 null（恢复时保留当前设置）。 */
         val companionConfig: CompanionConfig?,
-        val graphTriples: List<BackupTriple>
+        val graphTriples: List<BackupTriple>,
+        /** v3 备份携带的运行账本（owner/观测/去重）；v1/v2 为 null → 恢复为新短期基线。 */
+        val runtime: JsonObject? = null,
     )
 
     sealed class ParseResult {
@@ -63,7 +65,8 @@ object CompanionBackupCodec {
         exportedAt: Long,
         session: ChatSession,
         messages: List<Message>,
-        graphTriples: List<BackupTriple>
+        graphTriples: List<BackupTriple>,
+        runtime: JsonObject? = null
     ): String {
         val root = JsonObject()
         root.addProperty("type", BACKUP_TYPE)
@@ -112,6 +115,12 @@ object CompanionBackupCodec {
             triplesArray.add(o)
         }
         root.add("graphTriples", triplesArray)
+
+        // 运行账本（v3）：算法/检查点 schema、当前状态、有效观测与去重材料。
+        // 权重不随会话备份重复打包，只登记模型制品哈希用于校验。
+        if (runtime != null) {
+            root.add("runtime", runtime)
+        }
         return gson.toJson(root)
     }
 
@@ -186,6 +195,18 @@ object CompanionBackupCodec {
             } ?: emptyList()
         } else emptyList()
 
+        // v3：运行账本。损坏的 runtime 不静默丢状态——完整拒绝并给出原因。
+        val runtimeJson: JsonObject? = if (version >= 3) {
+            val el = obj.get("runtime")
+            if (el == null || el.isJsonNull) {
+                null
+            } else if (el.isJsonObject) {
+                el.asJsonObject
+            } else {
+                return ParseResult.Rejected("运行状态数据结构不正确")
+            }
+        } else null
+
         // 归一化：Gson 对缺失集合字段可能产出 null（与宿主 ChatStorageManager 同样的防御）
         val safeMessages = messages.map { m ->
             m.copy(
@@ -209,7 +230,8 @@ object CompanionBackupCodec {
                 session = session,
                 messages = safeMessages,
                 companionConfig = companionConfig,
-                graphTriples = graphTriples
+                graphTriples = graphTriples,
+                runtime = runtimeJson
             )
         )
     }

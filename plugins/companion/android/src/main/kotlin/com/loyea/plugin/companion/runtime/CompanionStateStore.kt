@@ -323,6 +323,17 @@ class SqliteCompanionStateStore private constructor(context: Context) : Companio
     override fun deleteRequestViewsForOwner(ownerKey: String): Int =
         writableDatabase.delete("request_view", "owner_key = ?", arrayOf(ownerKey))
 
+    override fun allRequestViews(ownerKey: String, limit: Int): List<RequestViewRecord> {
+        val out = mutableListOf<RequestViewRecord>()
+        readableDatabase.rawQuery(
+            "SELECT * FROM request_view WHERE owner_key = ? ORDER BY created_at_wall_millis DESC LIMIT ?",
+            arrayOf(ownerKey, limit.toString()),
+        ).use { c ->
+            while (c.moveToNext()) out += requestViewFrom(c)
+        }
+        return out
+    }
+
     // ------------------------------------------------------------------
     // ProjectionOutbox
     // ------------------------------------------------------------------

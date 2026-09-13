@@ -645,6 +645,199 @@ internal class CompanionRuntimeCoordinator internal constructor(
     }
 
     // ------------------------------------------------------------------
+    // 备份 v3：运行状态导出 / 导入（Spec §9.2）
+    // ------------------------------------------------------------------
+
+    /** 恢复成功但运行账本未导入（v1/v2 或检查点不符）时，显式登记新短期基线事件。 */
+    fun recordRuntimeBaselineNote(characterId: String, sessionId: String, incarnationId: String) {
+        store.insertLifecycleOp(
+            kind = "runtime_baseline_reset",
+            phase = "committed",
+            oldOwnerKey = null,
+            newOwnerKey = CompanionOwner(characterId, sessionId, incarnationId).storageKey(),
+            manifestJson = JsonObject().apply {
+                addProperty("reason", "runtime_state_not_imported")
+            }.toString(),
+            committed = true,
+        )
+    }
+
+    /** 导出 owner 的完整运行账本（owner 行 + 观测）；无 owner 返回 null。 */
+    fun exportRuntimeState(characterId: String, sessionId: String, incarnationId: String): JsonObject? {
+        val ownerKey = CompanionOwner(characterId, sessionId, incarnationId).storageKey()
+        val state = store.findOwnerState(ownerKey) ?: return null
+        return JsonObject().apply {
+            add("owner", JsonObject().apply {
+                addProperty("binding_revision", state.bindingRevision)
+                addProperty("accepted_seq", state.acceptedSeq)
+                addProperty("state_applied_seq", state.stateAppliedSeq)
+                addProperty("algorithm_version", state.algorithmVersion)
+                addProperty("checkpoint_schema_version", state.checkpointSchemaVersion)
+                addProperty("personality_profile_version", state.personalityProfileVersion)
+                addProperty("lore_profile_version", state.loreProfileVersion)
+                addProperty("checkpoint_json", state.checkpointJson)
+                addProperty("clock_anchor_json", state.clockAnchorJson)
+                addProperty("interaction_count", state.interactionCount)
+                addProperty("pending_state_note_json", state.pendingStateNoteJson)
+            })
+            add("observations", com.google.gson.JsonArray().apply {
+                store.allObservations(ownerKey, limit = 4096).forEach { o ->
+                    add(JsonObject().apply {
+                        addProperty("observation_id", o.observationId)
+                        addProperty("input_hash", o.inputHash)
+                        addProperty("turn_id", o.turnId)
+                        addProperty("kind", o.kind.name)
+                        addProperty("seq", o.seq)
+                        addProperty("canonical_input_json", o.canonicalInputJson)
+                        addProperty("perception_json", o.perceptionJson)
+                        addProperty("sensor_status", o.sensorStatus.name)
+                        addProperty("degrade_reason", o.degradeReason)
+                        addProperty("eligibility_json", o.eligibilityJson)
+                        addProperty("facts_json", o.factsJson)
+                        addProperty("created_at_wall_millis", o.createdAtWallMillis)
+                    })
+                }
+            })
+            add("request_views", com.google.gson.JsonArray().apply {
+                store.allRequestViews(ownerKey, limit = 256).forEach { r ->
+                    add(JsonObject().apply {
+                        addProperty("turn_id", r.turnId)
+                        addProperty("sub_request_id", r.subRequestId)
+                        addProperty("request_revision", r.requestRevision)
+                        addProperty("observation_cutoff_seq", r.observationCutoffSeq)
+                        addProperty("projection_json", r.projectionJson)
+                        addProperty("lore_json", r.loreJson)
+                        addProperty("sources_json", r.sourcesJson)
+                        addProperty("policy_revision", r.policyRevision)
+                        addProperty("memory_revision", r.memoryRevision)
+                        addProperty("budget_json", r.budgetJson)
+                        addProperty("payload_hash", r.payloadHash)
+                        addProperty("created_at_wall_millis", r.createdAtWallMillis)
+                    })
+                }
+            })
+            addProperty("model_sha256", com.loyea.plugin.companion.perception.LegacyEmotionSensor.EXPECTED_MODEL_SHA256)
+        }
+    }
+
+    /**
+     * 恢复运行账本到新 owner 命名空间（Spec §9.2 单一激活协议的运行时部分）。
+     * 检查点必须能被当前核心 loads 校验，否则整体按新短期基线处理（返回 false，
+     * 调用方继续恢复流程并记录 RUNTIME_BASELINE_RESET）；部分写入不会发生。
+     */
+    fun importRuntimeState(
+        characterId: String,
+        newSessionId: String,
+        newIncarnationId: String,
+        bindingRevision: Long,
+        runtime: JsonObject,
+    ): Boolean {
+        val ownerJson = runtime.getAsJsonObject("owner") ?: return false
+        val checkpointJson = ownerJson.get("checkpoint_json")?.takeIf { it.isJsonPrimitive }?.asString ?: return false
+        // 严格校验检查点（版本/边界/决策一致性）；坏检查点绝不部分载入。
+        try {
+            Modulator.loads(checkpointJson)
+        } catch (corrupt: IllegalArgumentException) {
+            return false
+        }
+        val newOwnerKey = CompanionOwner(characterId, newSessionId, newIncarnationId).storageKey()
+        val record = OwnerStateRecord(
+            ownerKey = newOwnerKey,
+            active = true,
+            tombstoned = false,
+            bindingRevision = bindingRevision,
+            acceptedSeq = ownerJson.get("accepted_seq")?.takeIf { it.isJsonPrimitive }?.asLong ?: -1L,
+            stateAppliedSeq = ownerJson.get("state_applied_seq")?.takeIf { it.isJsonPrimitive }?.asLong ?: -1L,
+            algorithmVersion = ownerJson.get("algorithm_version")?.takeIf { it.isJsonPrimitive }?.asString ?: ModulatorVocab.VERSION,
+            checkpointSchemaVersion = ownerJson.get("checkpoint_schema_version")?.takeIf { it.isJsonPrimitive }?.asString ?: ModulatorVocab.VERSION,
+            personalityProfileVersion = ownerJson.get("personality_profile_version")?.takeIf { it.isJsonPrimitive }?.asString
+                ?: CompanionProfileRepository.PERSONALITY_PROFILE_VERSION,
+            loreProfileVersion = ownerJson.get("lore_profile_version")?.takeIf { it.isJsonPrimitive }?.asString
+                ?: CompanionProfileRepository.LORE_PROFILE_VERSION,
+            checkpointJson = checkpointJson,
+            clockAnchorJson = ownerJson.get("clock_anchor_json")?.takeIf { it.isJsonPrimitive }?.asString ?: "{}",
+            interactionCount = ownerJson.get("interaction_count")?.takeIf { it.isJsonPrimitive }?.asLong ?: 0L,
+            pendingStateNoteJson = ownerJson.get("pending_state_note_json")?.takeIf { it.isJsonPrimitive }?.asString,
+        )
+        if (!store.insertOwnerState(record)) return false
+        store.insertCheckpointHistory(newOwnerKey, record.acceptedSeq, checkpointJson)
+        var imported = 0
+        val observations = runtime.getAsJsonArray("observations")
+        for (el in observations ?: com.google.gson.JsonArray()) {
+            if (!el.isJsonObject) continue
+            val o = el.asJsonObject
+            fun str(name: String): String? = o.get(name)?.takeIf { it.isJsonPrimitive }?.asString
+            val observationId = str("observation_id") ?: continue
+            val ok = store.commitObservationTransaction(
+                owner = record,
+                expectedAcceptedSeq = record.acceptedSeq, // CAS 锚定恢复后的 seq；导入不推进状态
+                nextCheckpointJson = record.checkpointJson,
+                nextAcceptedSeq = record.acceptedSeq,
+                nextStateAppliedSeq = record.stateAppliedSeq,
+                interactionDelta = 0,
+                observation = ObservationRecord(
+                    observationId = observationId,
+                    ownerKey = newOwnerKey,
+                    inputHash = str("input_hash") ?: continue,
+                    turnId = str("turn_id") ?: continue,
+                    kind = try {
+                        ObservationKind.from(str("kind") ?: continue)
+                    } catch (e: Exception) {
+                        continue
+                    },
+                    seq = o.get("seq")?.takeIf { it.isJsonPrimitive }?.asLong ?: continue,
+                    canonicalInputJson = str("canonical_input_json") ?: "{}",
+                    perceptionJson = str("perception_json"),
+                    sensorStatus = try {
+                        SensorStatus.valueOf(str("sensor_status") ?: "CANCELLED")
+                    } catch (e: Exception) {
+                        SensorStatus.CANCELLED
+                    },
+                    degradeReason = str("degrade_reason"),
+                    eligibilityJson = str("eligibility_json"),
+                    factsJson = str("facts_json"),
+                    createdAtWallMillis = o.get("created_at_wall_millis")?.takeIf { it.isJsonPrimitive }?.asLong ?: 0L,
+                ),
+            )
+            if (ok) imported++
+        }
+        for (el in runtime.getAsJsonArray("request_views") ?: com.google.gson.JsonArray()) {
+            if (!el.isJsonObject) continue
+            val r = el.asJsonObject
+            fun str(name: String): String? = r.get(name)?.takeIf { it.isJsonPrimitive }?.asString
+            store.insertRequestView(
+                RequestViewRecord(
+                    ownerKey = newOwnerKey,
+                    turnId = str("turn_id") ?: continue,
+                    subRequestId = str("sub_request_id") ?: "main",
+                    requestRevision = r.get("request_revision")?.takeIf { it.isJsonPrimitive }?.asInt ?: continue,
+                    observationCutoffSeq = r.get("observation_cutoff_seq")?.takeIf { it.isJsonPrimitive }?.asLong ?: continue,
+                    projectionJson = str("projection_json") ?: "{}",
+                    loreJson = str("lore_json") ?: "{}",
+                    sourcesJson = str("sources_json") ?: "",
+                    policyRevision = r.get("policy_revision")?.takeIf { it.isJsonPrimitive }?.asLong ?: 0L,
+                    memoryRevision = r.get("memory_revision")?.takeIf { it.isJsonPrimitive }?.asLong ?: 0L,
+                    budgetJson = str("budget_json") ?: "{}",
+                    payloadHash = str("payload_hash") ?: "",
+                    createdAtWallMillis = r.get("created_at_wall_millis")?.takeIf { it.isJsonPrimitive }?.asLong ?: 0L,
+                ),
+            )
+        }
+        store.insertLifecycleOp(
+            kind = "restore_import",
+            phase = "committed",
+            oldOwnerKey = null,
+            newOwnerKey = newOwnerKey,
+            manifestJson = JsonObject().apply {
+                addProperty("observations_imported", imported)
+                addProperty("accepted_seq", record.acceptedSeq)
+            }.toString(),
+            committed = true,
+        )
+        return true
+    }
+
+    // ------------------------------------------------------------------
     // 投影（不推进状态）
     // ------------------------------------------------------------------
 

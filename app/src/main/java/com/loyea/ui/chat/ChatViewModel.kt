@@ -1250,6 +1250,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         companionCoordinator.bumpPolicyRevision()
     }
 
+    /** 备份 v3：导出运行账本（无运行时返回 null → 恢复侧按新短期基线处理）。 */
+    suspend fun companionExportRuntime(sessionId: String): com.google.gson.JsonObject? {
+        val session = storageManager.loadSessionList().firstOrNull { it.id == sessionId } ?: return null
+        val incarnation = session.sessionIncarnationId ?: return null
+        return companionCoordinator.exportRuntimeState(session.characterId, sessionId, incarnation)
+    }
+
+    /** 模式关闭（§9.1）：撤销任务 lease，保留已提交状态账本，释放可释放的模型资源。 */
+    fun closeCompanionRuntime() {
+        companionCoordinator.closeCompanion()
+        companionSensor.release()
+    }
+
     /** debug 诊断（§10.2）：owner/版本/观测/状态行；不含原文、位置或健康数据。 */
     suspend fun companionDebugSnapshot(sessionId: String): String {
         val session = storageManager.loadSessionList().firstOrNull { it.id == sessionId }

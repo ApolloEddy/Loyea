@@ -125,7 +125,7 @@ class CompanionBackupCodecTest {
     fun `legacy v1 backup parses without config and triples`() {
         // 模拟 v1 备份：version=1、无 graphTriples、companion 无称呼/免打扰字段
         val v1 = exportSample()
-            .replace("\"version\":2", "\"version\":1")
+            .replace("\"version\":${CompanionBackupCodec.BACKUP_VERSION}", "\"version\":1")
             .replace(Regex("\"graphTriples\":\\[.*?\\]"), "\"graphTriples\":[]")
         val result = CompanionBackupCodec.parse(v1)
         assertTrue(result is CompanionBackupCodec.ParseResult.Ok)
@@ -157,7 +157,7 @@ class CompanionBackupCodecTest {
     fun `wrong version is rejected`() {
         val json = exportSample()
         assertTrue(json.contains("\"version\":${CompanionBackupCodec.BACKUP_VERSION}"))
-        val result = CompanionBackupCodec.parse(json.replace("\"version\":2", "\"version\":99"))
+        val result = CompanionBackupCodec.parse(json.replace("\"version\":${CompanionBackupCodec.BACKUP_VERSION}", "\"version\":99"))
         assertTrue(result is CompanionBackupCodec.ParseResult.Rejected)
     }
 

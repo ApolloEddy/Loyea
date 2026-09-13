@@ -277,7 +277,7 @@ class CompanionRuntimeCoordinatorTest {
 // ---------------------------------------------------------------------------
 
 /** 可编程感知：按调用返回预设结果。 */
-private class ProgrammableSensor : CompanionTextPerception {
+internal class ProgrammableSensor : CompanionTextPerception {
     var calls = 0
     var nextStatus: SensorStatus = SensorStatus.READY_RESULT
     var nextOutcome: PerceptionOutcome? = null
@@ -293,7 +293,7 @@ private class ProgrammableSensor : CompanionTextPerception {
     }
 }
 
-private class RecordingSink : ProjectionSink {
+internal class RecordingSink : ProjectionSink {
     val written = mutableListOf<String>()
     var failNext = false
     override suspend fun upsertMessage(ownerKey: String, messageId: String, messageJson: String): Boolean {
@@ -303,7 +303,7 @@ private class RecordingSink : ProjectionSink {
     }
 }
 
-private class FakePolicyBook : CompanionPolicyBook {
+internal class FakePolicyBook : CompanionPolicyBook {
     private var revision = 0L
     override fun current(physical: Boolean, text: Boolean, memoryRevision: Long) =
         CompanionPolicySnapshot(revision, physical, text, memoryRevision)

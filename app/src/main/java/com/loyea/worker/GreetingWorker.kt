@@ -152,7 +152,27 @@ class GreetingWorker(
             snapshotTimeMillis = eventTime
         )
         val history = storageManager.loadSessionMessages(currentSession.id).takeLast(10)
-        val systemPrompt = BackgroundPromptTemplates.greetingSystem(promptParts.stableSystemPrompt, userName)
+        // 陪伴智能接入（§10.1）：问候读取同一份运行状态的纯投影——不调用文本情绪模型、
+        // 不新增交互计数、不生成新的观测；状态不可用时问候照常（不带模块）。
+        val companionStateModule = runCatching {
+            val incarnation = currentSession.sessionIncarnationId ?: return@runCatching null
+            val coordinator = com.loyea.plugin.companion.runtime.CompanionRuntimeCoordinator.getInstance(context)
+            val visibleEvidence = coordinator.visibleEvidenceIds(
+                CompanionContract.COMPANION_CHARACTER_ID, currentSession.id, incarnation,
+                history.map { it.id }.toSet(),
+            )
+            val projection = coordinator.projectCurrent(
+                CompanionContract.COMPANION_CHARACTER_ID, currentSession.id, incarnation,
+                visibleEvidence, emptySet(),
+            ) ?: return@runCatching null
+            com.loyea.plugin.companion.runtime.CompanionPromptAdapter.render(
+                projection = projection,
+                activeTags = emptySet(),
+                estimate = { text -> estimateTokens(text) },
+            ).text
+        }.getOrNull()
+        val systemPrompt = BackgroundPromptTemplates.greetingSystem(promptParts.stableSystemPrompt, userName) +
+            (companionStateModule?.let { module -> "\n" + module } ?: "")
         val eventInput = BackgroundPromptTemplates.greetingEventInput(promptParts.turnContextSnapshot)
         val requestHistory = history.map { m ->
             if (!m.imageUrl.isNullOrBlank()) {
@@ -231,7 +251,10 @@ class GreetingWorker(
             sender = Sender.AI,
             characterId = activeCard.id
         )
-        val writeOk = storageManager.updateSessionMessages(commitSession.id) { currentMsgs ->
+        // §9.3：陪伴写回带 incarnation 围栏——恢复/重开后旧任务的写回被拒绝
+        val writeOk = storageManager.updateSessionMessagesFenced(
+            commitSession.id, commitSession.sessionIncarnationId,
+        ) { currentMsgs ->
             if (currentMsgs.any { it.id == newMsg.id }) currentMsgs else currentMsgs + newMsg
         }
         if (!writeOk) {
@@ -546,5 +569,21 @@ class GreetingWorker(
     companion object {
         /** 陪伴主动问候消息 ID 前缀：稳定事件 ID + 未回应判定 + 去重共用。 */
         const val GREETING_ID_PREFIX = "greet_"
+
+        /**
+         * 陪伴主动联系开关运行时开启（§9.3/A34）：从配置提交入口确保唯一任务存在，
+         * 不等 Activity 重建；KEEP 策略不重复排队，已有链路原样保留（频率仍由原调度器决定）。
+         */
+        fun enqueueProactiveCheck(context: android.content.Context, delayMinutes: Long = 1L) {
+            val workRequest = androidx.work.OneTimeWorkRequestBuilder<GreetingWorker>()
+                .setInitialDelay(delayMinutes, java.util.concurrent.TimeUnit.MINUTES)
+                .addTag("loyea_bg_greeting")
+                .build()
+            androidx.work.WorkManager.getInstance(context).enqueueUniqueWork(
+                "loyea_bg_greeting_work",
+                androidx.work.ExistingWorkPolicy.KEEP,
+                workRequest
+            )
+        }
     }
 }

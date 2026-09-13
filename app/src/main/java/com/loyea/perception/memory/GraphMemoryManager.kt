@@ -55,7 +55,7 @@ class GraphMemoryManager(private val context: Context) {
      * 保存三元组列表到本地 JSON 文件（原子写：临时文件 + 重命名，防止中途崩溃产生半截 JSON；
      * java.io rename 在 Windows JVM 上不允许覆盖已存在目标 → Files.move(REPLACE_EXISTING)）
      */
-    private suspend fun saveTriplesInternal(triples: List<MemoryTriple>) = fileMutex.withLock {
+    private suspend fun saveTriplesInternal(triples: List<MemoryTriple>): Boolean = fileMutex.withLock {
         try {
             val json = gson.toJson(triples)
             val tmpFile = File(memoriesFile.parentFile, "${memoriesFile.name}.tmp")
@@ -74,8 +74,10 @@ class GraphMemoryManager(private val context: Context) {
                     )
                 }
             }
+            true
         } catch (e: Exception) {
             e.printStackTrace()
+            false
         }
     }
 
@@ -189,7 +191,7 @@ class GraphMemoryManager(private val context: Context) {
         lastMentionedTime: Long,
         mentionCount: Int,
         baseWeight: Float
-    ) {
+    ): Boolean {
         val currentList = loadTriplesInternal().toMutableList()
         val newId = (currentList.maxOfOrNull { it.id } ?: 0L) + 1L
         currentList.add(
@@ -206,7 +208,8 @@ class GraphMemoryManager(private val context: Context) {
                 baseWeight = baseWeight
             )
         )
-        saveTriplesInternal(currentList)
+        // 返回真实成败（陪伴智能接入 §9.3）：恢复路径据此判断失败，不伪报成功后删旧。
+        return saveTriplesInternal(currentList)
     }
 
     /**

@@ -119,6 +119,9 @@ internal class FakeStore : CompanionStateStore {
             .filter { it.ownerKey == ownerKey && it.turnId == turnId && it.subRequestId == subRequestId }
             .maxOfOrNull { it.requestRevision } ?: 0
 
+    override fun allRequestViews(ownerKey: String, limit: Int): List<RequestViewRecord> =
+        requestViews.values.filter { it.ownerKey == ownerKey }.sortedByDescending { it.createdAtWallMillis }.take(limit)
+
     override fun deleteRequestViewsForOwner(ownerKey: String): Int {
         val keys = requestViews.keys.filter { it.startsWith("$ownerKey|") }
         keys.forEach { requestViews.remove(it) }

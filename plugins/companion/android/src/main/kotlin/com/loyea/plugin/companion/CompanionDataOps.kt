@@ -50,10 +50,11 @@ internal object CompanionDataOps {
             return@withContext RestoreOutcome.Failed("写入新消息失败（磁盘空间或权限问题），当前数据未被改动")
         }
 
-        // staging：图谱记忆重映射到新会话（R-05：恢复必须带走图谱，否则下一轮召回断裂）
+        // staging：图谱记忆重映射到新会话（R-05：恢复必须带走图谱，否则下一轮召回断裂）。
+        // §9.3：图谱写失败必须可见——任一三元组写失败即中止，不伪报成功后删旧。
         val companionId = CompanionContract.COMPANION_CHARACTER_ID
         for (t in preview.graphTriples) {
-            graph.insertTriple(
+            val ok = graph.insertTriple(
                 characterId = companionId,
                 sessionId = newId,
                 subject = t.s,
@@ -64,6 +65,11 @@ internal object CompanionDataOps {
                 mentionCount = t.mentionCount,
                 baseWeight = t.baseWeight
             )
+            if (!ok) {
+                graph.clearSession(companionId, newId)
+                storage.deleteSession(newId)
+                return@withContext RestoreOutcome.Failed("图谱记忆写入失败，当前数据未被改动")
+            }
         }
 
         // 3. 提交：原子换列表。失败 → 回滚 staging（消息文件 + 图谱），旧数据原样
@@ -71,7 +77,9 @@ internal object CompanionDataOps {
             id = newId,
             characterId = companionId,
             lastActiveTime = System.currentTimeMillis(),
-            bindingRevision = preview.session.bindingRevision + 1 // DATA-04：代际递增，旧写回失效
+            bindingRevision = preview.session.bindingRevision + 1, // DATA-04：代际递增，旧写回失效
+            // §9.2：恢复分配新 incarnation；旧 namespace 的写回与去重键一律失效
+            sessionIncarnationId = java.util.UUID.randomUUID().toString()
         )
         val swapped = storage.updateSessionList { list ->
             (list.filter { !CompanionContract.isCompanionCharacter(it.characterId) } + restoredSession)
@@ -83,9 +91,24 @@ internal object CompanionDataOps {
             return@withContext RestoreOutcome.Failed("更新会话索引失败，当前数据未被改动")
         }
 
+        // 3b. 运行账本导入（单一激活点之后的运行时投影）：v1/v2 无 runtime 或检查点
+        // 无法校验时，按新短期基线继续（RUNTIME_BASELINE_RESET），不伪造恢复的旧状态。
+        val coordinator = com.loyea.plugin.companion.runtime.CompanionRuntimeCoordinator.getInstance(context)
+        coordinator.closeCompanion() // 撤销旧 owner 的进行中任务 lease
+        val runtimeImported = preview.runtime != null &&
+            coordinator.importRuntimeState(
+                characterId = companionId,
+                newSessionId = newId,
+                newIncarnationId = restoredSession.sessionIncarnationId ?: "",
+                bindingRevision = restoredSession.bindingRevision,
+                runtime = preview.runtime,
+            )
+
         // 4. 清理旧数据（新状态已完整提交；此后任何失败只影响空间，不影响一致性）
         old?.let {
             viewModel.clearDraft(it.id)
+            // §9.2：旧 owner 的运行账本一并废弃（tombstone + 清观测/去重/请求视图）
+            coordinator.resetCompanion(companionId, it.id)
             if (it.id != newId) {
                 graph.clearSession(companionId, it.id)
                 storage.deleteSession(it.id)
@@ -103,6 +126,10 @@ internal object CompanionDataOps {
             lastNormalSessionId = current.lastNormalSessionId
         )
         store.save(restoredConfig)
+        if (preview.runtime != null && !runtimeImported) {
+            // 恢复成功但运行状态按基线处理：显式登记，不声称逐字恢复了旧状态
+            coordinator.recordRuntimeBaselineNote(companionId, newId, restoredSession.sessionIncarnationId ?: "")
+        }
         RestoreOutcome.Done(newId, restoredConfig)
     }
 
@@ -114,10 +141,14 @@ internal object CompanionDataOps {
         val graph = GraphMemoryManager(context)
         val old = viewModel.sessions.value.firstOrNull { CompanionContract.isCompanionCharacter(it.characterId) }
             ?: storage.loadSessionList().firstOrNull { CompanionContract.isCompanionCharacter(it.characterId) }
+        val coordinator = com.loyea.plugin.companion.runtime.CompanionRuntimeCoordinator.getInstance(context)
+        coordinator.closeCompanion()
         old?.let {
             // 撤销进行中的记忆整理：任务里的图谱写回会复活刚清掉的旧图谱
             viewModel.cancelMemoryConsolidation(it.id)
             viewModel.clearDraft(it.id)
+            // §9.1/§10：所有入口的"重新开始"共用同一套清理——运行账本一并废弃
+            coordinator.resetCompanion(CompanionContract.COMPANION_CHARACTER_ID, it.id)
             graph.clearSession(CompanionContract.COMPANION_CHARACTER_ID, it.id)
             storage.deleteSession(it.id)
         }

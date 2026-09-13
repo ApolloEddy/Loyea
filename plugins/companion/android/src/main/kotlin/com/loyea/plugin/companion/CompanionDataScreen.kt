@@ -116,7 +116,8 @@ fun CompanionDataScreen(
                                 mentionCount = it.mentionCount,
                                 baseWeight = it.baseWeight
                             )
-                        }
+                        },
+                        runtime = viewModel.companionExportRuntime(session?.id ?: "")
                     )
                     withContext(Dispatchers.IO) {
                         context.contentResolver.openOutputStream(uri)?.use { out ->
