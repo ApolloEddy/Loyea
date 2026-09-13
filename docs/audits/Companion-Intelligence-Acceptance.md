@@ -47,7 +47,7 @@ Spec:`docs/Loyea_Companion_Modulator_Perception_Integration_Spec_v1.0.md` · Pre
 | A09 | 纯媒体无有效文字 | ✅演绎 | attachmentsHash 非空+text 空白→SensorStatus.NO_TEXT→合法空感知;无任何远程情绪分析代码路径(§A37 出站监控亦证) |
 | A10 | 模型缺失/坏哈希/错版本/NaN | ✅JVM+演绎 | Sensor:大小+SHA-256 校验失败→INVALID_ASSET;metadata schema≠2.1.0→UNSUPPORTED_VERSION;核心 NaN/±inf/坏版本→IllegalArgumentException 且原子拒绝(ScenarioTest test_11),坏输出不可部分写入 |
 | A11 | 热态超时/迟到结果 | ✅设备 | timeoutDegradationDoesNotBlockChat:500ms 截止、等待者经通道分离、迟到结果丢弃、无并发关闭/无界 Session(单线程执行器+nativeJobs 门) |
-| A12 | 否定/假设/转述/第三方/玩笑/纠错 | ✅JVM+⚠️ | fixture 门控精确(ScenarioTest test_01–08);真实模型 16 样本单独统计(见 §5);80 条人工审定语义集**未完成**(⛔ 见 §6) |
+| A12 | 否定/假设/转述/第三方/玩笑/纠错 | ✅JVM+⚠️ | fixture 门控精确(ScenarioTest test_01–08);83 条真实语义集机器判定完成(§5.1:错误敌意 0 达标,命中率 4.7% 受限能力如实报告);人工审定签收 BLOCKED(§6) |
 | A13 | 同话题威胁 A/B 只解决 A | ✅JVM | attributionRevisionProperties:A 分量衰减、B 分量只受时间衰减(1e-12) |
 | A14 | 强证据隐藏弱证据可见 | ✅JVM | 同上:感受强度只由可见分量支持,sources 不含隐藏 id,intensity=mild |
 | A15 | 投影十次不变 | ✅JVM | 同上:rows/sources/dumps/seq 全部不变 |
@@ -121,7 +121,7 @@ Spec:`docs/Loyea_Companion_Modulator_Perception_Integration_Spec_v1.0.md` · Pre
 ## 6. 遗留与受限能力(不隐藏)
 
 1. **真机性能与 30 分钟温升对照未测**(无 OPPO Find X6/Pad 3 Pro 接入):所有性能数字来自模拟器/桌面 JVM,已在 §4 标注,不冒充手机表现。
-2. **BLOCKED(需用户资源)**:(a) OPPO Find X6/Pad 3 Pro 真机性能与 30 分钟温升对照——测量脚本 tools/measure_oppo_perf.sh(adb 采样 battery temperature/thermal status + PERF 自动化);(b) 83 条语义集的人工审定签收与自然度评审——管线与结果文件已备,待评审者签收;(c) 扩充生成对照集(当前 20 组×2 条件已满足 Spec 最低线)。
+2. **BLOCKED(需用户资源)**:(a) OPPO Find X6/Pad 3 Pro 真机性能与 30 分钟温升对照——测量脚本 tools/measure_oppo_perf.sh(adb 采样 battery temperature/thermal status + PERF 自动化);(b) 83 条语义集的人工审定签收与自然度评审——机器判定管线与结果文件已备(§5.1),待评审者签收;(c) 扩充生成对照集(当前 20 组×2 条件已满足 Spec 最低线)。
 3. **A27 无 reboot 自动化、A30 未逐阶段故障注入**:机制在位(时钟锚点/分步回滚),标注部分通过。
 4. **RequestView 导出含于 v3,但恢复后 subRequestId 与原设备轮次的对应关系仅按原值保留**;跨设备 ID 语义一致性依赖消息 ID 保留(§9.2 步骤 3 已按原 ID 恢复)。
 5. **模型受限能力**:toxicity/joy/sadness 概率偏保守导致部分路由在真实语料上命中率有限(baseMacroF1=0.3751 为原文件历史记录,未复核);按 Spec 不硬编码测试句、不改标签迁就,宿主以 `task_blocked` 等宿主事实+Lore 兜底体验。
