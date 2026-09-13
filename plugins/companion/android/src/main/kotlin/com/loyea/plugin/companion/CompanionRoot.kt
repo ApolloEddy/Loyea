@@ -65,6 +65,10 @@ fun CompanionRoot(
         if (next.perceptionEnabled != config.perceptionEnabled && next.sessionId.isNotBlank()) {
             viewModel.setSessionPerceptionEnabled(next.sessionId, next.perceptionEnabled)
         }
+        // 文字情绪感知独立开关（§10.2）：变化即递增 policyRevision，冻结请求重新校验
+        if (next.textPerceptionEnabled != config.textPerceptionEnabled) {
+            viewModel.onCompanionTextPerceptionChanged(next.textPerceptionEnabled)
+        }
         config = next
     }
 
@@ -216,7 +220,8 @@ fun CompanionRoot(
             CompanionSubPage.PERCEPTION -> CompanionPerceptionScreen(
                 config = config,
                 onConfigChange = { setConfig(it) },
-                onBack = { subPage = CompanionSubPage.SETTINGS }
+                onBack = { subPage = CompanionSubPage.SETTINGS },
+                debugSnapshotProvider = { sessionId -> viewModel.companionDebugSnapshot(sessionId) }
             )
             CompanionSubPage.DATA -> CompanionDataScreen(
                 viewModel = viewModel,

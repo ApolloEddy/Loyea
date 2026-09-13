@@ -21,7 +21,9 @@ object LlmConversationBuilder {
         allowGraphContext: Boolean = true,
         timeZone: TimeZone = TimeZone.getDefault(),
         postHistoryInstructions: String = "",
-        historyBudgetTokens: Long = 0L
+        historyBudgetTokens: Long = 0L,
+        /** 陪伴回合（A22）：历史快照不再逐条重新注入，只保留当前（最后一条用户）消息的状态模块。 */
+        companionTurn: Boolean = false
     ): List<LlmChatMessage> {
         val result = mutableListOf<LlmChatMessage>()
         if (!systemPrompt.isNullOrBlank()) {
@@ -39,6 +41,14 @@ object LlmConversationBuilder {
         // Spec 7.3：用总上下文预算选择连续历史后缀，删除固定 takeLast(20) 裁剪依据；
         // 工具调用与结果同属一条消息，天然作为完整单元取舍
         val recentHistory = selectWithinBudget(history, historyBudgetTokens)
+
+        // A22：陪伴回合只注入最后一条用户消息的快照（当前状态/Lore 一份），
+        // 历史保存的状态不可逐条重新注入或作为新的状态依据。
+        val lastUserMessageId = if (companionTurn) {
+            recentHistory.lastOrNull { it.sender == Sender.USER }?.id
+        } else {
+            null
+        }
 
         recentHistory.forEachIndexed { index, message ->
             val effectiveImage = if (includeVision && !message.imageUrl.isNullOrBlank()) message.imageUrl else null
@@ -60,6 +70,8 @@ object LlmConversationBuilder {
                 textContent = "[语音消息]"
             }
 
+            val snapshotEligible = message.sender == Sender.USER && !message.llmContextSnapshot.isNullOrBlank() &&
+                (!companionTurn || message.id == lastUserMessageId)
             val providerContent = buildString {
                 // 时间戳只加在用户消息上：assistant 历史回复带标签会让模型模仿自己的
                 // 输出格式，是回复泄露 [MESSAGE TIME] 标签的根因（2026-09-06）。
@@ -68,9 +80,9 @@ object LlmConversationBuilder {
                     append(ConversationTimelineFormatter.formatMessageMetadata(message, timeZone))
                     append('\n')
                 }
-                if (message.sender == Sender.USER && !message.llmContextSnapshot.isNullOrBlank()) {
+                if (snapshotEligible) {
                     val safeSnapshot = sanitizeSnapshot(
-                        snapshot = message.llmContextSnapshot,
+                        snapshot = message.llmContextSnapshot ?: "",
                         allowPhysicalContext = allowPhysicalContext,
                         allowGraphContext = allowGraphContext
                     )

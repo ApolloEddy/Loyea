@@ -67,6 +67,7 @@ fun CompanionPerceptionScreen(
     config: CompanionConfig,
     onConfigChange: (CompanionConfig) -> Unit,
     onBack: () -> Unit,
+    debugSnapshotProvider: (suspend (String) -> String)? = null,
 ) {
     val context = LocalContext.current
     val masterOn = config.perceptionEnabled
@@ -142,6 +143,45 @@ fun CompanionPerceptionScreen(
                         )
                     }
                     PerceptionSwitch(masterOn) { onConfigChange(config.copy(perceptionEnabled = it)) }
+                }
+                GroupDivider()
+                // 文字情绪感知（Spec 接入文档 §10.2）：与物理感知相互独立的开关；
+                // 本机分析，不新增远程情绪分析渠道；关闭仅停止新文本分析。
+                Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("文字情绪感知", fontSize = 15.sp, color = CompanionPalette.TextPrimary)
+                        Text(
+                            "在本机分析你发送的文字，帮助调整回应方式",
+                            fontSize = 12.sp, color = CompanionPalette.Hint, modifier = Modifier.padding(top = 3.dp)
+                        )
+                    }
+                    PerceptionSwitch(config.textPerceptionEnabled) {
+                        onConfigChange(config.copy(textPerceptionEnabled = it))
+                    }
+                }
+            }
+
+            // debug 诊断（Spec 接入文档 §10.2）：仅 debug 构建可见，不含原文/位置/健康数据。
+            if (com.loyea.BuildConfig.DEBUG && debugSnapshotProvider != null) {
+                SectionLabel("诊断（debug）", topPadding = 24)
+                SettingsGroup {
+                    val sessionIdForDebug = config.sessionId
+                    var debugText by remember(sessionIdForDebug, resumeTick) {
+                        mutableStateOf("（会话绑定后可用）")
+                    }
+                    androidx.compose.runtime.LaunchedEffect(sessionIdForDebug, resumeTick) {
+                        if (sessionIdForDebug.isNotBlank()) {
+                            debugText = runCatching {
+                                debugSnapshotProvider!!.invoke(sessionIdForDebug)
+                            }.getOrElse { "诊断不可用：${it.message}" }
+                        }
+                    }
+                    Text(
+                        debugText,
+                        fontSize = 11.sp,
+                        color = CompanionPalette.Hint,
+                        modifier = Modifier.fillMaxWidth().padding(16.dp)
+                    )
                 }
             }
 

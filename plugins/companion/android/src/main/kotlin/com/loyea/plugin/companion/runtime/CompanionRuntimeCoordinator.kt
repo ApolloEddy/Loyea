@@ -415,6 +415,236 @@ internal class CompanionRuntimeCoordinator internal constructor(
     }
 
     // ------------------------------------------------------------------
+    // 工具事实（Spec §5：仅 task_blocked；§6.3：首次可靠终态独立接纳）
+    // ------------------------------------------------------------------
+
+    /**
+     * 接纳一次工具失败事实：独立 observationId（toolCallId+terminalRevision）、
+     * 共用 turnId、推进 seq、不加交互计数。同一终态重复回调按 Reused 复用。
+     */
+    suspend fun admitToolFact(request: AdmitToolFactRequest): AdmitOutcome = admissionMutex.withLock {
+        val ownerKey = CompanionOwner(request.characterId, request.sessionId, request.incarnationId).storageKey()
+        val state = store.findActiveOwner(request.characterId, request.sessionId)
+            ?: return@withLock AdmitOutcome.Invalid("companion owner missing")
+        if (state.ownerKey != ownerKey) return@withLock AdmitOutcome.Invalid("incarnation mismatch")
+
+        val observationId = "obs:tool:${request.toolCallId}:${request.terminalRevision}"
+        store.findObservation(ownerKey, observationId)?.let {
+            return@withLock AdmitOutcome.Reused(it, generation)
+        }
+        val seq = state.acceptedSeq + 1
+        val now = clock.nowSeconds()
+        val fact = Fact(
+            kind = "task_blocked",
+            strength = 0.45,
+            evidenceId = observationId,
+            confidence = 1.0,
+            verified = true,
+            source = "host",
+            target = "event",
+        )
+        val engine = try {
+            Modulator.loads(state.checkpointJson)
+        } catch (corrupt: IllegalArgumentException) {
+            return@withLock AdmitOutcome.Conflict("checkpoint corrupt: ${corrupt.message}")
+        }
+        engine.idleTo(now)
+        val decision = try {
+            engine.process(
+                ModulatorObservation(
+                    eventId = observationId,
+                    seq = seq,
+                    at = now,
+                    context = ModulatorContext(
+                        topicId = "session:${request.sessionId}",
+                        scene = "real",
+                        relations = CompanionProfileRepository.relationView(),
+                        visibleEvidence = setOf(observationId),
+                    ),
+                    facts = listOf(fact),
+                ),
+            )
+        } catch (coreFailure: IllegalArgumentException) {
+            return@withLock AdmitOutcome.Conflict("core rejected tool fact: ${coreFailure.message}")
+        }
+        val nextCheckpoint = engine.dumps()
+        val committed = store.commitObservationTransaction(
+            owner = state,
+            expectedAcceptedSeq = state.acceptedSeq,
+            nextCheckpointJson = nextCheckpoint,
+            nextAcceptedSeq = seq,
+            nextStateAppliedSeq = seq,
+            interactionDelta = 0,
+            observation = ObservationRecord(
+                observationId = observationId,
+                ownerKey = ownerKey,
+                inputHash = sha256("tool:${request.toolCallId}:${request.terminalRevision}"),
+                turnId = request.turnId,
+                kind = ObservationKind.TOOL_FACT,
+                seq = seq,
+                canonicalInputJson = JsonObject().apply {
+                    addProperty("tool_call_id", request.toolCallId)
+                    addProperty("terminal_revision", request.terminalRevision)
+                    addProperty("fact", "task_blocked")
+                }.toString(),
+                perceptionJson = null,
+                sensorStatus = SensorStatus.CANCELLED,
+                degradeReason = null,
+                eligibilityJson = null,
+                factsJson = JsonObject().apply { addProperty("kinds", "task_blocked") }.toString(),
+                createdAtWallMillis = clock.wallNowMillis(),
+            ),
+        )
+        if (!committed) return@withLock AdmitOutcome.Conflict("commit failed; retry with same id")
+        store.insertCheckpointHistory(ownerKey, seq, nextCheckpoint)
+        AdmitOutcome.Accepted(
+            observationId = observationId,
+            turnId = request.turnId,
+            seq = seq,
+            rows = decision.rows,
+            audit = decision.audit,
+            sensorStatus = SensorStatus.CANCELLED,
+            degradeReason = null,
+            interactionCounted = false,
+            projectionPending = false,
+            generation = generation,
+        )
+    }
+
+    /** 本轮已提交的 task_blocked 工具事实 → 模块渲染的 activeTags。 */
+    fun activeTagsForTurn(characterId: String, sessionId: String, incarnationId: String, turnId: String): Set<String> {
+        val ownerKey = CompanionOwner(characterId, sessionId, incarnationId).storageKey()
+        val hasToolFact = store.allObservations(ownerKey).any {
+            it.turnId == turnId && it.kind == ObservationKind.TOOL_FACT
+        }
+        return if (hasToolFact) setOf("host:task_blocked") else emptySet()
+    }
+
+    /** 保留消息 → 仍确实可见的证据（观测 id）集合（Spec §8.3 最终证据闭合）。 */
+    fun visibleEvidenceIds(
+        characterId: String,
+        sessionId: String,
+        incarnationId: String,
+        retainedMessageIds: Set<String>,
+    ): Set<String> {
+        val ownerKey = CompanionOwner(characterId, sessionId, incarnationId).storageKey()
+        return store.allObservations(ownerKey)
+            .filter { it.turnId in retainedMessageIds }
+            .map { it.observationId }
+            .toSet()
+    }
+
+    /** 记录一次实际请求的投影（RequestView）。 */
+    fun recordRequestView(
+        characterId: String,
+        sessionId: String,
+        incarnationId: String,
+        turnId: String,
+        subRequestId: String,
+        observationCutoffSeq: Long,
+        module: CompanionPromptAdapter.RenderedModule,
+        policyRevision: Long,
+        memoryRevision: Long,
+    ): Boolean {
+        val ownerKey = CompanionOwner(characterId, sessionId, incarnationId).storageKey()
+        val state = store.findOwnerState(ownerKey) ?: return false
+        val revision = store.latestRequestRevision(ownerKey, turnId, subRequestId) + 1
+        return store.insertRequestView(
+            RequestViewRecord(
+                ownerKey = ownerKey,
+                turnId = turnId,
+                subRequestId = subRequestId,
+                requestRevision = revision,
+                observationCutoffSeq = observationCutoffSeq,
+                projectionJson = JsonObject().apply {
+                    add("rows", com.google.gson.JsonArray().apply {
+                        module.rows.forEach { r ->
+                            add(JsonObject().apply {
+                                addProperty("aspect", r.aspect)
+                                addProperty("state", r.state)
+                                addProperty("intensity", r.intensity)
+                            })
+                        }
+                    })
+                    add("sources", JsonObject().apply {
+                        module.sources.forEach { (k, v) ->
+                            add(k, com.google.gson.JsonArray().apply { v.forEach { add(it) } })
+                        }
+                    })
+                }.toString(),
+                loreJson = JsonObject().apply {
+                    addProperty("book", CompanionPromptAdapter.PRIVATE_BOOK_ID)
+                    addProperty("lore_version", state.loreProfileVersion)
+                    add("selected", com.google.gson.JsonArray().apply { module.selectedLoreIds.forEach { add(it) } })
+                }.toString(),
+                sourcesJson = module.sources.keys.joinToString(","),
+                policyRevision = policyRevision,
+                memoryRevision = memoryRevision,
+                budgetJson = JsonObject().apply {
+                    addProperty("tokens", module.budgetTokens)
+                    addProperty("estimated", module.budgetEstimated)
+                }.toString(),
+                payloadHash = sha256(module.text),
+                createdAtWallMillis = System.currentTimeMillis(),
+            ),
+        )
+    }
+
+    fun acceptedSeqOf(characterId: String, sessionId: String, incarnationId: String): Long {
+        val ownerKey = CompanionOwner(characterId, sessionId, incarnationId).storageKey()
+        return store.findOwnerState(ownerKey)?.acceptedSeq ?: -1L
+    }
+
+    /**
+     * debug 诊断快照（Spec §10.2）：owner、算法/检查点版本、最近观测的
+     * observationId/seq/sensorStatus/降级原因、状态行、最近 RequestView 摘要。
+     * 默认不含完整原文、位置或健康数据。
+     */
+    fun debugSnapshot(
+        characterId: String,
+        sessionId: String,
+        incarnationId: String,
+        sensorInfo: JsonObject? = null,
+    ): JsonObject {
+        val ownerKey = CompanionOwner(characterId, sessionId, incarnationId).storageKey()
+        val state = store.findOwnerState(ownerKey)
+        val root = JsonObject()
+        root.addProperty("owner", ownerKey)
+        root.addProperty("active", state?.active == true)
+        root.addProperty("algorithm_version", state?.algorithmVersion)
+        root.addProperty("checkpoint_schema", state?.checkpointSchemaVersion)
+        root.addProperty("personality_profile", state?.personalityProfileVersion)
+        root.addProperty("lore_profile", state?.loreProfileVersion)
+        root.addProperty("accepted_seq", state?.acceptedSeq)
+        root.addProperty("state_applied_seq", state?.stateAppliedSeq)
+        root.addProperty("interaction_count", state?.interactionCount)
+        root.addProperty("pending_state_note", state?.pendingStateNoteJson)
+        if (sensorInfo != null) root.add("sensor", sensorInfo)
+        val obs = com.google.gson.JsonArray()
+        store.allObservations(ownerKey, limit = 12).reversed().forEach { o ->
+            obs.add(JsonObject().apply {
+                addProperty("observation_id", o.observationId)
+                addProperty("seq", o.seq)
+                addProperty("kind", o.kind.name)
+                addProperty("sensor_status", o.sensorStatus.name)
+                addProperty("degrade_reason", o.degradeReason)
+                addProperty("input_hash", o.inputHash.take(12))
+            })
+        }
+        root.add("recent_observations", obs)
+        val checkpointRows = state?.let {
+            try {
+                val cp = com.google.gson.JsonParser.parseString(it.checkpointJson).asJsonObject
+                cp.getAsJsonObject("last_decision")?.getAsJsonArray("rows")
+            } catch (t: Throwable) {
+                null
+            }
+        }
+        if (checkpointRows != null) root.add("rows", checkpointRows)
+        return root
+    }
+
+    // ------------------------------------------------------------------
     // 投影（不推进状态）
     // ------------------------------------------------------------------
 
@@ -598,6 +828,18 @@ data class RecoveryReport(
     val status: String,
     val drained: Boolean,
     val pendingStateNote: String? = null,
+)
+
+/** 工具失败事实请求（task_blocked；同终态重复回调复用）。 */
+data class AdmitToolFactRequest(
+    val characterId: String,
+    val sessionId: String,
+    val incarnationId: String,
+    /** 所属用户回合（共用 turnId）。 */
+    val turnId: String,
+    val toolCallId: String,
+    /** 同一工具调用的终态修订；内容变化必须换修订号，不得生成随机 id 逃过去重。 */
+    val terminalRevision: Long = 0,
 )
 
 /** 编辑回放结果（A28）。 */

@@ -90,6 +90,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val llmClient = LlmClient()
     private val sessionDrafts = mutableMapOf<String, String>()
 
+    // 陪伴智能接入（Spec §4）：application 级运行时，旋转/切页共用同一份状态（A26）
+    private val companionCoordinator =
+        com.loyea.plugin.companion.runtime.CompanionRuntimeCoordinator.getInstance(application)
+    private val companionSensor by lazy {
+        com.loyea.plugin.companion.perception.LegacyEmotionSensor.getInstance(application)
+    }
+
     private val mcpManager = McpManager(application)
     val mcpStates: StateFlow<Map<String, McpServerStatus>> = mcpManager.serverStates
 
@@ -988,6 +995,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 sessions.value = (listOf(fromDisk) + sessions.value.filterNot { it.characterId == characterId })
                     .sortedByDescending { it.lastActiveTime }
             }
+            // 陪伴智能接入：补齐 incarnation（升级路径 §9.1）、准备模型、确保 owner、补投影
+            val incarnation = storageManager.ensureSessionIncarnation(fromDisk.id)
+            if (incarnation != null) {
+                prepareCompanionRuntime(characterId, fromDisk.id, incarnation, fromDisk.bindingRevision)
+            }
             return fromDisk.id
         }
         // 磁盘已无陪伴会话：清除内存中的滞后条目，保持列表与存储一致
@@ -1001,6 +1013,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             title = title,
             lastActiveTime = System.currentTimeMillis(),
             characterId = characterId,
+            sessionIncarnationId = java.util.UUID.randomUUID().toString(), // §4.2：创建即分配并持久保存
             useSystemTime = perceptionOn
         )
         val updated = (listOf(session) + sessions.value).sortedByDescending { it.lastActiveTime }
@@ -1013,7 +1026,30 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             return null
         }
         sessions.value = updated
+        session.sessionIncarnationId?.let {
+            prepareCompanionRuntime(characterId, sessionId, it, session.bindingRevision)
+        }
         return sessionId
+    }
+
+    /**
+     * 陪伴运行时接入点：挂接感知实现、异步准备模型（首条消息不等待冷启动）、
+     * 确保 owner 存在，并补齐崩溃期间未完成的 JSON 投影（A24）。
+     */
+    private suspend fun prepareCompanionRuntime(
+        characterId: String,
+        sessionId: String,
+        incarnation: String,
+        bindingRevision: Long,
+    ) {
+        companionCoordinator.textPerception = companionSensor
+        companionSensor.prepareAsync()
+        try {
+            companionCoordinator.ensureOwner(characterId, sessionId, incarnation, bindingRevision)
+            companionCoordinator.recoverOwner(characterId, sessionId, incarnation, companionProjectionSink)
+        } catch (t: Throwable) {
+            // 运行时不可用不阻塞进入陪伴聊天（Spec §10.3）
+        }
     }
 
     /**
@@ -1123,6 +1159,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val sessionId = currentSessionId.value
         viewModelScope.launch(Dispatchers.IO) {
             val finalMsgs = mergeAndSaveMessages(sessionId, memoryMsgs) ?: return@launch
+            // 陪伴智能接入（Spec §6.2）：每个已接纳用户输入经过运行协调器一次——
+            // 感知 → 调制 → 事务提交（含 outbox 投影）。普通会话零触碰。
+            val isCompanion = com.loyea.plugin.companion.CompanionContract.isCompanionCharacter(activeCard.id)
+            var companionAdmitted = false
+            if (isCompanion) {
+                companionAdmitted = admitCompanionTurn(sessionId, userMsg, finalMsgs)
+            }
             withContext(Dispatchers.Main) {
                 messages.value = finalMsgs
                 // 更新会话标题
@@ -1139,6 +1182,110 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+
+    /**
+     * 陪伴运行时：接纳一次用户输入（感知 + 状态事务 + outbox）。
+     * 投影失败（projectionPending）时仍启动回复，但状态本轮以合法空感知观测呈现——
+     * 聊天继续可用，outbox 会在下次发送/恢复时补写（Spec §6.2 步骤 6/§10.3）。
+     */
+    private suspend fun admitCompanionTurn(
+        sessionId: String,
+        userMsg: Message,
+        finalMsgs: List<Message>,
+    ): Boolean {
+        val incarnation = activeSession.value?.sessionIncarnationId
+            ?: storageManager.ensureSessionIncarnation(sessionId)
+            ?: return false
+        val coordinator = companionCoordinator
+        val policy = companionPolicySnapshot()
+        val contextTurns = finalMsgs
+            .filter { it.id != userMsg.id }
+            .takeLast(3)
+            .map { com.loyea.plugin.companion.runtime.PerceptionTurn(
+                speaker = if (it.sender == Sender.USER) "speaker_0" else "speaker_1",
+                text = it.content,
+                isAssistant = it.sender == Sender.AI,
+            ) }
+        val request = com.loyea.plugin.companion.runtime.AdmitUserTurnRequest(
+            characterId = userMsg.characterId ?: com.loyea.plugin.companion.CompanionContract.COMPANION_CHARACTER_ID,
+            sessionId = sessionId,
+            incarnationId = incarnation,
+            messageId = userMsg.id,
+            inputRevision = userMsg.inputRevision,
+            text = userMsg.content,
+            contextTurns = contextTurns,
+            attachmentsHash = listOfNotNull(userMsg.imageUrl, userMsg.audioUrl).joinToString(",").takeIf { it.isNotBlank() },
+            policy = policy,
+            userMessageJson = com.google.gson.Gson().toJsonTree(userMsg).asJsonObject,
+            projectionSink = companionProjectionSink,
+        )
+        return try {
+            when (val outcome = coordinator.admitUserTurn(request)) {
+                is com.loyea.plugin.companion.runtime.AdmitOutcome.Accepted -> true
+                is com.loyea.plugin.companion.runtime.AdmitOutcome.Reused -> true // 网络重试：复用原观测
+                else -> false
+            }
+        } catch (t: Throwable) {
+            false // 感知/账本异常不阻塞聊天本身（Spec §10.3）
+        }
+    }
+
+    private fun companionPolicySnapshot(): com.loyea.plugin.companion.runtime.CompanionPolicySnapshot {
+        val config = com.loyea.plugin.companion.CompanionConfigStore(context).load()
+        val session = activeSession.value
+        val textSwitch = companionTextPerceptionEnabled()
+        return companionCoordinator.policySnapshot(
+            physicalEnabled = session?.useSystemTime == true,
+            textEnabled = textSwitch,
+            memoryRevision = session?.memoryRevision ?: 0L,
+        )
+    }
+
+    /** 文字情绪感知开关（§10.2）：默认开；关闭持久化在陪伴配置，模式/升级不得重开。 */
+    fun companionTextPerceptionEnabled(): Boolean =
+        com.loyea.plugin.companion.CompanionConfigStore(context).load().textPerceptionEnabled
+
+    /** 设置页变更回调：持久化之外的唯一动作是递增 policyRevision（冻结请求重新校验）。 */
+    fun onCompanionTextPerceptionChanged(enabled: Boolean) {
+        companionCoordinator.bumpPolicyRevision()
+    }
+
+    /** debug 诊断（§10.2）：owner/版本/观测/状态行；不含原文、位置或健康数据。 */
+    suspend fun companionDebugSnapshot(sessionId: String): String {
+        val session = storageManager.loadSessionList().firstOrNull { it.id == sessionId }
+            ?: return "会话不存在"
+        val incarnation = session.sessionIncarnationId ?: return "会话尚无 incarnation（未接入运行时）"
+        val sensorInfo = com.google.gson.JsonParser.parseString(
+            com.google.gson.Gson().toJson(
+                mapOf(
+                    "state" to companionSensor.prepareInfo().state.name,
+                    "model_sha256" to (companionSensor.prepareInfo().modelSha256?.take(16) ?: ""),
+                    "metadata_schema" to (companionSensor.prepareInfo().metadataSchema ?: ""),
+                    "error" to (companionSensor.prepareInfo().error ?: ""),
+                ),
+            ),
+        ).asJsonObject
+        return companionCoordinator.debugSnapshot(
+            session.characterId, sessionId, incarnation, sensorInfo,
+        ).toString()
+    }
+
+    /** outbox 投影出口：幂等补写用户消息（崩溃恢复 A24）；带 incarnation 围栏。 */
+    private val companionProjectionSink =
+        com.loyea.plugin.companion.runtime.ProjectionSink { ownerKey, messageId, messageJson ->
+            val parts = ownerKey.split("|")
+            if (parts.size != 3) return@ProjectionSink false
+            val (characterId, sessionId, incarnation) = parts
+            val gson = com.google.gson.Gson()
+            val restored = try {
+                gson.fromJson(messageJson, Message::class.java)
+            } catch (t: Throwable) {
+                return@ProjectionSink false
+            }
+            storageManager.updateSessionMessagesFenced(sessionId, incarnation) { current ->
+                if (current.any { it.id == messageId }) current else current + restored
+            }
+        }
 
 
     /**
@@ -1735,9 +1882,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             )
             val promptPartsFinal = effectivePromptParts
 
+            // 陪伴智能接入（Spec §8.2）：陪伴回合的状态模块要等最终保留消息段确定后
+            // （最终证据闭合，§8.3）才投影并固化，因此陪伴路径跳过此处的即时持久化。
+            val isCompanionTurn = com.loyea.plugin.companion.CompanionContract.isCompanionCharacter(characterCard.id)
             val turnSnapshot = existingTurnSnapshot ?: promptPartsFinal.turnContextSnapshot
             var requestHistory = history
-            if (requestUserMessage != null && existingTurnSnapshot == null && turnSnapshot.isNotBlank()) {
+            if (requestUserMessage != null && existingTurnSnapshot == null && turnSnapshot.isNotBlank() && !isCompanionTurn) {
                 requestHistory = history.map { message ->
                     if (message.id == requestUserMessage.id) {
                         message.copy(llmContextSnapshot = turnSnapshot)
@@ -1807,6 +1957,85 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
+            // ===== 陪伴智能接入（Spec §8）：状态模块投影 + 最终证据闭合 + 私有 Lore =====
+            // 仅陪伴归属会话进入；useSystemTime/物理开关关闭时模块照样进入请求（A20）。
+            val companionIncarnation = if (isCompanionTurn) activeSession.value?.sessionIncarnationId else null
+            val companionTurnId = if (isCompanionTurn) requestUserMessage?.id ?: "" else ""
+            var companionModuleText: String? = null
+            if (isCompanionTurn) {
+                try {
+                    val incarnation = companionIncarnation
+                    if (incarnation != null) {
+                        val turnId = companionTurnId
+                        val retainedIds = (selectedHistory.map { it.id } + turnId).toSet()
+                        val visibleEvidence =
+                            companionCoordinator.visibleEvidenceIds(characterCard.id, sessionId, incarnation, retainedIds)
+                        val activeTags = if (turnId.isNotBlank())
+                            companionCoordinator.activeTagsForTurn(characterCard.id, sessionId, incarnation, turnId)
+                        else emptySet()
+                        val projection = companionCoordinator.projectCurrent(
+                            characterId = characterCard.id,
+                            sessionId = sessionId,
+                            incarnationId = incarnation,
+                            visibleEvidence = visibleEvidence,
+                            activeTags = activeTags,
+                        )
+                        if (projection != null) {
+                            val module = com.loyea.plugin.companion.runtime.CompanionPromptAdapter.render(
+                                projection = projection,
+                                activeTags = activeTags,
+                                estimate = { text -> estimateTokens(text) },
+                            )
+                            companionModuleText = module.text
+                            if (turnId.isNotBlank()) {
+                                companionCoordinator.recordRequestView(
+                                    characterId = characterCard.id,
+                                    sessionId = sessionId,
+                                    incarnationId = incarnation,
+                                    turnId = turnId,
+                                    subRequestId = "main",
+                                    observationCutoffSeq = companionCoordinator.acceptedSeqOf(
+                                        characterCard.id, sessionId, incarnation,
+                                    ),
+                                    module = module,
+                                    policyRevision = companionCoordinator.policySnapshot(
+                                        sessionUsesSystemTime,
+                                        companionTextPerceptionEnabled(),
+                                        activeSession.value?.memoryRevision ?: 0L,
+                                    ).revision,
+                                    memoryRevision = activeSession.value?.memoryRevision ?: 0L,
+                                )
+                            }
+                            // 快照持久化（含模块）：新回合一次性固化；重生成复用旧快照（§6.3）。
+                            if (requestUserMessage != null && existingTurnSnapshot == null && module.text.isNotBlank()) {
+                                val companionSnapshot = if (turnSnapshot.isNotBlank()) {
+                                    "$turnSnapshot\n${module.text}"
+                                } else {
+                                    module.text
+                                }
+                                requestHistory = history.map { message ->
+                                    if (message.id == requestUserMessage.id) {
+                                        message.copy(llmContextSnapshot = companionSnapshot)
+                                    } else message
+                                }
+                                currentList = messages.value.map { message ->
+                                    if (message.id == requestUserMessage.id) {
+                                        message.copy(llmContextSnapshot = companionSnapshot)
+                                    } else message
+                                }
+                                messages.value = currentList
+                                forcePersistLlmContextSnapshot(
+                                    sessionId, requestUserMessage.id, requestUserMessage.timestamp, companionSnapshot,
+                                )
+                            }
+                        }
+                    }
+                } catch (t: Throwable) {
+                    // 状态/Lore 不可证明有效时：不带模块继续聊天（Spec §10.3），不伪造正常推进
+                    companionModuleText = null
+                }
+            }
+
             // 构建初始会话上下文（按目标模型能力决定图片/音频是否进入 payload）
             var conversation = buildLlmConversation(
                 promptPartsFinal.stableSystemPrompt, selectedHistory,
@@ -1819,7 +2048,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 allowPhysicalContext = sessionUsesSystemTime,
                 allowGraphContext = enableGraphMemory.value,
                 postHistoryInstructions = compiledPrompt?.postHistoryBlock?.text ?: "",
-                historyBudgetTokens = historyBudget
+                historyBudgetTokens = historyBudget,
+                companionTurn = isCompanionTurn
             )
             var round = 0
             val maxRounds = 5
@@ -2064,6 +2294,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         )
 
                         // 逐个执行工具
+                        // 陪伴智能接入（§5）：本轮明确的工具终态失败（内部重试结束后）收集用于 task_blocked
+                        val companionFailedToolCalls = mutableListOf<LlmToolCall>()
                         for (toolCall in streamToolCalls) {
                             val displayCallId = "${toolCall.id}_${System.currentTimeMillis()}"
                             val parsedArgs = llmClient.parseArgumentsMap(toolCall.argumentsJson)
@@ -2199,6 +2431,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             }
                             
                             // 更新 UI 展示 SUCCESS/FAILED 状态
+                            if (!success) companionFailedToolCalls += toolCall
                             currentList = updateMcpCall(currentList, aiMessageId, displayCallId) {
                                 it.copy(
                                     status = if (success) McpStatus.SUCCESS else McpStatus.FAILED,
@@ -2321,8 +2554,81 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         // 保存当前更新了 McpCalls 的消息到文件
                         saveMessagesAsync(sessionId, currentList)
 
+                        // 陪伴智能接入（§5/§6.3）：首次可靠工具终态失败 → 独立 task_blocked 观测
+                        // （不加交互计数、不重算用户感知）；子请求模块整体替换（requestRevision+1）。
+                        var companionPatchedConversation: List<LlmChatMessage>? = null
+                        if (isCompanionTurn && companionFailedToolCalls.isNotEmpty()) {
+                            try {
+                                val incarnation = companionIncarnation
+                                if (incarnation != null && companionTurnId.isNotBlank()) {
+                                    for (failed in companionFailedToolCalls) {
+                                        companionCoordinator.admitToolFact(
+                                            com.loyea.plugin.companion.runtime.AdmitToolFactRequest(
+                                                characterId = characterCard.id,
+                                                sessionId = sessionId,
+                                                incarnationId = incarnation,
+                                                turnId = companionTurnId,
+                                                toolCallId = failed.id,
+                                            ),
+                                        )
+                                    }
+                                    val visibleEvidence = companionCoordinator.visibleEvidenceIds(
+                                        characterCard.id, sessionId, incarnation,
+                                        (selectedHistory.map { it.id } + companionTurnId).toSet(),
+                                    )
+                                    val activeTags = companionCoordinator.activeTagsForTurn(
+                                        characterCard.id, sessionId, incarnation, companionTurnId,
+                                    )
+                                    val projection = companionCoordinator.projectCurrent(
+                                        characterCard.id, sessionId, incarnation, visibleEvidence, activeTags,
+                                    )
+                                    if (projection != null) {
+                                        val module = com.loyea.plugin.companion.runtime.CompanionPromptAdapter.render(
+                                            projection = projection,
+                                            activeTags = activeTags,
+                                            estimate = { text -> estimateTokens(text) },
+                                        )
+                                        companionModuleText = module.text
+                                        companionCoordinator.recordRequestView(
+                                            characterId = characterCard.id,
+                                            sessionId = sessionId,
+                                            incarnationId = incarnation,
+                                            turnId = companionTurnId,
+                                            subRequestId = "round$round",
+                                            observationCutoffSeq = companionCoordinator.acceptedSeqOf(
+                                                characterCard.id, sessionId, incarnation,
+                                            ),
+                                            module = module,
+                                            policyRevision = companionCoordinator.policySnapshot(
+                                                sessionUsesSystemTime,
+                                                companionTextPerceptionEnabled(),
+                                                activeSession.value?.memoryRevision ?: 0L,
+                                            ).revision,
+                                            memoryRevision = activeSession.value?.memoryRevision ?: 0L,
+                                        )
+                                        companionPatchedConversation = nextConversation.map { msg ->
+                                            if (msg.role == "user" &&
+                                                msg.content?.contains(
+                                                    com.loyea.plugin.companion.runtime.CompanionPromptAdapter.STATE_BLOCK_START,
+                                                ) == true
+                                            ) {
+                                                msg.copy(
+                                                    content = com.loyea.plugin.companion.runtime.CompanionPromptAdapter
+                                                        .replaceModuleInUserContent(msg.content ?: "", module.text),
+                                                )
+                                            } else {
+                                                msg
+                                            }
+                                        }
+                                    }
+                                }
+                            } catch (t: Throwable) {
+                                // 工具事实接纳失败不阻塞工具子轮继续
+                            }
+                        }
+
                         // 更新 conversation 变量以进入下一次 while 循环
-                        conversation = nextConversation
+                        conversation = companionPatchedConversation ?: nextConversation
                         isMcpRunning.value = false
                     } else {
                         // 如果没有工具需要调用，完成最后一轮自动折叠逻辑 (针对内容结束)
@@ -2579,7 +2885,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         allowPhysicalContext: Boolean = true,
         allowGraphContext: Boolean = true,
         postHistoryInstructions: String = "",
-        historyBudgetTokens: Long = 0L
+        historyBudgetTokens: Long = 0L,
+        companionTurn: Boolean = false
     ): List<LlmChatMessage> = LlmConversationBuilder.build(
         systemPrompt = systemPrompt,
         history = history,
@@ -2590,7 +2897,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         allowPhysicalContext = allowPhysicalContext,
         allowGraphContext = allowGraphContext,
         postHistoryInstructions = postHistoryInstructions,
-        historyBudgetTokens = historyBudgetTokens
+        historyBudgetTokens = historyBudgetTokens,
+        companionTurn = companionTurn
     )
 
     private fun updateAiMessage(
@@ -2673,6 +2981,29 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         message.timestamp == expectedTimestamp &&
                         message.llmContextSnapshot.isNullOrBlank()
                     ) {
+                        message.copy(llmContextSnapshot = snapshot)
+                    } else {
+                        message
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 陪伴回合专用：快照含本轮状态模块，模块在最终证据闭合后确定，
+     * 由同一协程一次性写入（覆盖刚写入的预快照；同一回合同一写入者）。
+     */
+    private fun forcePersistLlmContextSnapshot(
+        sessionId: String,
+        messageId: String,
+        expectedTimestamp: Long,
+        snapshot: String,
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            storageManager.updateSessionMessages(sessionId) { diskMessages ->
+                diskMessages.map { message ->
+                    if (message.id == messageId && message.timestamp == expectedTimestamp) {
                         message.copy(llmContextSnapshot = snapshot)
                     } else {
                         message
@@ -3545,6 +3876,26 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val targetMsg = diskMsgs[index]
             if (targetMsg.content.trim() == newContent.trim()) return@launch
 
+            // 陪伴智能接入（§6.3/A28）：编辑用户历史 = 新输入分支。先把运行状态回退到
+            // 该输入接纳前的检查点并废弃后缀观测；同 messageId 新 inputRevision 重新接纳。
+            val isCompanionEdit = com.loyea.plugin.companion.CompanionContract.isCompanionCharacter(targetMsg.characterId)
+            var newInputRevision = targetMsg.inputRevision
+            if (isCompanionEdit) {
+                val incarnation = activeSession.value?.sessionIncarnationId
+                if (incarnation != null) {
+                    when (companionCoordinator.rebaseToEditPoint(targetMsg.characterId ?: "", sessionId, incarnation, messageId)) {
+                        is com.loyea.plugin.companion.runtime.EditRebaseResult.Rebased -> {
+                            newInputRevision = targetMsg.inputRevision + 1
+                        }
+                        // 编辑点早于运行时基线/历史已清理：新分支显式初始化（EDIT_BEFORE_RUNTIME_BASELINE）
+                        is com.loyea.plugin.companion.runtime.EditRebaseResult.BeforeRuntimeBaseline -> {
+                            newInputRevision = targetMsg.inputRevision + 1
+                        }
+                        else -> {}
+                    }
+                }
+            }
+
             // 截断 index 之后的消息，只保留当前被编辑消息及之前的消息，并更新当前消息内容
             val truncatedMsgs = diskMsgs.subList(0, index + 1).mapIndexed { idx, msg ->
                 if (idx == index) {
@@ -3555,7 +3906,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         // 用户正文和发送时刻已改变，旧 provider 上下文快照必须失效并按新回合重建
                         llmContextSnapshot = null,
                         llmTimeZoneId = java.util.TimeZone.getDefault().id,
-                        timestamp = System.currentTimeMillis()
+                        timestamp = System.currentTimeMillis(),
+                        // 陪伴：新输入修订（网络重试不变，仅编辑递增）
+                        inputRevision = newInputRevision
                     )
                 } else {
                     msg

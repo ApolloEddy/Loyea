@@ -533,6 +533,31 @@ class ChatStorageManager(private val context: Context) {
     }
 
     /**
+     * 为会话补齐并持久化 sessionIncarnationId（陪伴智能接入 §4.2/§9.1 升级路径）。
+     * 已有 incarnation 的会话原样返回；会话不存在返回 null；幂等。
+     */
+    suspend fun ensureSessionIncarnation(sessionId: String): String? {
+        ensureMigrated()
+        var assigned: String? = null
+        sessionsMutex.withLock {
+            val current = loadSessionListInternal()
+            val session = current.firstOrNull { it.id == sessionId } ?: return@withLock
+            if (!session.sessionIncarnationId.isNullOrBlank()) {
+                assigned = session.sessionIncarnationId
+                return@withLock
+            }
+            assigned = java.util.UUID.randomUUID().toString()
+            val updated = current.map {
+                if (it.id == sessionId) it.copy(sessionIncarnationId = assigned) else it
+            }
+            if (!saveSessionListInternal(updated)) {
+                assigned = null
+            }
+        }
+        return assigned
+    }
+
+    /**
      * 原子化更新会话列表。返回写入是否成功。
      */
     suspend fun updateSessionList(updateBlock: (List<ChatSession>) -> List<ChatSession>): Boolean {

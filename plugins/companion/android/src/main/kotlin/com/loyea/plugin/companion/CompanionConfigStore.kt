@@ -20,6 +20,8 @@ data class CompanionConfig(
     val userCalledName: String = "",
     /** FUN-05：仅首次创建陪伴配置时默认开；用户关掉后不得被重开。 */
     val perceptionEnabled: Boolean = true,
+    /** 文字情绪感知（Spec 接入文档 §10.2）：本机分析用户文字；默认开，关闭后不被模式/升级重开。 */
+    val textPerceptionEnabled: Boolean = true,
     /** S-01 建议：未保存过用户选择时默认关；关闭不影响其他陪伴功能。 */
     val proactiveEnabled: Boolean = false,
     /** 免打扰（分钟数，支持跨午夜区间）。 */

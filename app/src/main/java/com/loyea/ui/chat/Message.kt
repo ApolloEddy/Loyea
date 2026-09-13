@@ -56,6 +56,10 @@ data class Message(
     // 发送时区与 timestamp 一起固化；设备以后切换时区也不会重写历史 provider 前缀。
     val llmTimeZoneId: String? = java.util.TimeZone.getDefault().id,
 
+    // 陪伴智能接入（Spec §6.3）：编辑产生新输入修订；网络重试/重生成不变。
+    // 普通聊天恒为 0；陪伴会话的编辑分支据此重放状态。
+    val inputRevision: Long = 0,
+
     // 多模态 Vision 与 Speech 新增字段，带默认值以兼容旧数据
     val imageUrl: String? = null,
     /** 图片的短描述（后台自动图注生成，≤15 字）；文本模型降级与问候历史以 [图片｜描述] 引用 */

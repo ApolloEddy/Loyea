@@ -32,7 +32,7 @@ import java.util.concurrent.atomic.AtomicReference
  * - 上下文子集在本地核算 token 后冻结（右截断保护当前输入，§5）。
  * - 语法修正只作用于当前句原文，且不改调制器消费的概率分数（§3.2）。
  */
-class LegacyEmotionSensor private constructor(private val appContext: Context) {
+class LegacyEmotionSensor private constructor(private val appContext: Context) : com.loyea.plugin.companion.runtime.CompanionTextPerception {
 
     enum class PrepareState { IDLE, PREPARING, READY, FAILED }
 
@@ -131,7 +131,7 @@ class LegacyEmotionSensor private constructor(private val appContext: Context) {
     // 感知
     // ------------------------------------------------------------------
 
-    suspend fun perceive(request: PerceptionRequest): PerceptionOutcome {
+    override suspend fun perceive(request: PerceptionRequest): PerceptionOutcome {
         when (state.get()) {
             PrepareState.IDLE, PrepareState.PREPARING -> return PerceptionOutcome(SensorStatus.NOT_READY, null)
             PrepareState.FAILED -> return PerceptionOutcome(SensorStatus.INVALID_ASSET, null)
