@@ -9,7 +9,16 @@ package com.loyea.plugin.modulator
 
 /** 词表与固定常量（Spec §5、§9；与 prototype/modulator.py 逐一对应）。 */
 object ModulatorVocab {
-    const val VERSION: String = "1.0.0-prototype"
+    /**
+     * 1.1.0：证据归因修订（Spec 接入文档 §7）——痕迹按证据分量保存、
+     * 独立衰减、修复只衰减显式链接分量、新增纯投影接口。
+     * 旧版 "1.0.0-prototype" 检查点只能迁移载入（清除不可恢复的痕迹），不再原样恢复。
+     */
+    const val VERSION: String = "1.1.0"
+    const val LEGACY_PROTOTYPE_VERSION: String = "1.0.0-prototype"
+
+    /** 1.0.0-prototype → 1.1.0 迁移时写入迁移报告的标记。 */
+    const val MIGRATION_LEGACY_TRACE_ATTRIBUTION_RESET: String = "LEGACY_TRACE_ATTRIBUTION_RESET"
 
     const val AXIS_VALENCE = "valence"
     const val AXIS_ACTIVATION = "activation"

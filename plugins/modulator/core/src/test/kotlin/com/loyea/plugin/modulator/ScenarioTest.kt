@@ -377,13 +377,21 @@ class ScenarioTest {
         val d0 = m.process(Observation("u1", 1, 0.0, facts = listOf(f)))
         assertTrue(labels(d0).isEmpty())
         var d = d0
+        // 归因修订后由宿主声明仍可见的历史证据；去重键 f1 不得重复提交。
+        val visible = mutableSetOf("f1")
         for (n in 2..8) {
+            visible += "f$n"
             d = m.process(
-                Observation("u$n", n.toLong(), n * 45.0, facts = listOf(fact("future_threat", 0.12, "f$n"))),
+                Observation(
+                    "u$n", n.toLong(), n * 45.0,
+                    Context(visibleEvidence = visible.toSet()),
+                    facts = listOf(fact("future_threat", 0.12, "f$n")),
+                ),
             )
         }
         assertTrue(labels(d).contains("worry"))
         assertTrue(m.state.traces[0].strength <= 0.95)
+        assertEquals(4, m.state.traces[0].components.size)
     }
 
     @Test

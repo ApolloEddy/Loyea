@@ -90,7 +90,7 @@ class NumericalTest {
                     assertTrue(m.state.mood[j] in lo..hi)
                 }
                 assertTrue(m.state.traces.size <= 8)
-                assertTrue(m.state.traces.all { it.evidenceIds.size <= 4 })
+                assertTrue(m.state.traces.all { it.components.size <= 4 })
             }
             m.idleTo(at + 365.0 * 86400.0)
             val expected = m.personality.baseline() + m.personality.baseline()

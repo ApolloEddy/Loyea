@@ -1,0 +1,24 @@
+{
+  "description": "Loyea 调制器检查点 schema 登记。检查点版本与核心算法版本一致（dumps/loads 顶层 version 字段）。",
+  "schemas": {
+    "1.0.0-prototype": {
+      "status": "archival",
+      "traceFields": ["evidence_ids", "half_life", "kind", "last_event_at", "strength", "target", "topic_id"],
+      "traceSemantics": "按 (kind, target, topicId) 聚合强度，仅保留 evidenceIds 列表；每条证据无独立强度。",
+      "loadBehavior": "可载入但只能迁移：保留 at/fast/mood/人格/lastSeq/lastEventId/moodLabel/last_decision，清除 traces、label_levels、selected_feelings，报告 LEGACY_TRACE_ATTRIBUTION_RESET。不允许平均分摊或复制总强度。"
+    },
+    "1.1.0": {
+      "status": "active",
+      "traceFields": ["components", "half_life", "kind", "strength", "target", "topic_id"],
+      "traceComponentFields": ["evidence_id", "strength", "last_event_at"],
+      "traceSemantics": "每组 (kind,target,topicId) 最多 4 个证据分量，各分量独立衰减；组 strength = min(TRACE_CAP, 1-Π(1-c))，由分量推导，组内按插入（时间）序；淘汰按 (last_event_at, evidence_id)。",
+      "notes": "顶层 strength 为可读性派生值，载入时由 components 重算，不作为信任输入。"
+    }
+  },
+  "migration": {
+    "from": "1.0.0-prototype",
+    "to": "1.1.0",
+    "marker": "LEGACY_TRACE_ATTRIBUTION_RESET",
+    "rule": "旧检查点没有每条证据的独立强度，无法恢复归因；按迁移规则降级为无痕迹短期基线，不伪造痕迹。"
+  }
+}

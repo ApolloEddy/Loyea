@@ -138,7 +138,16 @@ private fun stateJson(engine: Modulator): JsonObject {
         tj.addProperty("topicId", t.topicId)
         tj.addProperty("strength", t.strength)
         tj.addProperty("halfLife", t.halfLife)
-        tj.add("evidenceIds", JsonArray().apply { t.evidenceIds.forEach { add(it) } })
+        tj.add("evidenceIds", JsonArray().apply { t.evidenceIds().forEach { add(it) } })
+        tj.add("components", JsonArray().apply {
+            t.components.forEach { c ->
+                add(JsonObject().apply {
+                    addProperty("evidenceId", c.evidenceId)
+                    addProperty("strength", c.strength)
+                    addProperty("lastEventAt", c.lastEventAt)
+                })
+            }
+        })
         traces.add(tj)
     }
     state.add("traces", traces)
@@ -169,9 +178,9 @@ private fun decisionJson(decision: Decision): JsonObject {
 // ---------------------------------------------------------------------------
 
 private fun goldenReport(): String {
-    val raw = Modulator::class.java.getResourceAsStream("/integration/golden_cases.json")
+    val raw = Modulator::class.java.getResourceAsStream("/integration/golden_cases_v1.1.json")
         ?.readBytes()?.decodeToString()
-        ?: throw IllegalArgumentException("golden_cases.json 不在类路径上")
+        ?: throw IllegalArgumentException("golden_cases_v1.1.json 不在类路径上")
     val cases = JsonParser.parseString(raw).asJsonObject
     val tolerance = cases.get("numeric_tolerance").asDouble
     var allPass = true

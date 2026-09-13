@@ -26,6 +26,7 @@ object Wire {
         activeTags = o.stringSet("active_tags"),
         relations = o.objOrNull("relations")?.let { relationView(it) } ?: RelationView(),
         trustScope = o.stringOr("trust_scope", "general"),
+        explicitResolutionLinks = o.stringSet("explicit_resolution_links"),
     )
 
     fun fact(o: JsonObject): Fact {

@@ -85,10 +85,19 @@ fun evolve(state: Snapshot, at: Double, p: Personality) {
         state.fast[i] = clip(state.fast[i], lo, hi)
         state.mood[i] = clip(state.mood[i], lo, hi)
     }
-    for (t in state.traces) {
-        t.strength *= exp(-ln(2.0) * dt / t.halfLife)
+    // v1.1.0 归因修订：各证据分量按所在组的 halfLife 独立衰减；
+    // 弱分量剪除，全部分量消失时整组移除。组强度由分量重推。
+    val traceIterator = state.traces.iterator()
+    while (traceIterator.hasNext()) {
+        val tr = traceIterator.next()
+        val compIterator = tr.components.iterator()
+        while (compIterator.hasNext()) {
+            val c = compIterator.next()
+            c.strength *= exp(-ln(2.0) * dt / tr.halfLife)
+            if (c.strength < ModulatorVocab.TRACE_PRUNE) compIterator.remove()
+        }
+        if (tr.components.isEmpty()) traceIterator.remove() else tr.recompute()
     }
-    state.traces.removeAll { it.strength < ModulatorVocab.TRACE_PRUNE }
     state.at = at
 }
 
@@ -120,23 +129,41 @@ fun quantize(state: Snapshot, key: String, value: Double): String {
 // 状态表编译（Spec §9）：关系两行、背景一行、当前感受最多两行。
 // ---------------------------------------------------------------------------
 
-fun compileRows(state: Snapshot, ctx: Context, visible: Set<String>): List<Row> {
+fun compileRows(state: Snapshot, ctx: Context, visible: Set<String>): List<Row> =
+    compileRowsDetailed(state, ctx, visible).rows
+
+/**
+ * 编译状态表并记录每行的支持证据。
+ * 感觉强度只由“最终允许且确实可见”的证据分量计算：不可见分量不抬高该行。
+ * 仍然会推进传入快照上的量化器/标签簿记——正式引擎调用它时必须使用工作副本；
+ * 纯投影请用 [Modulator.project]，它不会改动正式状态。
+ */
+fun compileRowsDetailed(
+    state: Snapshot,
+    ctx: Context,
+    visible: Set<String>,
+): StateProjection {
     val r = ctx.relations
     val rows = mutableListOf<Row>()
+    val sources = linkedMapOf<String, MutableList<String>>()
+    val relationAvailable = r.affect != "unspecified" || r.trust != "unspecified"
 
     // 关系值保持只读；绝不把喜爱自动晋级为爱。
     val relationSpecs = listOf(
-        "relationship_affect" to (r.affect to r.affectStrength),
-        "relationship_trust" to (r.trust to r.trustStrength),
+        "relationship_affect" to Triple(r.affect, r.affectStrength, listOfNotNull(r.evidenceId)),
+        "relationship_trust" to Triple(r.trust, r.trustStrength, listOfNotNull(r.evidenceId)),
     )
-    for ((aspect, pair) in relationSpecs) {
-        var label = pair.first
-        var value = pair.second
+    for ((aspect, spec) in relationSpecs) {
+        var (label, value, evidence) = spec
         if (aspect == "relationship_trust" && r.scope != "general" && r.scope != ctx.trustScope) {
             label = "unspecified"
             value = null
+            evidence = emptyList()
         }
         rows += Row(aspect, label, if (value == null) "—" else quantize(state, "$aspect:$label", value))
+        if (value != null && evidence.isNotEmpty()) {
+            sources.getOrPut("$aspect/$label") { mutableListOf() }.addAll(evidence)
+        }
     }
 
     val v = state.mood[0]
@@ -173,11 +200,23 @@ fun compileRows(state: Snapshot, ctx: Context, visible: Set<String>): List<Row> 
     }
 
     // 标签保留因果证据；不从 V/A 单独解码内疚或愤怒。
+    // v1.1.0：强度只累计“确实可见”的证据分量（noisy-OR），隐藏分量不得泄漏。
     val feelings = linkedMapOf<String, Double>()
+    val feelingEvidence = linkedMapOf<String, MutableList<String>>()
     for (tr in state.traces) {
-        if (tr.topicId != ctx.topicId || tr.evidenceIds.none { it in visible }) continue
+        if (tr.topicId != ctx.topicId) continue
+        val visibleComponents = tr.components.filter { it.evidenceId in visible }
+        if (visibleComponents.isEmpty()) continue
+        var remain = 1.0
+        for (c in visibleComponents) remain *= 1 - c.strength
+        val visibleStrength = minOf(ModulatorVocab.TRACE_CAP, 1 - remain)
         val label = Rules.ALL.getValue(tr.kind).label
-        feelings[label] = maxOf(feelings[label] ?: 0.0, tr.strength)
+        if (visibleStrength > (feelings[label] ?: 0.0)) {
+            feelings[label] = visibleStrength
+            feelingEvidence[label] = mutableListOf<String>().also { list ->
+                visibleComponents.forEach { list.add(it.evidenceId) }
+            }
+        }
     }
     val candidates = feelings.filter { (k, score) ->
         score >= if (k in state.selectedFeelings) ModulatorVocab.FEELING_EXIT else ModulatorVocab.FEELING_ENTER
@@ -192,9 +231,10 @@ fun compileRows(state: Snapshot, ctx: Context, visible: Set<String>): List<Row> 
     state.selectedFeelings.addAll(chosen)
     for (label in chosen) {
         rows += Row("feeling", label, quantize(state, "feeling:$label", feelings.getValue(label)))
+        sources.getOrPut("feeling/$label") { mutableListOf() }.addAll(feelingEvidence.getValue(label))
     }
     // 持久量化器簿记由有限词表约束。
-    return rows
+    return StateProjection(rows, sources, relationAvailable)
 }
 
 // ---------------------------------------------------------------------------
@@ -287,10 +327,13 @@ class Modulator(
         if (obs.facts.size > 8 || obs.context.visibleEvidence.size > 128 || obs.context.activeTags.size > 64) {
             throw IllegalArgumentException("observation exceeds bounded input contract")
         }
+        if (obs.context.explicitResolutionLinks.size > 32) {
+            throw IllegalArgumentException("explicit resolution links exceed bounded input contract")
+        }
         identifier(obs.context.topicId, "topic_id")
         identifier(obs.context.scene, "scene")
         identifier(obs.context.trustScope, "trust_scope")
-        for (item in obs.context.visibleEvidence + obs.context.activeTags) {
+        for (item in obs.context.visibleEvidence + obs.context.activeTags + obs.context.explicitResolutionLinks) {
             identifier(item, "context item")
         }
         obs.context.relations.validate()
@@ -325,6 +368,7 @@ class Modulator(
                 it.kind == e.kind && it.target == e.target && it.topicId == e.topicId
             }
             if (previous != null) {
+                // v1.1.0：不应期按同组最近事件时间计算，与证据分量无关地保持抑制。
                 val elapsed = maxOf(0.0, obs.at - previous.lastEventAt)
                 q *= 0.25 + 0.75 * minOf(1.0, elapsed / ModulatorVocab.REFRACTORY_SECONDS)
             }
@@ -349,13 +393,20 @@ class Modulator(
             }
         }
 
-        // 显式修复只按证据关联衰减痕迹，绝不全局清空记忆。
+        // 显式修复只按证据关联衰减分量，绝不全局清空记忆。
+        // v1.1.0：只有被点名的证据分量衰减；同组其他证据保持不变。
+        // 衰减后的弱分量仍保留到下一次 evolve 统一剪除，与旧版时机一致。
         for ((e, q) in amplitudes) {
             if (e.resolves.isEmpty()) continue
             for (tr in s.traces) {
-                if (e.resolves.any { it in tr.evidenceIds }) {
-                    tr.strength *= 1 - ModulatorVocab.RESOLUTION_DAMP * q
+                var touched = false
+                for (c in tr.components) {
+                    if (e.resolves.contains(c.evidenceId)) {
+                        c.strength *= 1 - ModulatorVocab.RESOLUTION_DAMP * q
+                        touched = true
+                    }
                 }
+                if (touched) tr.recompute()
             }
         }
 
@@ -365,14 +416,29 @@ class Modulator(
                 it.kind == e.kind && it.target == e.target && it.topicId == e.topicId
             }
             if (tr != null) {
-                tr.strength = minOf(ModulatorVocab.TRACE_CAP, 1 - (1 - tr.strength) * (1 - q))
-                val merged = LinkedHashSet(tr.evidenceIds)
-                merged += e.evidenceId
-                tr.evidenceIds.clear()
-                tr.evidenceIds.addAll(merged.toList().takeLast(ModulatorVocab.MAX_EVIDENCE_PER_TRACE))
-                tr.lastEventAt = obs.at
+                if (tr.components.any { it.evidenceId == e.evidenceId }) {
+                    // v1.1.0：相同证据的重复接纳不通过重复合并增加强度。
+                    audit += "duplicate_evidence_ignored:${e.evidenceId}"
+                    continue
+                }
+                tr.components += EvidenceComponent(e.evidenceId, q, obs.at)
+                // 证据槽按（时间, ID）淘汰最旧分量，保持插入（时间）顺序；
+                // 被淘汰者不再参与可见感受。
+                while (tr.components.size > ModulatorVocab.MAX_EVIDENCE_PER_TRACE) {
+                    var oldest = 0
+                    for (i in 1 until tr.components.size) {
+                        val c = tr.components[i]
+                        val o = tr.components[oldest]
+                        if (c.lastEventAt < o.lastEventAt ||
+                            (c.lastEventAt == o.lastEventAt && c.evidenceId < o.evidenceId)
+                        ) oldest = i
+                    }
+                    tr.components.removeAt(oldest)
+                }
+                tr.recompute()
             } else {
-                s.traces += Trace(e.kind, e.target, e.topicId, q, rule.halfLife, mutableListOf(e.evidenceId), obs.at)
+                Trace(e.kind, e.target, e.topicId, rule.halfLife, mutableListOf(EvidenceComponent(e.evidenceId, q, obs.at)))
+                    .also { it.recompute(); s.traces += it }
             }
         }
         s.traces.sortWith(compareBy({ -it.strength }, { it.kind }, { it.target }, { it.topicId }))
@@ -398,6 +464,43 @@ class Modulator(
         val s = state.copy()
         evolve(s, at, personality)
         state = s
+    }
+
+    /**
+     * 纯投影（v1.1.0，Spec 接入文档 §7.2）：从当前正式状态读取状态表与证据来源，
+     * 不改变 seq、at、痕迹、量化器、标签簿记或 lastDecision；重复调用结果相同，
+     * 前后 dumps() 完全一致。visibleEvidence 只使用调用方给定的集合——本方法不会
+     * 像 [process] 那样自动补入当前事件/事实 id，未发送的事实不会被标为可见。
+     */
+    fun project(context: Context, visibleEvidence: Set<String>): StateProjection {
+        validateProjectionInput(context, visibleEvidence)
+        val copy = state.copy()
+        return compileRowsDetailed(copy, context, visibleEvidence)
+    }
+
+    /** 从指定检查点做同样的纯投影；检查点按 [loadCheckpoint] 规则严格校验。 */
+    fun projectFromCheckpoint(
+        raw: String,
+        context: Context,
+        visibleEvidence: Set<String>,
+    ): StateProjection {
+        validateProjectionInput(context, visibleEvidence)
+        val loaded = loadCheckpoint(raw)
+        val copy = loaded.modulator.state.copy()
+        return compileRowsDetailed(copy, context, visibleEvidence)
+    }
+
+    private fun validateProjectionInput(context: Context, visibleEvidence: Set<String>) {
+        if (visibleEvidence.size > 128 || context.activeTags.size > 64) {
+            throw IllegalArgumentException("projection exceeds bounded input contract")
+        }
+        identifier(context.topicId, "topic_id")
+        identifier(context.scene, "scene")
+        identifier(context.trustScope, "trust_scope")
+        for (item in visibleEvidence + context.activeTags + context.explicitResolutionLinks) {
+            identifier(item, "context item")
+        }
+        context.relations.validate()
     }
 
     fun dumps(): String {
@@ -426,10 +529,17 @@ class Modulator(
         val tracesJson = JsonArray()
         for (t in st.traces) {
             val tj = JsonObject()
-            tj.add("evidence_ids", JsonArray().apply { t.evidenceIds.forEach { add(jstr(it)) } })
+            tj.add("components", JsonArray().apply {
+                t.components.forEach { c ->
+                    add(JsonObject().apply {
+                        add("evidence_id", jstr(c.evidenceId))
+                        add("strength", num(c.strength))
+                        add("last_event_at", num(c.lastEventAt))
+                    })
+                }
+            })
             tj.add("half_life", num(t.halfLife))
             tj.add("kind", jstr(t.kind))
-            tj.add("last_event_at", num(t.lastEventAt))
             tj.add("strength", num(t.strength))
             tj.add("target", jstr(t.target))
             tj.add("topic_id", jstr(t.topicId))
@@ -467,39 +577,26 @@ class Modulator(
     companion object {
         private val GSON = com.google.gson.GsonBuilder().disableHtmlEscaping().create()
 
+        /** 兼容旧调用方的载入入口；迁移信息见 [loadCheckpoint]。 */
+        fun loads(raw: String): Modulator = loadCheckpoint(raw).modulator
+
         /** 从检查点恢复；坏检查点绝不部分载入（Spec §11.3）。 */
-        fun loads(raw: String): Modulator {
+        fun loadCheckpoint(raw: String): LoadedCheckpoint {
             if (raw.length > 65536) throw IllegalArgumentException("oversized checkpoint")
             val obj = JsonParser.parseString(raw).asJsonObject
-            if (obj.sortedString("version") != ModulatorVocab.VERSION) {
-                throw IllegalArgumentException("unsupported checkpoint version")
+            return when (obj.sortedString("version")) {
+                ModulatorVocab.VERSION -> loadV1_1(obj)
+                ModulatorVocab.LEGACY_PROTOTYPE_VERSION -> loadLegacyPrototype(obj)
+                else -> throw IllegalArgumentException("unsupported checkpoint version")
             }
+        }
 
+        private fun loadV1_1(obj: JsonObject): LoadedCheckpoint {
             val personalityJson = obj.sortedObject("personality")
-            val personality = Personality(
-                openness = personalityJson.sortedDouble("openness"),
-                conscientiousness = personalityJson.sortedDouble("conscientiousness"),
-                extraversion = personalityJson.sortedDouble("extraversion"),
-                agreeableness = personalityJson.sortedDouble("agreeableness"),
-                neuroticism = personalityJson.sortedDouble("neuroticism"),
-                plasticity = personalityJson.sortedDouble("plasticity"),
-                totalInteractions = personalityJson.sortedIntegral("total_interactions").toInt().also {
-                    if (it < 0) throw IllegalArgumentException("total_interactions: nonnegative integer required")
-                },
-                profileVersion = personalityJson.sortedString("profile_version"),
-            )
-
+            val personality = parsePersonality(personalityJson)
             val d = obj.sortedObject("state")
             val at = finite(d.sortedDouble("at"), "at")
-            for (name in listOf("fast", "mood")) {
-                val arr = d.sortedArray(name)
-                if (arr.size() != 4) throw IllegalArgumentException("corrupt state dimension")
-                for (k in 0 until 4) {
-                    val value = finite(arr.get(k).asDouble, name)
-                    val (lo, hi) = ModulatorVocab.BOUNDS[k]
-                    if (value < lo || value > hi) throw IllegalArgumentException("corrupt state bound")
-                }
-            }
+            val (fast, mood) = parseAxes(d)
             val tracesJson = d.sortedArray("traces")
             if (tracesJson.size() > ModulatorVocab.MAX_TRACES) throw IllegalArgumentException("corrupt bounded cache")
             val labelLevelsJson = d.sortedObject("label_levels")
@@ -531,21 +628,27 @@ class Modulator(
                 val t = el.asJsonObject
                 val kind = t.sortedString("kind")
                 val rule = Rules.ALL[kind] ?: throw IllegalArgumentException("corrupt trace")
-                val evidenceIds = t.sortedArray("evidence_ids").map { it.asString }
-                if (evidenceIds.isEmpty() || evidenceIds.size > ModulatorVocab.MAX_EVIDENCE_PER_TRACE) {
-                    throw IllegalArgumentException("corrupt trace")
-                }
-                val strength = unit(t.sortedDouble("strength"), "trace strength")
                 val target = t.sortedString("target")
                 val topicId = t.sortedString("topic_id")
-                evidenceIds.forEach { identifier(it, "trace evidence") }
                 identifier(target, "trace target")
                 identifier(topicId, "trace topic")
                 val halfLife = t.sortedDouble("half_life")
-                val lastEventAt = t.sortedDouble("last_event_at")
-                if (halfLife <= 0 || lastEventAt > at) throw IllegalArgumentException("corrupt trace time")
-                if (halfLife != rule.halfLife) throw IllegalArgumentException("checkpoint rule mismatch")
-                Trace(kind, target, topicId, strength, halfLife, evidenceIds.toMutableList(), lastEventAt)
+                if (halfLife <= 0 || halfLife != rule.halfLife) throw IllegalArgumentException("checkpoint rule mismatch")
+                val componentsJson = t.sortedArray("components")
+                if (componentsJson.isEmpty() || componentsJson.size() > ModulatorVocab.MAX_EVIDENCE_PER_TRACE) {
+                    throw IllegalArgumentException("corrupt trace components")
+                }
+                val seenIds = HashSet<String>()
+                val components = componentsJson.map { ce ->
+                    val c = ce.asJsonObject
+                    val evidenceId = identifier(c.sortedString("evidence_id"), "trace evidence")
+                    if (!seenIds.add(evidenceId)) throw IllegalArgumentException("duplicate evidence component")
+                    val strength = unit(c.sortedDouble("strength"), "component strength")
+                    val lastEventAt = finite(c.sortedDouble("last_event_at"), "component time")
+                    if (lastEventAt > at) throw IllegalArgumentException("corrupt trace time")
+                    EvidenceComponent(evidenceId, strength, lastEventAt)
+                }
+                Trace(kind, target, topicId, halfLife, components.toMutableList()).also { it.recompute() }
             }
 
             val profileVersion = d.sortedString("profile_version")
@@ -556,10 +659,7 @@ class Modulator(
             val engine = Modulator(personality, at)
             engine.injectStateForTest(
                 Snapshot(
-                    at, profileVersion,
-                    d.sortedArray("fast").map { it.asDouble }.toMutableList(),
-                    d.sortedArray("mood").map { it.asDouble }.toMutableList(),
-                    traces.toMutableList(),
+                    at, profileVersion, fast, mood, traces.toMutableList(),
                     lastSeq, lastEventId,
                     labelLevelsJson.entrySet().associate { (k, el) ->
                         k to (el as JsonPrimitive).asInt
@@ -568,7 +668,78 @@ class Modulator(
                     moodLabel,
                 ),
             )
+            parseAndCommitDecision(obj, engine, lastSeq, lastEventId)
+            return LoadedCheckpoint(engine, ModulatorVocab.VERSION, emptyList())
+        }
 
+        /**
+         * 旧 "1.0.0-prototype" 检查点没有每条证据的独立强度，不允许平均分摊或复制总量
+         * （Spec 接入文档 §7.1）：保留可验证的即时量/背景量与人格，清除痕迹、量化滞回与
+         * 感受选择，并在迁移报告中显式记录 LEGACY_TRACE_ATTRIBUTION_RESET。
+         */
+        private fun loadLegacyPrototype(obj: JsonObject): LoadedCheckpoint {
+            val personality = parsePersonality(obj.sortedObject("personality"))
+            val d = obj.sortedObject("state")
+            val at = finite(d.sortedDouble("at"), "at")
+            val (fast, mood) = parseAxes(d)
+            val moodLabel = d.sortedString("mood_label")
+            if (moodLabel !in ModulatorVocab.ASPECT_STATES.getValue("mood")) {
+                throw IllegalArgumentException("corrupt selected labels")
+            }
+            val lastSeq = d.sortedIntegral("last_seq").toLong()
+            if (lastSeq < -1) throw IllegalArgumentException("corrupt last sequence")
+            val lastEventId = d.sortedString("last_event_id")
+            val profileVersion = d.sortedString("profile_version")
+            if (profileVersion != personality.profileVersion) {
+                throw IllegalArgumentException("checkpoint profile mismatch")
+            }
+            val engine = Modulator(personality, at)
+            engine.injectStateForTest(
+                Snapshot(
+                    at, profileVersion, fast, mood,
+                    mutableListOf(), lastSeq, lastEventId,
+                    linkedMapOf(), mutableListOf(), moodLabel,
+                ),
+            )
+            parseAndCommitDecision(obj, engine, lastSeq, lastEventId)
+            return LoadedCheckpoint(
+                engine,
+                ModulatorVocab.LEGACY_PROTOTYPE_VERSION,
+                listOf(ModulatorVocab.MIGRATION_LEGACY_TRACE_ATTRIBUTION_RESET),
+            )
+        }
+
+        private fun parsePersonality(p: JsonObject): Personality = Personality(
+            openness = p.sortedDouble("openness"),
+            conscientiousness = p.sortedDouble("conscientiousness"),
+            extraversion = p.sortedDouble("extraversion"),
+            agreeableness = p.sortedDouble("agreeableness"),
+            neuroticism = p.sortedDouble("neuroticism"),
+            plasticity = p.sortedDouble("plasticity"),
+            totalInteractions = p.sortedIntegral("total_interactions").toInt().also {
+                if (it < 0) throw IllegalArgumentException("total_interactions: nonnegative integer required")
+            },
+            profileVersion = p.sortedString("profile_version"),
+        )
+
+        private fun parseAxes(d: JsonObject): Pair<MutableList<Double>, MutableList<Double>> {
+            val axes = mutableListOf<MutableList<Double>>()
+            for (name in listOf("fast", "mood")) {
+                val arr = d.sortedArray(name)
+                if (arr.size() != 4) throw IllegalArgumentException("corrupt state dimension")
+                val values = mutableListOf<Double>()
+                for (k in 0 until 4) {
+                    val value = finite(arr.get(k).asDouble, name)
+                    val (lo, hi) = ModulatorVocab.BOUNDS[k]
+                    if (value < lo || value > hi) throw IllegalArgumentException("corrupt state bound")
+                    values += value
+                }
+                axes += values
+            }
+            return axes[0] to axes[1]
+        }
+
+        private fun parseAndCommitDecision(obj: JsonObject, engine: Modulator, lastSeq: Long, lastEventId: String) {
             val dec = obj.get("last_decision")
             if (dec != null && dec.isJsonObject) {
                 val dj = dec.asJsonObject
@@ -610,7 +781,6 @@ class Modulator(
             } else if (lastSeq != -1L || lastEventId.isNotEmpty()) {
                 throw IllegalArgumentException("missing committed decision")
             }
-            return engine
         }
 
         private fun Modulator.commitDecision(decision: Decision) {
@@ -618,6 +788,13 @@ class Modulator(
         }
     }
 }
+
+/** 检查点载入结果：引擎 + 来源版本 + 已应用迁移标记（如 LEGACY_TRACE_ATTRIBUTION_RESET）。 */
+class LoadedCheckpoint(
+    val modulator: Modulator,
+    val sourceVersion: String,
+    val migrations: List<String>,
+)
 
 /** 插件元数据（宿主以后通过这层契约接入，不改聊天链路）。 */
 object ModulatorPlugin {

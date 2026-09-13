@@ -148,11 +148,19 @@ fun appraise(obs: Observation, state: Snapshot): Pair<List<Appraisal>, List<Stri
 
     if (direct && actId == "apologize_repair" && ac >= 0.75) {
         val related = state.traces.filter { it.kind == "hostility" && it.topicId == ctx.topicId }
-        if (related.isNotEmpty()) {
-            val ids = related.flatMap { it.evidenceIds }
-            out += Appraisal("repair", 0.65, minOf(fc, tc, ac), obs.eventId, "user", ctx.topicId, ids)
-        } else {
+        if (related.isEmpty()) {
             audit += "apology_without_related_tension:no_relief"
+        } else {
+            // v1.1.0：宿主不能确认究竟修复哪件事时，不自动枚举该话题全部敌意证据；
+            // 修复事件照常产生（礼貌回应仍然成立），但 resolves 只含显式链接的分量。
+            val available = related.flatMap { it.evidenceIds() }.toSet()
+            val linked = ctx.explicitResolutionLinks.intersect(available)
+            if (ctx.explicitResolutionLinks.isEmpty()) {
+                audit += "repair_without_explicit_link:resolution_deferred"
+            } else if (linked.isEmpty()) {
+                audit += "repair_link_unmatched:resolution_deferred"
+            }
+            out += Appraisal("repair", 0.65, minOf(fc, tc, ac), obs.eventId, "user", ctx.topicId, linked.toList())
         }
     }
 

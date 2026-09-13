@@ -181,6 +181,11 @@ data class Context(
     val activeTags: Set<String> = emptySet(),
     val relations: RelationView = RelationView(),
     val trustScope: String = "general",
+    /**
+     * v1.1.0 归因修订：宿主确认本观测明确修复的证据 id。
+     * 空集表示宿主无法确认关联，核心不得自行枚举话题内全部证据。
+     */
+    val explicitResolutionLinks: Set<String> = emptySet(),
 )
 
 data class Observation(
@@ -208,16 +213,48 @@ data class Appraisal(
     val resolves: List<String> = emptyList(),
 )
 
+/**
+ * 痕迹内的单一证据分量（v1.1.0 归因修订）。
+ * 每个分量保存自己的强度与最近事件时间；组强度由分量推出，不再保存不可拆分的总量。
+ */
+data class EvidenceComponent(
+    val evidenceId: String,
+    var strength: Double,
+    var lastEventAt: Double,
+) {
+    fun copy(): EvidenceComponent = EvidenceComponent(evidenceId, strength, lastEventAt)
+}
+
 class Trace(
     val kind: String,
     val target: String,
     val topicId: String,
-    var strength: Double,
     val halfLife: Double,
-    val evidenceIds: MutableList<String>,
-    var lastEventAt: Double,
+    val components: MutableList<EvidenceComponent>,
 ) {
-    fun copy(): Trace = Trace(kind, target, topicId, strength, halfLife, evidenceIds.toMutableList(), lastEventAt)
+    /** 组强度 = min(TRACE_CAP, 1 - Π(1 - 分量强度))；分量变更后必须调用 recompute。 */
+    var strength: Double = 0.0
+        private set
+
+    /** 组最近事件时间 = 分量时间的最大值；同样由 recompute 维护。 */
+    var lastEventAt: Double = Double.NEGATIVE_INFINITY
+        private set
+
+    fun recompute() {
+        var remain = 1.0
+        var latest = Double.NEGATIVE_INFINITY
+        for (c in components) {
+            remain *= 1 - c.strength
+            if (c.lastEventAt > latest) latest = c.lastEventAt
+        }
+        strength = minOf(ModulatorVocab.TRACE_CAP, 1 - remain)
+        lastEventAt = latest
+    }
+
+    /** 仅当前仍保留在组内的证据 id（被容量淘汰的分量不在此列）。 */
+    fun evidenceIds(): List<String> = components.map { it.evidenceId }
+
+    fun copy(): Trace = Trace(kind, target, topicId, halfLife, components.map { it.copy() }.toMutableList()).also { it.recompute() }
 }
 
 class Snapshot(
@@ -277,4 +314,15 @@ data class LoreRule(
     val group: String = "",
     val always: Boolean = false,
     val enabled: Boolean = true,
+)
+
+/**
+ * 纯投影结果（v1.1.0 新增，Spec §7.2）。
+ * rows 是生成层可见的三列表；sources 键为 "aspect/state"，值是支持该行的
+ * 可见证据 id（背景心境由内部动力学导出，没有证据 id）。生成层不新增第四列。
+ */
+class StateProjection(
+    val rows: List<Row>,
+    val sources: Map<String, List<String>>,
+    val relationAvailable: Boolean,
 )
