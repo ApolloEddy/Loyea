@@ -1,0 +1,12 @@
+[
+  {"name": "asserted_speaker_anger", "text": "我真的气死了，太过分了", "seed": 101},
+  {"name": "negated_anger", "text": "我没有生气，别担心", "seed": 202},
+  {"name": "third_party_sadness", "text": "她奶奶去世了，她很伤心", "seed": 303},
+  {"name": "neutral_question", "text": "这个函数的时间复杂度是多少？", "seed": 404},
+  {"name": "joy_direct", "text": "太好了！项目终于上线了！", "seed": 505},
+  {"name": "no_terms_plain", "text": "收到，我看一下", "seed": 606},
+  {"name": "disgust_third", "text": "那个服务员态度真差", "seed": 707},
+  {"name": "reported_joy", "text": "听说他中彩票了，据说有五百万", "seed": 808},
+  {"name": "hypothetical_anger", "text": "如果你再迟到我会生气哦", "seed": 909},
+  {"name": "long_text", "text": "今天遇到一件特别离谱的事，早上地铁坏了，然后开会又被批评，中午吃饭还排队半小时，感觉整个世界都在针对我，不过下午同事帮我解决了问题，心情好了一点", "seed": 1010}
+]

@@ -1,0 +1,116 @@
+[
+ {
+  "name": "distress",
+  "text": "最近压力好大，晚上都睡不着觉",
+  "speaker": "speaker_0",
+  "context": []
+ },
+ {
+  "name": "shared_joy",
+  "text": "我拿到心仪公司的offer了！",
+  "speaker": "speaker_0",
+  "context": []
+ },
+ {
+  "name": "kindness",
+  "text": "谢谢你今天帮我改简历，真的太感谢了",
+  "speaker": "speaker_0",
+  "context": []
+ },
+ {
+  "name": "affection",
+  "text": "有你陪着我，感觉踏实多了",
+  "speaker": "speaker_0",
+  "context": []
+ },
+ {
+  "name": "hostile_direct",
+  "text": "你根本就不懂，别再说了，烦死了",
+  "speaker": "speaker_0",
+  "context": []
+ },
+ {
+  "name": "hostile_mild",
+  "text": "你这建议完全没抓住重点",
+  "speaker": "speaker_0",
+  "context": []
+ },
+ {
+  "name": "repair",
+  "text": "刚才是我说话太冲了，对不起",
+  "speaker": "speaker_0",
+  "context": [
+   {
+    "speaker": "speaker_0",
+    "text": "你根本就不懂，别再说了"
+   },
+   {
+    "speaker": "speaker_1",
+    "text": "我可能确实没理解你的意思，你想聊聊吗"
+   }
+  ]
+ },
+ {
+  "name": "humor",
+  "text": "哈哈哈你这也太损了吧，笑死我了",
+  "speaker": "speaker_0",
+  "context": []
+ },
+ {
+  "name": "negation_hostile",
+  "text": "我不是在说你，你别多想",
+  "speaker": "speaker_0",
+  "context": []
+ },
+ {
+  "name": "third_party_anger",
+  "text": "我同事今天又被老板骂了，他快气死了",
+  "speaker": "speaker_0",
+  "context": []
+ },
+ {
+  "name": "tech_question",
+  "text": "Kotlin协程的取消机制是怎么传播的？",
+  "speaker": "speaker_0",
+  "context": []
+ },
+ {
+  "name": "correction",
+  "text": "你说得不对，这个API的参数应该是反过来的",
+  "speaker": "speaker_0",
+  "context": []
+ },
+ {
+  "name": "hypothetical",
+  "text": "假如我考不上研究生怎么办",
+  "speaker": "speaker_0",
+  "context": []
+ },
+ {
+  "name": "sad_quote",
+  "text": "小说里那句'人生若只如初见'，读着真难受",
+  "speaker": "speaker_0",
+  "context": []
+ },
+ {
+  "name": "long_input",
+  "text": "今天一整天都特别倒霉，早上起来发现闹钟没响，出门错过公交车，到了公司被领导叫去谈话，说我这个季度的绩效不达标，下午开会方案又被否了，晚上加班到现在才回家，感觉身心俱疲，不知道这样的日子什么时候是个头",
+  "speaker": "speaker_0",
+  "context": [
+   {
+    "speaker": "speaker_1",
+    "text": "今天过得怎么样？"
+   },
+   {
+    "speaker": "speaker_0",
+    "text": "别提了"
+   }
+  ]
+ },
+ {
+  "name": "neutral_smalltalk",
+  "text": "天气不错，出去走走",
+  "speaker": "speaker_0",
+  "context": []
+ }
+]

@@ -1,0 +1,82 @@
+[
+ {
+  "name": "simple_user",
+  "text": "今天上班好累啊",
+  "speaker": "speaker_0",
+  "context": []
+ },
+ {
+  "name": "with_context",
+  "text": "感觉好多了，谢谢陪伴",
+  "speaker": "speaker_0",
+  "context": [
+   {
+    "speaker": "speaker_0",
+    "text": "最近项目deadline压得喘不过气"
+   },
+   {
+    "speaker": "speaker_1",
+    "text": "辛苦了，记得休息"
+   },
+   {
+    "speaker": "speaker_0",
+    "text": "嗯，跟你聊完舒服多了"
+   }
+  ]
+ },
+ {
+  "name": "english_mixed",
+  "text": "这个bug居然是typo，我居然调试了2小时!",
+  "speaker": "speaker_0",
+  "context": []
+ },
+ {
+  "name": "punctuation",
+  "text": "真的吗？？？太好了！！！（不敢相信）",
+  "speaker": "speaker_0",
+  "context": []
+ },
+ {
+  "name": "long_truncation",
+  "text": "这是一段非常长的文本用来测试右截断行为是否与原实现一致用来测试右截断行为是否与原实现一致用来测试右截断行为是否与原实现一致用来测试右截断行为是否与原实现一致用来测试右截断行为是否与原实现一致用来测试右截断行为是否与原实现一致用来测试右截断行为是否与原实现一致用来测试右截断行为是否与原实现一致用来测试右截断行为是否与原实现一致用来测试右截断行为是否与原实现一致用来测试右截断行为是否与原实现一致用来测试右截断行为是否与原实现一致",
+  "speaker": "speaker_0",
+  "context": [
+   {
+    "speaker": "speaker_0",
+    "text": "历史消息第一条"
+   },
+   {
+    "speaker": "speaker_1",
+    "text": "历史消息第二条"
+   },
+   {
+    "speaker": "speaker_0",
+    "text": "历史消息第三条，这条也相当长用来挤压当前输入的空间位置"
+   }
+  ]
+ },
+ {
+  "name": "negation",
+  "text": "我没有生气，真的没有生气",
+  "speaker": "speaker_0",
+  "context": []
+ },
+ {
+  "name": "third_party",
+  "text": "他昨天因为堵车生气了，跟我没关系",
+  "speaker": "speaker_0",
+  "context": []
+ },
+ {
+  "name": "question",
+  "text": "你说这个方案会不会有性能问题？",
+  "speaker": "speaker_0",
+  "context": []
+ },
+ {
+  "name": "numbers_emoji",
+  "text": "版本号0.8.2发布啦，爽!!",
+  "speaker": "speaker_0",
+  "context": []
+ }
+]

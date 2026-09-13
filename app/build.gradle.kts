@@ -105,6 +105,8 @@ dependencies {
     implementation(project(":character-core"))
     // 情绪调制器核心（纯 Kotlin/JVM；陪伴智能接入本轮授权的真实宿主依赖）
     implementation(project(":loyea-modulator-core"))
+    // 旧文本情绪模型的官方 Android 推理运行时（Spec §3.3；版本锁定并实测，不用 +）
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.18.0")
     implementation("com.google.code.gson:gson:2.10.1")
     // P5 有限正则（与 character-core 同版本锁定，BSD）
     implementation("com.google.re2j:re2j:1.7")
