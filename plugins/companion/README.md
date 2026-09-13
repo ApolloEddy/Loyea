@@ -24,6 +24,26 @@
 依赖方向：插件 → 宿主公共 API（ChatViewModel / ChatStorageManager 数据模型 / PromptAssembler 间接）；
 宿主仅经 `CompanionContract.isCompanionCharacter` 判断归属，不感知插件内部。
 
+## 陪伴智能接入（2026-09-14，Spec：docs/Loyea_Companion_Modulator_Perception_Integration_Spec_v1.0.md）
+
+**已实际生效**（真模型通路，非降级演示）：
+
+- `runtime/`：CompanionRuntimeCoordinator（接纳互斥/observation 去重/CAS 事务/编辑回放）、
+  CompanionStateStore（companion_runtime.db 账本）、CompanionClock（单调逻辑秒）、
+  CompanionProfileRepository（版本化 Soul/中性人格/8 条私有 Lore）、CompanionPromptAdapter（投影渲染+768 预算闭合）、
+  CompanionContextPolicy（policyRevision 权限快照）。
+- `perception/`：旧 April 文本情绪模型本地运行（onnxruntime-android 1.18.0，官方完整运行时），
+  WordPiece/解码/语法修正为原管线移植，黄金一致性由原 JS 管线（Node 运行）与真实 ONNX logits 双重验证；
+  一次输入一次推理、500ms 等待截止、三连败熔断 60s 恢复。
+- 聊天闭环：sendMessage 接纳（感知→调制→事务→outbox），状态模块 + 私有 Lore 进入实际出站请求
+  （`[CURRENT COMPANION STATE]`/`[COMPANION PRIVATE LORE]`，仅一份当前状态）；工具失败 → `task_blocked`
+  独立观测；编辑消息 → 检查点回放新分支；文字感知独立开关（感知设置页，默认开）。
+- 生命周期：备份 v3（含运行账本）；重置/恢复换代围栏；问候读取同一状态（不跑感知不加计数）。
+
+**边界与未完成**：真机性能指标（OPPO Find X6 / Pad 3 Pro）未测——当前仅有模拟器测量数据；
+80 条真实语义集人工评审未完成（现有 16 条真实样本 + 80 条目标清单见验收报告）；
+release 包发布未授权未生成。详见 `docs/audits/Companion-Intelligence-Acceptance.md`。
+
 ## 数据归属
 
 - 插件自有偏好：`loyea_companion_prefs`（CompanionConfig + 主动联系台账 CompanionGreetingLedger）。

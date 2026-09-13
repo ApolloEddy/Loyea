@@ -270,6 +270,60 @@ class CompanionRuntimeCoordinatorTest {
         p.add("dimensions", dimensions)
         return p
     }
+    // ------------------------------------------------------------------
+    // A06/A07：工具终态去重；task_blocked 独立观测不加计数
+    // ------------------------------------------------------------------
+
+    @Test
+    fun a06_a07_toolFactAdmittedOnceWithoutInteractionCount() = runBlocking {
+        coordinator.ensureOwner(charId, sessionId, incarnation, bindingRevision = 1)
+        coordinator.admitUserTurn(request("m1", "帮我查天气"))
+        val seqBefore = store.findOwnerState(ownerKey())!!.acceptedSeq
+        val countBefore = coordinator.interactionCount(charId, sessionId)
+
+        val first = coordinator.admitToolFact(
+            AdmitToolFactRequest(charId, sessionId, incarnation, turnId = "m1", toolCallId = "call_1"),
+        )
+        assertTrue(first is AdmitOutcome.Accepted)
+        // 重复回调同一终态：复用，不推进
+        val duplicate = coordinator.admitToolFact(
+            AdmitToolFactRequest(charId, sessionId, incarnation, turnId = "m1", toolCallId = "call_1"),
+        )
+        assertTrue(duplicate is AdmitOutcome.Reused)
+        // 同一工具 ID 内容变化必须换修订号（否则冲突暴露协议错误）
+        val conflict = coordinator.admitToolFact(
+            AdmitToolFactRequest(charId, sessionId, incarnation, turnId = "m1", toolCallId = "call_1", terminalRevision = 0),
+        )
+        assertTrue(conflict is AdmitOutcome.Reused)
+
+        assertEquals(countBefore, coordinator.interactionCount(charId, sessionId)) // 计数不加
+        val seqAfter = store.findOwnerState(ownerKey())!!.acceptedSeq
+        assertEquals(seqBefore + 1, seqAfter) // 状态推进一次
+        // task_blocked 事实产生 frustration 痕迹；activeTags 反映
+        assertTrue(coordinator.activeTagsForTurn(charId, sessionId, incarnation, "m1").contains("host:task_blocked"))
+    }
+
+    // ------------------------------------------------------------------
+    // A24：提交后投影失败 → outbox 保留 → 恢复时补写同一消息
+    // ------------------------------------------------------------------
+
+    @Test
+    fun a24_projectionFailureRecoversViaOutbox() = runBlocking {
+        coordinator.ensureOwner(charId, sessionId, incarnation, bindingRevision = 1)
+        val failingSink = RecordingSink().apply { failNext = true }
+        val accepted = coordinator.admitUserTurn(request("m1", "崩溃前输入", sink = failingSink)) as AdmitOutcome.Accepted
+        assertTrue(accepted.projectionPending) // 投影失败可见，调用方不发网络
+        assertEquals(1, store.pendingOutbox(ownerKey()).size) // outbox 保留
+
+        // 进程恢复：补写同一 message ID，不重复计数/刺激
+        val recovered = RecordingSink()
+        val report = coordinator.recoverOwner(charId, sessionId, incarnation, recovered)
+        assertEquals("ok", report.status)
+        assertTrue(report.drained)
+        assertEquals(listOf("m1"), recovered.written)
+        assertEquals(1, coordinator.interactionCount(charId, sessionId))
+    }
+
 }
 
 // ---------------------------------------------------------------------------

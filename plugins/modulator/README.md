@@ -1,6 +1,12 @@
 # Loyea 调制器插件（非侵入式）
 
-按 `docs/loyea_modulator/Loyea_Modulator_Spec_v1.0.md` 实现的"事件评价 + 八维连续状态 + 有界事件痕迹 + 滞回输出"调制器，以**独立插件**形式存在于仓库，尚未接入 Loyea 聊天链路。
+按 `docs/loyea_modulator/Loyea_Modulator_Spec_v1.0.md` 实现的"事件评价 + 八维连续状态 + 有界事件痕迹 + 滞回输出"调制器。
+
+**接入状态（2026-09-14，companion-intelligence 接入轮）**：核心已升级 v1.1.0（证据归因修订 +
+纯投影 `project()` + 检查点迁移），并已由陪伴插件 `runtime/` 实际接线：陪伴聊天的一次真实用户输入
+经旧本地文本感知模型（ONNX）→ `AppraisalEngine` 七条路由 → `Modulator.process` 事务提交 →
+纯投影状态表 + 私有 Lore 进入实际出站请求。core 模块本身仍保持零 Android 依赖；
+宿主接线全部收敛在 `plugins/companion/android/.../runtime/`（依赖方向 app → core）。
 
 ## 结构
 
@@ -21,6 +27,10 @@
 ```kotlin
 // 元数据
 ModulatorPlugin.ID / VERSION / SPEC / LEGACY_MODEL_METADATA / LEGACY_DECODER
+
+// 纯投影（v1.1.0）：不推进 seq/at/痕迹/量化器；重复调用结果相同
+val projection: StateProjection = modulator.project(context, visibleEvidence)
+modulator.projectFromCheckpoint(checkpointJson, context, visibleEvidence)
 
 // 引擎：纯函数式推进，无内部时钟/随机/IO
 val m = Modulator(personality, initialAt)
