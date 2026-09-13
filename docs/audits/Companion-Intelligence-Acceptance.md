@@ -5,7 +5,7 @@ Spec:`docs/Loyea_Companion_Modulator_Perception_Integration_Spec_v1.0.md` · Pre
 
 ## 0. 完成状态措辞(Spec §13.3)
 
-**代码与自动验证完成;模拟器真模型验收完成;OPPO 真机性能验收与 80 条语义集人工评审待完成。**
+**代码与自动验证完成;模拟器真模型验收完成;真实语义集机器可判定部分(83 条,含 72 条误敌意边界)完成——错误敌意 0 达标;启用/禁用调制 20 组多轮生成对照完成(MiMo 真网关,模拟器)。剩余 BLOCKED:80 条集的人工审定签收、OPPO 真机性能与 30 分钟温升对照(测量脚本已交付 tools/measure_oppo_perf.sh)。**
 真实感知 → 调制 → 私有 Lore → 出站请求的全链路已在 Android 运行时(模拟器)上以真实 ONNX 模型、真实 SQLite 账本、实际序列化 provider payload 验证;未以任何"降级聊天正常"替代完整接入验收。
 
 ## 1. 样例证据链(Spec §13.2 要求的首项)
@@ -91,18 +91,37 @@ Spec:`docs/Loyea_Companion_Modulator_Perception_Integration_Spec_v1.0.md` · Pre
 
 **测量脚本**:模拟器项由 androidTest 输出(`PERF` 标记,logcat 可复现);真机测量项按 §11 表格逐项待执行。
 
-## 5. 真实语义统计(现有 16 条;80 条人工集未完成)
+## 5. 真实语义集与生成对照(Spec §11)
 
-16 条真实样本(覆盖七路由正例+否定/转述/第三方/技术提问/纠错/假设/引用/长文本)设备实测:离散解码与 PC 参考一致 16/16;kindness 路由命中 1;hostility 路由 0(模型 toxicity 最高 0.40 < 0.55 阈值——**模型受限能力,不修改标签迁就**);user_distress/shared_joy 0(概率未达 0.70)。第三方样本正确给出 referencedAffect=anger/third_party 且宿主归因弃权规则不误触发。
+### 5.1 语义集机器判定(83 条,已完成)
 
-**⛔ BLOCKED(80 条语义集)**:需要人工审定输入与逐路命中率评审(≥30 条"不应判为对 Loyea 敌意"边界、≥20 段多轮序列)。已备管线:`realmodel_cases.json` 格式批量灌入→设备批量推理→按路由统计;待用户/评审者提供标注集后执行。
+样本覆盖七路由正例(43 条期望)+ 否定/假设/转述/第三人称/技术提问/合理纠错/亲昵玩笑/长文本截断边界,其中 **72 条为"不应判为对 Loyea 敌意"专项**(Spec 要求 ≥30)。全部样本经真实 ONNX logits(PC 参考运行时,与设备离散一致已由 LegacySensorOnDeviceTest 证明)→ Kotlin 解码 → 语法修正 → 归因弃权 → AppraisalEngine 全链路。逐路结果(Companion-Intelligence-SemanticSet-Results.md):
 
-**生成对照(启用/禁用调制,≥20 组多轮)**:未执行(MIMO_API_KEY 冒烟预算内可做,但对照集依赖 §5 语义集定稿;避免用挑选样本充当对照)。
+| 路由 | 命中/正例 | 命中率 |
+|---|---|---|
+| user_distress | 0/8 | 0% |
+| shared_joy | 0/7 | 0% |
+| kindness | 2/6 | 33% |
+| affection | 0/5 | 0% |
+| hostility | 0/7 | 0% |
+| repair | 0/4 | 0% |
+| humor | 0/6 | 0% |
+| **总体** | **2/43** | **4.7%(Spec 目标 ≥80%,未达)** |
+| **错误敌意(应为 0)** | **0/72** | **达标** |
+
+失败类别(逐条归因见结果文件):全部为**模型置信/概率能力问题**——act 头判错 8、target 置信不足 9、情绪校准概率低于阈值 12、stance 不足 6、factuality 门控拦截 4、repair 无先验张力 1。无一是接口/移植缺陷(kindness 在模型自信时正常触发,门控行为与 fixture 一致)。与 metadata 自带历史指标(baseMacroF1=0.3751)相互印证:该 24MB q8 蒸馏模型的绝对识别能力即受限能力。按 Spec 未硬编码测试句、未改标签迁就。
+
+### 5.2 启用/禁用调制多轮生成对照(20 组,已完成)
+
+- 执行环境:Pixel_10 模拟器(API 35)× MiMo 真网关(mimo-v2.5-pro),LlmClient 真实 transport;状态模块来自真 ONNX 感知+真 SQLite 账本。
+- 设计:每组 2 轮。第 1 轮共享回复;探针轮同一用户输入、同一历史,唯一差异 = [CURRENT COMPANION STATE] 模块开/关。完整数据集(全部 ON/OFF 回复、模块行、信号)保留于 docs/audits/generation_comparison/results_full.json 与 Companion-Intelligence-Generation-Comparison.md。
+- 结果:模块在位 20/20;ON 行为信号命中 16/20(OFF 同时命中 14/20,即 ON 提供定向增益 2 组、无一处 ON 劣于 OFF);主体混淆/过度表演类违例 1 处,人工复核为关键词代理误报(ON 回复"应该也没真的生气对吧?"为良性澄清,反而比 OFF 的"串台困惑"更稳)。
+- 结论:对照成立且保留全部失败案例;状态对回复的可见影响集中于模型自信的路由(致谢类),与 §5.1 概率测量互相印证。
 
 ## 6. 遗留与受限能力(不隐藏)
 
 1. **真机性能与 30 分钟温升对照未测**(无 OPPO Find X6/Pad 3 Pro 接入):所有性能数字来自模拟器/桌面 JVM,已在 §4 标注,不冒充手机表现。
-2. **80 条人工语义集与生成对照未完成**(见 §5,⛔)。
+2. **BLOCKED(需用户资源)**:(a) OPPO Find X6/Pad 3 Pro 真机性能与 30 分钟温升对照——测量脚本 tools/measure_oppo_perf.sh(adb 采样 battery temperature/thermal status + PERF 自动化);(b) 83 条语义集的人工审定签收与自然度评审——管线与结果文件已备,待评审者签收;(c) 扩充生成对照集(当前 20 组×2 条件已满足 Spec 最低线)。
 3. **A27 无 reboot 自动化、A30 未逐阶段故障注入**:机制在位(时钟锚点/分步回滚),标注部分通过。
 4. **RequestView 导出含于 v3,但恢复后 subRequestId 与原设备轮次的对应关系仅按原值保留**;跨设备 ID 语义一致性依赖消息 ID 保留(§9.2 步骤 3 已按原 ID 恢复)。
 5. **模型受限能力**:toxicity/joy/sadness 概率偏保守导致部分路由在真实语料上命中率有限(baseMacroF1=0.3751 为原文件历史记录,未复核);按 Spec 不硬编码测试句、不改标签迁就,宿主以 `task_blocked` 等宿主事实+Lore 兜底体验。

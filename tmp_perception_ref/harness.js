@@ -64,6 +64,16 @@ if (cmd === 'tokenizer-golden') {
   });
   fs.writeFileSync(path.join(__dirname, 'decoder_golden.json'), JSON.stringify({ version: '2.1.4-pipeline', cases: out }, null, 1));
   console.log('decoder_golden.json written:', out.length, 'cases');
+} else if (cmd === 'semantic80-encode') {
+  const cases = JSON.parse(fs.readFileSync(path.join(__dirname, 'semantic80_cases.json'), 'utf8'));
+  const out = [];
+  for (const c of cases) {
+    const joined = ji({ text: c.text, speaker: 'speaker_0', context: c.context || [] });
+    const enc = encode(joined);
+    out.push({ ...c, joined, inputIds: enc.inputIds, attentionMask: enc.attentionMask, tokens: enc.tokens });
+  }
+  fs.writeFileSync(path.join(__dirname, 'semantic80_ids.json'), JSON.stringify(out));
+  console.log('semantic80_ids.json written:', out.length);
 } else if (cmd === 'realmodel-encode') {
   const cases = JSON.parse(fs.readFileSync(path.join(__dirname, 'realmodel_cases.json'), 'utf8'));
   const out = [];
