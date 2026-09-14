@@ -641,6 +641,17 @@ internal class CompanionRuntimeCoordinator internal constructor(
             }
         }
         if (checkpointRows != null) root.add("rows", checkpointRows)
+        // 最近一次请求选中的私有 Lore（只读展示；编辑入口按 Spec 保持隐藏）
+        val latestView = store.allRequestViews(ownerKey, limit = 1).firstOrNull()
+        if (latestView != null) {
+            try {
+                val lore = com.google.gson.JsonParser.parseString(latestView.loreJson).asJsonObject
+                root.add("last_selected_lore", lore)
+                root.addProperty("last_request_revision", latestView.requestRevision)
+            } catch (parse: Throwable) {
+                root.addProperty("last_selected_lore", "unreadable")
+            }
+        }
         return root
     }
 
