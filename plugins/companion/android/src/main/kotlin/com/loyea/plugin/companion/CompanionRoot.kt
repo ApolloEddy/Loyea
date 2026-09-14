@@ -31,7 +31,7 @@ import kotlinx.coroutines.launch
 
 private enum class BindState { BINDING, READY, MISSING }
 
-private enum class CompanionSubPage { CHAT, SETTINGS, PERCEPTION, DATA, MEMORY, SEARCH }
+private enum class CompanionSubPage { CHAT, SETTINGS, PERCEPTION, DATA, MEMORY, SEARCH, STATE }
 
 /**
  * 陪伴模式外壳（enabled=true 时由 MainActivity 渲染，替代普通导航外壳）。
@@ -63,6 +63,7 @@ fun CompanionRoot(
         when {
             moreOpen -> moreOpen = false
             subPage == CompanionSubPage.PERCEPTION -> subPage = CompanionSubPage.SETTINGS
+            subPage == CompanionSubPage.STATE -> subPage = CompanionSubPage.CHAT
             subPage != CompanionSubPage.CHAT -> subPage = CompanionSubPage.CHAT
             else -> {
                 val now = android.os.SystemClock.elapsedRealtime()
@@ -225,6 +226,7 @@ fun CompanionRoot(
                         onOpenMemory = { moreOpen = false; subPage = CompanionSubPage.MEMORY },
                         onOpenSearch = { moreOpen = false; subPage = CompanionSubPage.SEARCH },
                         onOpenSettings = { moreOpen = false; subPage = CompanionSubPage.SETTINGS },
+                        onOpenState = { moreOpen = false; subPage = CompanionSubPage.STATE },
                         onDismiss = { moreOpen = false }
                     )
                 }
@@ -280,6 +282,11 @@ fun CompanionRoot(
                     focusMessageId = id
                     subPage = CompanionSubPage.CHAT
                 }
+            )
+            CompanionSubPage.STATE -> CompanionStateScreen(
+                sessionId = config.sessionId,
+                incarnationId = viewModel.currentCompanionIncarnation() ?: "",
+                onBack = { subPage = CompanionSubPage.CHAT },
             )
         }
     }

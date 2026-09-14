@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.ManageSearch
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Icon
@@ -44,6 +45,7 @@ fun CompanionMoreSheet(
     onOpenMemory: () -> Unit,
     onOpenSearch: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenState: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -69,6 +71,7 @@ fun CompanionMoreSheet(
             )
             Spacer(Modifier.height(14.dp))
             MoreRow(Icons.Rounded.Favorite, "记忆", "保存你们在意的事", onOpenMemory)
+            MoreRow(Icons.Rounded.Insights, "内心状态", "Loyea 此刻的感受与痕迹", onOpenState)
             MoreRow(Icons.Rounded.ManageSearch, "查找记录", "找到聊过的某句话", onOpenSearch)
             MoreRow(Icons.Rounded.Settings, "陪伴设置", "资料、感知与关闭入口", onOpenSettings)
             Spacer(Modifier.height(10.dp))

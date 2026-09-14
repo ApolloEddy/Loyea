@@ -656,6 +656,66 @@ internal class CompanionRuntimeCoordinator internal constructor(
     }
 
     // ------------------------------------------------------------------
+    // 状态可视化（用户可见的只读快照；不推进任何状态）
+    // ------------------------------------------------------------------
+
+    /** 一次可见性过滤后的痕迹分量视图。 */
+    data class TraceComponentView(val evidenceId: String, val strength: Double, val lastEventAt: Double)
+    data class TraceView(val kind: String, val label: String, val strength: Double, val components: List<TraceComponentView>)
+    data class StateView(
+        val rows: List<com.loyea.plugin.modulator.Row>,
+        val fast: List<Double>,
+        val mood: List<Double>,
+        val moodLabel: String,
+        val traces: List<TraceView>,
+        val checkpointAt: Double,
+        val interactionCount: Long,
+        val acceptedSeq: Long,
+    )
+
+    /**
+     * 只读状态快照（可视化页用）。状态行取最近一次已提交决策（提交时已按
+     * 当轮可见证据过滤）；连续量与痕迹来自检查点本体。坏检查点返回 null。
+     */
+    fun stateSnapshot(
+        characterId: String,
+        sessionId: String,
+        incarnationId: String,
+    ): StateView? {
+        val ownerKey = CompanionOwner(characterId, sessionId, incarnationId).storageKey()
+        val state = store.findOwnerState(ownerKey) ?: return null
+        val engine = try {
+            Modulator.loads(state.checkpointJson)
+        } catch (corrupt: IllegalArgumentException) {
+            return null
+        }
+        val snap = engine.state
+        val traces = snap.traces.map { t ->
+            TraceView(
+                kind = t.kind,
+                label = com.loyea.plugin.modulator.Rules.ALL[t.kind]?.let {
+                    com.loyea.plugin.modulator.ModulatorVocab.STATE_ZH[it.label]
+                } ?: t.kind,
+                strength = t.strength,
+                components = t.components.map { c ->
+                    TraceComponentView(c.evidenceId, c.strength, c.lastEventAt)
+                },
+            )
+        }
+        val rows = engine.lastDecision?.rows ?: emptyList()
+        return StateView(
+            rows = rows,
+            fast = snap.fast.toList(),
+            mood = snap.mood.toList(),
+            moodLabel = snap.moodLabel,
+            traces = traces,
+            checkpointAt = snap.at,
+            interactionCount = state.interactionCount,
+            acceptedSeq = state.acceptedSeq,
+        )
+    }
+
+    // ------------------------------------------------------------------
     // 备份 v3：运行状态导出 / 导入（Spec §9.2）
     // ------------------------------------------------------------------
 
