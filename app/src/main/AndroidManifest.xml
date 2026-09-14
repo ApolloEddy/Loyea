@@ -14,6 +14,8 @@
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- 伴读插件（Reader Spec §3）：悬浮窗 + 无障碍（服务在下方声明，授权由用户在系统设置完成） -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <queries>
         <package android:name="com.google.android.apps.healthdata" />
@@ -87,6 +89,19 @@
             android:name=".perception.ActivityReceiver"
             android:exported="true">
         </receiver>
-    </application>
+            <!-- 伴读无障碍服务：读屏文字 → 提纯 → 章节缓冲；悬浮球同进程承载 -->
+        <service
+            android:name="com.loyea.plugin.reader.ReaderAccessService"
+            android:exported="false"
+            android:label="Loyea 伴读"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/reader_accessibility_service" />
+        </service>
+</application>
 
 </manifest>

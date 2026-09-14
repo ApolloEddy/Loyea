@@ -1257,6 +1257,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         return companionCoordinator.exportRuntimeState(session.characterId, sessionId, incarnation)
     }
 
+    /** 当前陪伴会话的 incarnation（可视化页等只读视图用）；未开启返回 null。 */
+    fun currentCompanionIncarnation(): String? {
+        val sessionId = currentSessionId.value
+        if (sessionId.isBlank()) return null
+        val session = activeSession.value ?: return null
+        if (!com.loyea.plugin.companion.CompanionContract.isCompanionCharacter(session.characterId)) return null
+        return session.sessionIncarnationId
+    }
+
     /** 模式关闭（§9.1）：撤销任务 lease，保留已提交状态账本，释放可释放的模型资源。 */
     fun closeCompanionRuntime() {
         companionCoordinator.closeCompanion()

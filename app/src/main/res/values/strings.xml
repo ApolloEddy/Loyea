@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Loyea</string>
+    <string name="reader_accessibility_description">Loyea 伴读：在你阅读时读取当前书页文字，提供即时的陪伴与讲解。只在开启的白名单阅读应用内工作。</string>
 </resources>

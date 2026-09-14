@@ -69,9 +69,12 @@ android {
         // 全部实现收敛在 com.loyea.plugin.companion 命名空间，宿主触碰点见 plugins/companion/README.md。
         getByName("main") {
             kotlin.srcDir("../plugins/companion/android/src/main/kotlin")
+            // 伴读插件（docs/Loyea_Reader_Companion_Plugin_Spec_v0.1_DRAFT.md）
+            kotlin.srcDir("../plugins/reader/android/src/main/kotlin")
         }
         getByName("test") {
             kotlin.srcDir("../plugins/companion/android/src/test/kotlin")
+            kotlin.srcDir("../plugins/reader/android/src/test/kotlin")
         }
     }
     compileOptions {

@@ -1,0 +1,2 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<map><string name="companion_config_json">{ "enabled": true, "sessionId": "", "displayName": "Loyea", "avatarUri": "", "userCalledName": "Eddy", "perceptionEnabled": true, "textPerceptionEnabled": true, "proactiveEnabled": false, "dndStartMinute": 1380, "dndEndMinute": 480, "configVersion": 1, "createdAt": 1789400000000, "lastNormalSessionId": "" }</string></map>
