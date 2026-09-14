@@ -142,7 +142,6 @@ class ReaderPurifierSession {
 
     fun purify(rawBlocks: List<String>): List<String> {
         val merged = ReaderTextPurifier.mergeLines(rawBlocks)
-        println("PURIFY merged=" + merged)
         // 第一遍：统计短行频次（页眉/页脚识别）
         val boilerplate = HashSet<String>()
         for (block in merged) {
@@ -164,7 +163,6 @@ class ReaderPurifierSession {
             out += ReaderTextPurifier.foldPunctuation(t)
         }
         val finalOut = out.filter { it.length in 2..8000 }
-        println("PURIFY2 out=" + finalOut)
         return finalOut
     }
 

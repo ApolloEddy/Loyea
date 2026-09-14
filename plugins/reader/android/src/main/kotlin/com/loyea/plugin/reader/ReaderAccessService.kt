@@ -23,10 +23,9 @@ import com.loyea.plugin.companion.CompanionConfigStore
  */
 class ReaderAccessService : AccessibilityService() {
 
-    private val session = ReaderPurifierSession()
-    private val buffer = ReaderChapterBuffer()
+    private val pipeline = ReaderContextPipeline()
     private var lastSampleAt = 0L
-    private var lastBookTitle = ""
+    @Volatile private var bookTitleCache = "这本书"
     private var statusText = "伴读待命"
 
     private var overlayAdded = false
@@ -43,6 +42,7 @@ class ReaderAccessService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val evt = event ?: return
+        println("RSEVT pkg=" + (evt.packageName ?: "null") + " type=" + evt.eventType)
         // 门禁自愈：陪伴开启→确保悬浮球；关闭→移除。服务常驻，状态可随时翻转。
         if (!companionEnabled()) {
             if (overlayAdded) removeBall()
@@ -66,28 +66,29 @@ class ReaderAccessService : AccessibilityService() {
         collectText(root, rawBlocks, depth = 0)
         if (rawBlocks.isEmpty()) return
 
-        val purified = session.purify(rawBlocks)
-        if (ReaderTextPurifier.isTrivialSample(purified)) return
+        pipeline.setBookTitle(bookTitleCache)
+        val purified = pipeline.ingest(rawBlocks, chapterKey = null)
+        if (purified.isEmpty()) return
+        // 本次采样全部视为已读（滚动精细判定在 M2）
+        pipeline.markVisible(pipeline.visibleContext().size - 1)
 
-        val chapterFromText = purified.firstOrNull { ReaderTextPurifier.chapterTitleOf(it) != null }
-            ?.let { ReaderTextPurifier.chapterTitleOf(it) }
-        val chapterKey = chapterFromText ?: lastBookTitle.ifEmpty { "未命名章节" }
-
-        val switched = buffer.ingest(purified, chapterKey)
-        if (switched) session.reset()
-
-        // M1 简化：本次采样最后一段视为可见（滚动精细判定在 M2）
-        buffer.markVisible(buffer.currentBlocks.size - 1)
+        // 组装输出取证（Spec §8）：完整动态模块进 logcat
+        val module = ReaderPromptAssembler.dynamicModule(
+            bookTitle = bookTitleCache,
+            chapterKey = pipeline.chapterKey(),
+            summary = pipeline.summaryText(),
+            entities = pipeline.entities().map { it.name to it.firstSeen },
+            visibleBlocks = pipeline.visibleContext(),
+        )
+        println("READER_MODULE_BEGIN")
+        println(module)
+        println("READER_MODULE_END blocks=${pipeline.visibleContext().size} entities=${pipeline.entities().size}")
 
         updateStatusText(
-            "正在读：${bookTitle()}\n${buffer.currentKey}\n已读 ${buffer.visibleContext().size}/${buffer.currentBlocks.size} 段"
+            "正在读：${bookTitleCache}\n${pipeline.chapterKey()}\n" +
+                "已读 ${pipeline.visibleContext().size} 段 · 摘要 ${pipeline.summaryText().length} 字 · 实体 ${pipeline.entities().size} 个"
         )
         panelText?.text = statusText
-    }
-
-    private fun bookTitle(): String {
-        if (lastBookTitle.isNotEmpty()) return lastBookTitle
-        return "这本书"
     }
 
     private fun companionEnabled(): Boolean =
@@ -254,7 +255,7 @@ class ReaderAccessService : AccessibilityService() {
         ballView?.let { (getSystemService(WINDOW_SERVICE) as android.view.WindowManager).removeView(it) }
         ballView = null
         overlayAdded = false
-        buffer.clear()
+        pipeline.reset()
         return super.onUnbind(intent)
     }
 
