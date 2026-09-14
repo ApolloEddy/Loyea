@@ -54,23 +54,13 @@ object ReaderTextPurifier {
         return out
     }
 
-    /** 剔除页眉页脚/广告/进度行：整行命中广告模式，或与已见行重复率 >80% 的短行。 */
+    /** 剔除广告/进度行（纯函数，无状态）。页眉/页脚的重复行判定在
+     *  ReaderPurifierSession（会话级两遍式），跨采样的可变状态绝不放这里。 */
     fun stripNoise(text: String): String {
         val t = text.trim()
         if (t.isEmpty()) return ""
         if (AD_PATTERNS.any { it.containsMatchIn(t) }) return ""
-        if (t.length <= 24 && isRepeatedBoilerplate(t)) return ""
         return t
-    }
-
-    /** 页眉页脚判定：书中高频出现的同一短行（按去重空白比较）。 */
-    private val seenShortLines = HashMap<String, Int>()
-
-    private fun isRepeatedBoilerplate(line: String): Boolean {
-        val key = line.replace(Regex("\\s+"), "")
-        val n = (seenShortLines[key] ?: 0) + 1
-        seenShortLines[key] = n
-        return n >= 3 // 同一短行出现 ≥4 次视作页眉/页脚（章节内正常文本几乎不重复）
     }
 
     /** 标点规整：折叠重复（！！→！、？？→？、。。。→…），统一省略号。 */
@@ -89,8 +79,8 @@ object ReaderTextPurifier {
     }
 
     /** 长度闸：低于最小长度视为封面/广告页，应整体丢弃。 */
-    fun isTrivialSample(paragraphs: List<String>): Boolean =
-        paragraphs.sumOf { it.length } < 200
+    fun isTrivialSample(paragraphs: List<String>, minChars: Int = 200): Boolean =
+        paragraphs.sumOf { it.length } < minChars
 }
 
 /** 书章缓冲（Reader Spec §6）：内存 LRU ≤2 章；防剧透游标物理截取上下文。 */
@@ -152,6 +142,7 @@ class ReaderPurifierSession {
 
     fun purify(rawBlocks: List<String>): List<String> {
         val merged = ReaderTextPurifier.mergeLines(rawBlocks)
+        println("PURIFY merged=" + merged)
         // 第一遍：统计短行频次（页眉/页脚识别）
         val boilerplate = HashSet<String>()
         for (block in merged) {
@@ -172,7 +163,9 @@ class ReaderPurifierSession {
             if (t.length <= 24 && t.replace(Regex("\\s+"), "") in boilerplate) continue
             out += ReaderTextPurifier.foldPunctuation(t)
         }
-        return out.filter { it.length in 2..8000 }
+        val finalOut = out.filter { it.length in 2..8000 }
+        println("PURIFY2 out=" + finalOut)
+        return finalOut
     }
 
     fun reset() = seenShortLines.clear()
