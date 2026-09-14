@@ -76,7 +76,8 @@ class ReaderAccessService : AccessibilityService() {
 
         pipeline.setBookTitle(bookTitleCache)
         pipeline.ingest(rawBlocks, chapterKey = null)
-        pipeline.markVisible(pipeline.visibleContext().size - 1)
+        // 全部提纯段落视为已读（滚动精细判定在 M2）
+        pipeline.markVisible(pipeline.blockCount() - 1)
 
         updateStatusText(
             "正在读：" + bookTitleCache + "\n" + pipeline.chapterKey() + "\n" +

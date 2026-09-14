@@ -47,6 +47,9 @@ class ReaderContextPipeline(
 
     fun chapterKey(): String = buffer.currentKey
 
+    /** 当前章节的总段落数。 */
+    fun blockCount(): Int = buffer.currentBlocks.size
+
     /** 防剧透游标（测试与诊断用）。 */
     fun visibleCursor(): Int = buffer.visibleCursor
 
