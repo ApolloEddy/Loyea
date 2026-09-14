@@ -144,6 +144,16 @@ class ChannelBindingResolverTest {
         assertTrue(r is ChannelResolution.Unconfigured)
     }
 
+    @Test
+    fun `chat rejects blank api key instead of reporting ready`() {
+        val blankKey = listOf(config("chatMain", provider = "DeepSeek", apiKey = ""))
+        val r = resolve(
+            ChannelId.CHAT, ChannelBinding(ChannelId.CHAT, null),
+            activeId = "chatMain", list = blankKey
+        )
+        assertTrue(r is ChannelResolution.Unconfigured)
+    }
+
     // ===== Store：归一化 + 引用清理（Mock SharedPreferences 行为用假 Map 模拟） =====
 
     @Test

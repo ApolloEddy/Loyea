@@ -78,6 +78,11 @@ object ChannelBindingResolver {
                 if (!config.isEnabled) {
                     return ChannelResolution.ConfigDisabled(ChannelId.CHAT, config.name)
                 }
+                // 空_key 配置不应伪装成 Ready（否则请求必然 401，用户只见「服务出错」）
+                if (config.apiKey.isBlank()) {
+                    return ChannelResolution.Unconfigured(
+                        ChannelId.CHAT, "当前配置缺少 API Key，请前往设置补全后再试")
+                }
                 ready(channel, config, binding.modelOverride)
             }
 

@@ -410,8 +410,17 @@ class ReaderAccessService : AccessibilityService() {
             ))
             .build()
         val response = client.newCall(request).execute()
-        if (!response.isSuccessful) return null
-        val responseBody = response.body?.string() ?: return null
+        println("MIMO_HTTP code=" + response.code + " url=" + request.url +
+            " cfg=" + config.id + " keylen=" + config.apiKey.length + " model=" + config.modelName)
+        if (!response.isSuccessful) {
+            val errBody = response.body?.string() ?: ""
+            println("MIMO_HTTP error body=" + errBody.take(300))
+            return null
+        }
+        val responseBody = response.body?.string() ?: run {
+            println("MIMO_HTTP empty body")
+            return null
+        }
         val obj = com.google.gson.JsonParser.parseString(responseBody).asJsonObject
         val choice = obj.getAsJsonArray("choices").get(0).asJsonObject
         return choice.getAsJsonObject("message")
@@ -427,7 +436,8 @@ class ReaderAccessService : AccessibilityService() {
     }
 
     private fun appendPanelLine(line: String) {
-        panelText?.append("\n" + line)
+        val text = panelText ?: return
+        android.os.Handler(android.os.Looper.getMainLooper()).post { text.append("\n" + line) }
     }
 
     override fun onInterrupt() {

@@ -134,7 +134,7 @@ Spec:`docs/Loyea_Companion_Modulator_Perception_Integration_Spec_v1.0.md` · Pre
 |---|---|---|
 | Reader M1: a11y 服务 + 悬浮球 + 提纯采样 | ✅模拟器 | Bound services 含 ReaderAccessService；PURIFY 日志含全小说文本块；悬浮球覆盖 Chrome 渲染 |
 | Reader M2: 滚动摘要 + 实体卡 + 管线 | ✅JVM | 9 项 ReaderContextMemoryTest 含防剧透游标/增量喂入/跨章延续/预算裁剪 |
-| Reader M3: 对话面板 + LLM 问答 + 防剧透拒绝 | ✅模拟器 | 面板展开显示状态行+输入框+问 Loyea；MiMo 渠道已配置（SeedChatChannelTest 写入成功，resolve 确认 Ready）；LLM 调用已发出（"服务出错"=模拟器网络/渠道不稳定，代码路径正确）；防剧透拒绝不发起网络 |
+| Reader M3: 对话面板 + LLM 问答 + 防剧透拒绝 | ✅模拟器 | **端到端闭环**：面板提问 "what_did_Mr_Su_say_to_Chen_Mo" → MiMo 200（cfg=mimo_reader_test keylen=51）→ 回复正确引用原文（"苏先生对陈默说：'我终于找到你了。'…'这本笔记，本来就是你们家的东西。'"）；修复两处：①appendPanelLine 跨线程崩溃（IO 线程触碰 TextView→主线程 Handler.post）；②SeedChatChannelTest 的 apply() 被 am instrument 杀进程吞掉→改 commit() 同步落盘，且 CHAT resolver 对空 apiKey 返回 Unconfigured（不再伪装 Ready 导致 401「服务出错」），附回归单测 |
 | NeuralLiving 迷你画布 | ✅模拟器 | ReaderNeuralBallView 15fps Handler 驱动 advance+project；帧差 367px 证明节点在移动（非静态）；琥珀色节点+边在 Chrome 之上渲染 |
 | Reader 对话面板 | ✅模拟器 | 面板展开显示状态行（正在读+章节+已读段数+摘要字数+实体数）+ 输入框 + 问 Loyea 按钮 + 伴读设置按钮 + 收起按钮 |
 | Reader 设置面板 | ✅模拟器 | 防剧透开关 + 节流分钟 + 白名单展示；防剧透变化即时生效 |
