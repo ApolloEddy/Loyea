@@ -127,8 +127,36 @@ class SqliteCompanionStateStore private constructor(context: Context) : Companio
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // v1 起步；未来 schema 演进在此登记，不静默丢账本。
-        throw IllegalStateException("companion_runtime.db upgrade path not defined yet ($oldVersion -> $newVersion)")
+        // v1 → v2：v1 是未发布开发轮的 schema，真机上可能残留**表结构不同的旧账本**
+        // （同版本号导致 onCreate/onUpgrade 均不触发，运行时静默降级——真机实测缺陷）。
+        // 策略：先把旧文件整份归档为 .legacy_v1（尽力而为，失败不阻断），
+        // 再检查期望表是否存在——缺表即判定为未知/损坏 schema，重建空账本；
+        // 显式基线重置，不静默丢弃可识别数据（Spec §9.1/§9.3）。
+        try {
+            val dbFile = java.io.File(db.path)
+            if (dbFile.isFile) {
+                java.io.File(dbFile.parentFile, dbFile.name + ".legacy_v1")
+                    .writeBytes(dbFile.readBytes())
+            }
+        } catch (archive: Throwable) {
+            archive.printStackTrace()
+        }
+        val expected = listOf(
+            "owner_state", "observation", "request_view",
+            "projection_outbox", "lifecycle_operation", "checkpoint_history",
+        )
+        val existing = HashSet<String>()
+        db.rawQuery("SELECT name FROM sqlite_master WHERE type='table'", emptyArray()).use { c ->
+            while (c.moveToNext()) existing.add(c.getString(0))
+        }
+        if (expected.any { it !in existing }) {
+            for (table in existing) {
+                if (table == "android_metadata") continue
+                db.execSQL("DROP TABLE IF EXISTS $table")
+            }
+            onCreate(db)
+        }
+        // 期望表齐全时：v1 即当前 schema，无需变更。
     }
 
     // ------------------------------------------------------------------
@@ -594,7 +622,7 @@ class SqliteCompanionStateStore private constructor(context: Context) : Companio
 
     companion object {
         private const val DB_NAME = "companion_runtime.db"
-        private const val DB_VERSION = 1
+        private const val DB_VERSION = 2
 
         @Volatile
         private var instance: CompanionStateStore? = null
