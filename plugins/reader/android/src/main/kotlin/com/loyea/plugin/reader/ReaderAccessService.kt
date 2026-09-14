@@ -12,6 +12,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import com.loyea.plugin.companion.CompanionConfigStore
 import com.loyea.ui.chat.LlmClient
 import com.loyea.ui.chat.Message
@@ -123,16 +124,15 @@ class ReaderAccessService : AccessibilityService() {
         ballView = LinearLayout(this).apply {
             background = android.graphics.drawable.GradientDrawable().apply {
                 shape = android.graphics.drawable.GradientDrawable.OVAL
-                setColor(0xCC14120F.toInt())
+                setColor(0xE814120F.toInt())
                 setStroke((2 * density).toInt(), 0xFFD9A357.toInt())
             }
             gravity = Gravity.CENTER
-            addView(android.view.View(this@ReaderAccessService).apply {
-                layoutParams = LinearLayout.LayoutParams((10 * density).toInt(), (10 * density).toInt())
-                background = android.graphics.drawable.GradientDrawable().apply {
-                    shape = android.graphics.drawable.GradientDrawable.OVAL
-                    setColor(0xFFD9A357.toInt())
-                }
+            addView(ReaderNeuralBallView(this@ReaderAccessService).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    (36 * density).toInt(), (36 * density).toInt()
+                )
+                clipToOutline = true
             })
             setOnTouchListener(object : android.view.View.OnTouchListener {
                 private var downRawX = 0f
@@ -229,6 +229,11 @@ class ReaderAccessService : AccessibilityService() {
                 }
             })
             addView(Button(this@ReaderAccessService).apply {
+                text = "伴读设置"
+                textSize = 11f
+                setOnClickListener { showSettingsPanel() }
+            })
+            addView(Button(this@ReaderAccessService).apply {
                 text = "收起"
                 textSize = 11f
                 setOnClickListener { hidePanel() }
@@ -236,6 +241,72 @@ class ReaderAccessService : AccessibilityService() {
         }.also { v ->
             wm.addView(v, panelParams)
         }
+    }
+
+    private var settingsPanelView: LinearLayout? = null
+    private var settingsPanelParams: android.view.WindowManager.LayoutParams? = null
+
+    private fun showSettingsPanel() {
+        if (settingsPanelView != null) { hideSettingsPanel(); return }
+        if (!overlayAllowed()) return
+        val wm = getSystemService(WINDOW_SERVICE) as android.view.WindowManager
+        val density = resources.displayMetrics.density
+        settingsPanelParams = android.view.WindowManager.LayoutParams(
+            (300 * density).toInt(),
+            android.view.WindowManager.LayoutParams.WRAP_CONTENT,
+            android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            0,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.CENTER
+        }
+        val settings = ReaderSettings(this)
+        val antiSwitch = android.widget.Switch(this).apply {
+            text = "防剧透屏障"
+            isChecked = settings.antiSpoilerEnabled()
+            setOnCheckedChangeListener { _, checked ->
+                settings.setAntiSpoilerEnabled(checked)
+            }
+        }
+        val throttleLabel = TextView(this).apply {
+            text = "主动感言最小间隔：${settings.minActiveCommentIntervalMin()} 分钟"
+            textSize = 12f
+            setPadding(0, (8 * density).toInt(), 0, 0)
+        }
+        val whitelistText = TextView(this).apply {
+            text = "白名单：微信读书/番茄/起点/QQ阅读/Chrome（内置）"
+            textSize = 11f
+            setPadding(0, (8 * density).toInt(), 0, 0)
+        }
+        settingsPanelView = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = 18 * density
+                setColor(0xF814120F.toInt())
+            }
+            setPadding((16 * density).toInt(), (14 * density).toInt(), (16 * density).toInt(), (14 * density).toInt())
+            addView(TextView(this@ReaderAccessService).apply {
+                text = "伴读设置"
+                textSize = 15f
+                setPadding(0, 0, 0, (10 * density).toInt())
+            })
+            addView(antiSwitch)
+            addView(throttleLabel)
+            addView(whitelistText)
+            addView(Button(this@ReaderAccessService).apply {
+                text = "关闭"
+                textSize = 11f
+                setOnClickListener { hideSettingsPanel() }
+            })
+        }.also { v ->
+            wm.addView(v, settingsPanelParams)
+        }
+    }
+
+    private fun hideSettingsPanel() {
+        settingsPanelView?.let { (getSystemService(WINDOW_SERVICE) as android.view.WindowManager).removeView(it) }
+        settingsPanelView = null
+        settingsPanelParams = null
     }
 
     private fun hidePanel() {

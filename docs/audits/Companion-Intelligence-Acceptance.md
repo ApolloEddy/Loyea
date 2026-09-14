@@ -128,7 +128,34 @@ Spec:`docs/Loyea_Companion_Modulator_Perception_Integration_Spec_v1.0.md` · Pre
 6. **上一轮遗留**(图谱抽取水位推进、删除单条记忆后旧批次重插):本轮未触及该写入路径,保持遗留登记(Preflight §5)。
 7. **release 包未构建/未发布**(无签名授权);debug APK SHA-256 `9fb1f73710a0eb98c0b1e081057961d47dfc5325c69e1fbd0178ae7f681d7d5d`(构建于 86b40fe)。
 
-## 7. 提交清单(feature 分支)
+## 7. Reader 伴读插件验证(模拟器实测)
+
+| 项 | 状态 | 证据 |
+|---|---|---|
+| Reader M1: a11y 服务 + 悬浮球 + 提纯采样 | ✅模拟器 | Bound services 含 ReaderAccessService；PURIFY 日志含全小说文本块；悬浮球覆盖 Chrome 渲染 |
+| Reader M2: 滚动摘要 + 实体卡 + 管线 | ✅JVM | 9 项 ReaderContextMemoryTest 含防剧透游标/增量喂入/跨章延续/预算裁剪 |
+| Reader M3: 对话面板 + LLM 问答 + 防剧透拒绝 | ✅模拟器 | 面板展开显示状态行+输入框+问 Loyea；防剧透拒绝不发起网络；渠道未配置时优雅降级（"聊天服务未配置，无法回答"） |
+| NeuralLiving 迷你画布 | ✅模拟器 | ReaderNeuralBallView 渲染在悬浮球内（低帧率 15fps），替代静态圆点 |
+| 返回键修复 | ✅模拟器 | 子页返回上级，聊天主页双击退出+Toast |
+
+### Reader R01-R12 逐项状态
+
+| ID | 状态 | 说明 |
+|---|---|---|
+| R01 | ✅模拟器 | 无障碍服务未绑定前悬浮球不出现（dumpsys accessibility 确认服务绑定） |
+| R02 | ✅模拟器 | PURIFY 日志证明 Chrome 小说页文本完整采样（章节名+段落+对话） |
+| R03 | ✅设计 | Whitelist.contains() 硬编码排除自身包名 |
+| R04 | ✅代码 | collectText 跳过 isPassword 节点与 EditText |
+| R05 | ✅JVM | bufferDetectsChapterSwitchAndResetsCursor（游标重置+缓冲清出） |
+| R06 | ✅JVM+代码 | ReaderBubbleChat.localRefusal 本地拒绝，无网络请求 |
+| R07 | ✅设计 | onUnbind 调用 pipeline.reset() 清空缓冲 |
+| R08 | ✅模拟器 | 拖动+吸边实测通过（reader7 reader8 截图） |
+| R09 | ✅代码 | companionEnabled() false→removeBall()；陪伴聊天零影响 |
+| R10 | ✅设计 | 采样 800ms 去重+15fps 画布+无周期 Worker；30 分钟实测待真机 |
+| R11 | ✅模拟器 | 渠道未配置时"聊天服务未配置"友好提示（截图） |
+| R12 | ✅设计 | reader 数据独立 prefs+内存缓冲，备份 v3 runtime 不含 reader |
+
+## 8. 提交清单(feature 分支)
 
 | commit | 内容 |
 |---|---|
@@ -138,6 +165,6 @@ Spec:`docs/Loyea_Companion_Modulator_Perception_Integration_Spec_v1.0.md` · Pre
 | 4d7a363 | P3 感知管线移植+ONNX 传感器+双黄金 |
 | 78c28b6 | P4 聊天闭环+UI 开关+诊断 |
 | 86b40fe | P5 备份 v3+生命周期+问候共用状态 |
-| (本次) | P6 设备/出站/性能测试+验收报告+README |
+| (本次) | P6 设备/出站/性能测试+验收报告+README+M2 摘要/实体卡+M3 面板+神经球 |
 
 推送与合并按用户授权办理;本文不构成自动合并 main 的依据(Spec §13.2)。
