@@ -9,21 +9,30 @@ import android.view.MotionEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.loyea.plugin.companion.CompanionConfigStore
+import com.loyea.ui.chat.LlmClient
+import com.loyea.ui.chat.Message
+import com.loyea.ui.chat.Sender
+import kotlinx.coroutines.launch
 
 /**
- * 伴读无障碍服务（Reader Spec §3–§5, M1）。
+ * 伴读无障碍服务（Reader Spec §3–§5, M3）。
  *
- * - 白名单包内采样可见文本 → 提纯 → 章节缓冲（防剧透游标）
- * - 悬浮球：拖动/吸边由用户手势决定；点击展开状态气泡
+ * - 白名单包内采样可见文本 → 提纯 → 章节缓冲（防剧透游标）→ 滚动摘要/实体卡
+ * - 悬浮球：拖动/点击展开对话面板；面板含状态行、问答输入与 LLM 回复
  * - 门禁：陪伴模式开启才工作；未授权悬浮窗则静默不显示
  * - 隐私：正文只在内存缓冲；服务销毁即清空
  */
 class ReaderAccessService : AccessibilityService() {
 
     private val pipeline = ReaderContextPipeline()
+    private val llmClient = LlmClient()
+    private val chatScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
+    )
     private var lastSampleAt = 0L
     @Volatile private var bookTitleCache = "这本书"
     private var statusText = "伴读待命"
@@ -42,15 +51,13 @@ class ReaderAccessService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val evt = event ?: return
-        println("RSEVT pkg=" + (evt.packageName ?: "null") + " type=" + evt.eventType)
-        // 门禁自愈：陪伴开启→确保悬浮球；关闭→移除。服务常驻，状态可随时翻转。
         if (!companionEnabled()) {
             if (overlayAdded) removeBall()
             return
         }
         if (!overlayAdded) {
             showBall()
-            if (!overlayAdded) return // 无悬浮窗授权
+            if (!overlayAdded) return
         }
         val pkg = evt.packageName?.toString() ?: return
         if (!ReaderWhitelist.contains(pkg, this)) return
@@ -67,26 +74,12 @@ class ReaderAccessService : AccessibilityService() {
         if (rawBlocks.isEmpty()) return
 
         pipeline.setBookTitle(bookTitleCache)
-        val purified = pipeline.ingest(rawBlocks, chapterKey = null)
-        if (purified.isEmpty()) return
-        // 本次采样全部视为已读（滚动精细判定在 M2）
+        pipeline.ingest(rawBlocks, chapterKey = null)
         pipeline.markVisible(pipeline.visibleContext().size - 1)
 
-        // 组装输出取证（Spec §8）：完整动态模块进 logcat
-        val module = ReaderPromptAssembler.dynamicModule(
-            bookTitle = bookTitleCache,
-            chapterKey = pipeline.chapterKey(),
-            summary = pipeline.summaryText(),
-            entities = pipeline.entities().map { it.name to it.firstSeen },
-            visibleBlocks = pipeline.visibleContext(),
-        )
-        println("READER_MODULE_BEGIN")
-        println(module)
-        println("READER_MODULE_END blocks=${pipeline.visibleContext().size} entities=${pipeline.entities().size}")
-
         updateStatusText(
-            "正在读：${bookTitleCache}\n${pipeline.chapterKey()}\n" +
-                "已读 ${pipeline.visibleContext().size} 段 · 摘要 ${pipeline.summaryText().length} 字 · 实体 ${pipeline.entities().size} 个"
+            "正在读：" + bookTitleCache + "\n" + pipeline.chapterKey() + "\n" +
+                "已读 " + pipeline.visibleContext().size + " 段 · 摘要 " + pipeline.summaryText().length + " 字 · 实体 " + pipeline.entities().size + " 个"
         )
         panelText?.text = statusText
     }
@@ -107,18 +100,10 @@ class ReaderAccessService : AccessibilityService() {
     }
 
     // ------------------------------------------------------------------
-    // 悬浮球（M1）
+    // 悬浮球
     // ------------------------------------------------------------------
 
     private fun overlayAllowed(): Boolean = Settings.canDrawOverlays(this)
-
-    private fun removeBall() {
-        ballView?.let { (getSystemService(WINDOW_SERVICE) as android.view.WindowManager).removeView(it) }
-        ballView = null
-        ballParams = null
-        overlayAdded = false
-        hidePanel()
-    }
 
     private fun showBall() {
         if (overlayAdded || !overlayAllowed()) return
@@ -142,7 +127,7 @@ class ReaderAccessService : AccessibilityService() {
                 setStroke((2 * density).toInt(), 0xFFD9A357.toInt())
             }
             gravity = Gravity.CENTER
-            addView(android.view.View(context).apply {
+            addView(android.view.View(this@ReaderAccessService).apply {
                 layoutParams = LinearLayout.LayoutParams((10 * density).toInt(), (10 * density).toInt())
                 background = android.graphics.drawable.GradientDrawable().apply {
                     shape = android.graphics.drawable.GradientDrawable.OVAL
@@ -150,8 +135,10 @@ class ReaderAccessService : AccessibilityService() {
                 }
             })
             setOnTouchListener(object : android.view.View.OnTouchListener {
-                private var downRawX = 0f; private var downRawY = 0f
-                private var startX = 0; private var startY = 0
+                private var downRawX = 0f
+                private var downRawY = 0f
+                private var startX = 0
+                private var startY = 0
                 private var moved = false
                 override fun onTouch(v: android.view.View, e: MotionEvent): Boolean {
                     when (e.action) {
@@ -162,8 +149,9 @@ class ReaderAccessService : AccessibilityService() {
                             return true
                         }
                         MotionEvent.ACTION_MOVE -> {
-                            val dx = (e.rawX - downRawX).toInt(); val dy = (e.rawY - downRawY).toInt()
-                            if (abs(dx) + abs(dy) > 12) moved = true
+                            val dx = (e.rawX - downRawX).toInt()
+                            val dy = (e.rawY - downRawY).toInt()
+                            if (kotlin.math.abs(dx) + kotlin.math.abs(dy) > 12) moved = true
                             if (moved) {
                                 ballParams?.x = startX + dx
                                 ballParams?.y = startY + dy
@@ -172,51 +160,53 @@ class ReaderAccessService : AccessibilityService() {
                             return true
                         }
                         MotionEvent.ACTION_UP -> {
-                            if (!moved) v.performClick() // 停留即点击
+                            if (!moved) v.performClick()
                             return true
                         }
                     }
                     return false
                 }
             })
-            setOnClickListener { 
-                android.util.Log.i("ReaderAccess", "ball clicked, overlayAllowed=" + overlayAllowed())
-                togglePanel()
-            }
+            setOnClickListener { togglePanel() }
         }.also { v ->
             wm.addView(v, ballParams)
             overlayAdded = true
         }
     }
 
-    private fun abs(v: Int): Int = if (v < 0) -v else v
-
     private fun togglePanel() {
-        android.util.Log.i("ReaderAccess", "togglePanel panelView=" + (panelView != null) + " allowed=" + overlayAllowed())
         if (panelView != null) hidePanel() else showPanel()
     }
 
     private fun showPanel() {
-        android.util.Log.i("ReaderAccess", "showPanel enter")
         if (panelView != null || !overlayAllowed()) return
         val wm = getSystemService(WINDOW_SERVICE) as android.view.WindowManager
         val density = resources.displayMetrics.density
+        // 面板需可聚焦（EditText 输入）；悬浮球保持 NOT_FOCUSABLE
         panelParams = android.view.WindowManager.LayoutParams(
-            (300 * density).toInt(),
+            (320 * density).toInt(),
             android.view.WindowManager.LayoutParams.WRAP_CONTENT,
             android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            0,
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             x = (ballParams?.x ?: 40) + 120
-            y = ballParams?.y ?: 200
+            y = (ballParams?.y ?: 200)
         }
         panelText = TextView(this).apply {
             setTextColor(0xFFF2E9DA.toInt())
-            textSize = 13f
+            textSize = 12f
             setPadding((14 * density).toInt(), (12 * density).toInt(), (14 * density).toInt(), (12 * density).toInt())
             text = statusText
+        }
+        val input = EditText(this).apply {
+            hint = "问问这段讲了什么…"
+            setTextColor(0xFFF2E9DA.toInt())
+            setHintTextColor(0xFF998771.toInt())
+            textSize = 13f
+            setSingleLine(true)
+            setPadding((12 * density).toInt(), (8 * density).toInt(), (12 * density).toInt(), (8 * density).toInt())
         }
         panelView = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -224,7 +214,20 @@ class ReaderAccessService : AccessibilityService() {
                 cornerRadius = 18 * density
                 setColor(0xF214120F.toInt())
             }
+            setPadding((4 * density).toInt(), 0, (4 * density).toInt(), (4 * density).toInt())
             addView(panelText)
+            addView(input)
+            addView(Button(this@ReaderAccessService).apply {
+                text = "问 Loyea"
+                textSize = 12f
+                setOnClickListener {
+                    val q = input.text?.toString()?.trim().orEmpty()
+                    if (q.isNotEmpty()) {
+                        input.setText("")
+                        askLoyea(q)
+                    }
+                }
+            })
             addView(Button(this@ReaderAccessService).apply {
                 text = "收起"
                 textSize = 11f
@@ -241,9 +244,72 @@ class ReaderAccessService : AccessibilityService() {
         panelParams = null
     }
 
+    private fun removeBall() {
+        ballView?.let { (getSystemService(WINDOW_SERVICE) as android.view.WindowManager).removeView(it) }
+        ballView = null
+        ballParams = null
+        overlayAdded = false
+        hidePanel()
+    }
+
     private fun updateStatusText(text: String) {
         statusText = text
         panelText?.text = text
+    }
+
+    // ------------------------------------------------------------------
+    // 气泡问答（M3）
+    // ------------------------------------------------------------------
+
+    /** 防剧透本地拒绝 → 已配聊天渠道 → 面板追加回复。 */
+    private fun askLoyea(question: String) {
+        appendPanelLine("你：" + question)
+        val settings = ReaderSettings(this)
+        ReaderBubbleChat.localRefusal(question, settings.antiSpoilerEnabled())?.let { refusal ->
+            appendPanelLine("Loyea：" + refusal)
+            return
+        }
+        val config = resolveChatConfig()
+        if (config == null) {
+            appendPanelLine("Loyea：（聊天服务未配置，无法回答）")
+            return
+        }
+        chatScope.launch {
+            val system = ReaderPromptAssembler.stableSystem() +
+                "\n" + ReaderPromptAssembler.dynamicModule(
+                    bookTitle = bookTitleCache,
+                    chapterKey = pipeline.chapterKey(),
+                    summary = pipeline.summaryText(),
+                    entities = pipeline.entities().map { it.name to it.firstSeen },
+                    visibleBlocks = pipeline.visibleContext(),
+                )
+            val history = listOf(
+                Message(id = "reader_q", content = question, sender = Sender.USER)
+            )
+            val response = try {
+                llmClient.sendChatCompletion(config, system, history)
+            } catch (t: Throwable) {
+                appendPanelLine("Loyea：（网络出错：" + (t.message ?: "未知") + "）")
+                return@launch
+            }
+            if (response.isError) {
+                appendPanelLine("Loyea：（服务出错，请稍后再试）")
+                return@launch
+            }
+            appendPanelLine("Loyea：" + response.content)
+        }
+    }
+
+    private fun resolveChatConfig(): com.loyea.ui.settings.ApiConfig? {
+        val repository = com.loyea.storage.ApiConfigRepository(this)
+        return when (val chat = repository.resolve(com.loyea.storage.ChannelId.CHAT)) {
+            is com.loyea.storage.ChannelResolution.Ready -> chat.resolved.config
+            else -> null
+        }
+    }
+
+    private fun appendPanelLine(line: String) {
+        panelText?.append("\n" + line)
     }
 
     override fun onInterrupt() {
