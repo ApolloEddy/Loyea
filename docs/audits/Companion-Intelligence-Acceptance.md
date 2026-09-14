@@ -136,6 +136,8 @@ Spec:`docs/Loyea_Companion_Modulator_Perception_Integration_Spec_v1.0.md` · Pre
 | Reader M2: 滚动摘要 + 实体卡 + 管线 | ✅JVM | 9 项 ReaderContextMemoryTest 含防剧透游标/增量喂入/跨章延续/预算裁剪 |
 | Reader M3: 对话面板 + LLM 问答 + 防剧透拒绝 | ✅模拟器 | 面板展开显示状态行+输入框+问 Loyea；MiMo 渠道已配置（SeedChatChannelTest 写入成功，resolve 确认 Ready）；LLM 调用已发出（"服务出错"=模拟器网络/渠道不稳定，代码路径正确）；防剧透拒绝不发起网络 |
 | NeuralLiving 迷你画布 | ✅模拟器 | ReaderNeuralBallView 15fps Handler 驱动 advance+project；帧差 367px 证明节点在移动（非静态）；琥珀色节点+边在 Chrome 之上渲染 |
+| Reader 对话面板 | ✅模拟器 | 面板展开显示状态行（正在读+章节+已读段数+摘要字数+实体数）+ 输入框 + 问 Loyea 按钮 + 伴读设置按钮 + 收起按钮 |
+| Reader 设置面板 | ✅模拟器 | 防剧透开关 + 节流分钟 + 白名单展示；防剧透变化即时生效 |
 | 返回键修复 | ✅模拟器 | 子页返回上级，聊天主页双击退出+Toast |
 
 ### Reader R01-R12 逐项状态

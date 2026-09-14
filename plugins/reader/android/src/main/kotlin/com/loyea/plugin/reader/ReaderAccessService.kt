@@ -18,6 +18,8 @@ import com.loyea.ui.chat.LlmClient
 import com.loyea.ui.chat.Message
 import com.loyea.ui.chat.Sender
 import kotlinx.coroutines.launch
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import kotlinx.coroutines.launch
 
 /**
  * 伴读无障碍服务（Reader Spec §3–§5, M3）。
@@ -359,17 +361,61 @@ class ReaderAccessService : AccessibilityService() {
                 Message(id = "reader_q", content = question, sender = Sender.USER)
             )
             val response = try {
-                llmClient.sendChatCompletion(config, system, history)
+                miMoDirectCall(config, system, question, history)
             } catch (t: Throwable) {
                 appendPanelLine("Loyea：（网络出错：" + (t.message ?: "未知") + "）")
                 return@launch
             }
-            if (response.isError) {
+            if (response != null) {
+                appendPanelLine("Loyea：" + response)
+            } else {
                 appendPanelLine("Loyea：（服务出错，请稍后再试）")
-                return@launch
             }
-            appendPanelLine("Loyea：" + response.content)
         }
+    }
+
+    /** 直接 OkHttp 调用 MiMo API（max_tokens=2048 保证推理模型有足够空间）。 */
+    private fun miMoDirectCall(
+        config: com.loyea.ui.settings.ApiConfig,
+        system: String,
+        question: String,
+        history: List<Message>,
+    ): String? {
+        val client = okhttp3.OkHttpClient.Builder()
+            .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+        val msgs = com.google.gson.JsonArray()
+        msgs.add(com.google.gson.JsonObject().apply {
+            addProperty("role", "system"); addProperty("content", system)
+        })
+        history.forEach { msg ->
+            msgs.add(com.google.gson.JsonObject().apply {
+                addProperty("role", if (msg.sender == Sender.USER) "user" else "assistant")
+                addProperty("content", msg.content)
+            })
+        }
+        val body = com.google.gson.JsonObject().apply {
+            addProperty("model", config.modelName.ifEmpty { "mimo-v2.5-pro" })
+            add("messages", msgs)
+            addProperty("max_tokens", 2048)
+        }
+        val request = okhttp3.Request.Builder()
+            .url(config.apiUrl.trimEnd('/') + "/chat/completions")
+            .addHeader("Authorization", "Bearer " + config.apiKey)
+            .addHeader("api-key", config.apiKey)
+            .addHeader("Content-Type", "application/json")
+            .post(okhttp3.RequestBody.create(
+                "application/json".toMediaTypeOrNull(), body.toString()
+            ))
+            .build()
+        val response = client.newCall(request).execute()
+        if (!response.isSuccessful) return null
+        val responseBody = response.body?.string() ?: return null
+        val obj = com.google.gson.JsonParser.parseString(responseBody).asJsonObject
+        val choice = obj.getAsJsonArray("choices").get(0).asJsonObject
+        return choice.getAsJsonObject("message")
+            .get("content")?.takeIf { !it.isJsonNull }?.asString ?: ""
     }
 
     private fun resolveChatConfig(): com.loyea.ui.settings.ApiConfig? {
