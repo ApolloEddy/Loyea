@@ -49,7 +49,32 @@ fun CompanionRoot(
     var bindState by remember { mutableStateOf(BindState.BINDING) }
     var bindRetry by remember { mutableStateOf(0) }
     var subPage by remember { mutableStateOf(CompanionSubPage.CHAT) }
+
     var moreOpen by remember { mutableStateOf(false) }
+
+    // 系统返回键与页面结构对齐（FIX：按返回直接退出 / 返回退不出去两个缺陷）。
+    // 陪伴页面是固定树，不是任意历史：感知页→设置页→聊天页，其余子页→聊天页。
+    // 返回键逐级回退且与页内返回箭头完全一致（静态父页映射，不用历史栈——
+    // 上一版自维护栈与箭头导航不同步，会越退越乱甚至退不出去）。
+    // 聊天主页：双击返回退出（2 秒窗口），单击仅 Toast 提示，不会瞬间闪退。
+    val backContext = androidx.compose.ui.platform.LocalContext.current
+    var lastBackPressAt by remember { mutableStateOf(0L) }
+    androidx.activity.compose.BackHandler {
+        when {
+            moreOpen -> moreOpen = false
+            subPage == CompanionSubPage.PERCEPTION -> subPage = CompanionSubPage.SETTINGS
+            subPage != CompanionSubPage.CHAT -> subPage = CompanionSubPage.CHAT
+            else -> {
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (now - lastBackPressAt < 2000L) {
+                    (backContext as? android.app.Activity)?.finish()
+                } else {
+                    lastBackPressAt = now
+                    android.widget.Toast.makeText(backContext, "再按一次退出 Loyea", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
     var focusMessageId by remember { mutableStateOf<String?>(null) }
     // FUN-09 恢复态的「恢复备份」入口（审计 R-07：异常态必须能直接导入备份）
     val restoreScope = rememberCoroutineScope()
